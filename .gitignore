@@ -1,0 +1,40 @@
+# Dependencias y compilación
+node_modules/
+dist/
+
+# Datos de ejecución: base, credenciales de WhatsApp, media, respaldos y logs.
+# NUNCA subir: contienen conversaciones y las claves de la sesión vinculada.
+data/
+storage/
+*.log
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+debug-messages.jsonl
+
+# Configuración local con secretos
+.env
+.env.*
+!.env.example
+
+# Plantilla Velzon (licencia comercial de Themesbrand): no se redistribuye.
+# Se copia desde la copia licenciada; ver IMPLEMENTACION.md §3.
+# Sí se versionan los recursos propios/libres que viven en la misma carpeta:
+#   - fuente Inter (SIL OFL)        public/assets/fonts/inter-*.woff2
+#   - opus-recorder (MIT)           public/assets/libs/opus-recorder/
+public/assets/*
+!public/assets/fonts/
+public/assets/fonts/*
+!public/assets/fonts/inter-*.woff2
+!public/assets/libs/
+public/assets/libs/*
+!public/assets/libs/opus-recorder/
+
+# Herramientas locales del editor/agente
+.claude/
+.agents/
+skills-lock.json
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

@@ -7,6 +7,8 @@ export interface OptoutRow {
   phone: string | null;
   reason: string | null;
   source: string | null;
+  /** Línea en la que se originó (null = manual o anterior a este dato). */
+  session_id: string | null;
   created_at: string;
 }
 
@@ -24,17 +26,19 @@ export function isBlocked(chatId: string): boolean {
 }
 
 /** Agrega (o actualiza) un número a la lista de no enviar. */
-export function addOptout(chatId: string, reason = 'Solicitó la baja', source = 'manual'): void {
+export function addOptout(chatId: string, reason = 'Solicitó la baja', source = 'manual', sessionId: string | null = null): void {
   const normalized = normalizeChatId(chatId);
   if (!normalized) return;
   run(
-    `INSERT INTO optouts (chat_id, phone, reason, source, created_at)
-     VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(chat_id) DO UPDATE SET reason = excluded.reason, source = excluded.source`,
+    `INSERT INTO optouts (chat_id, phone, reason, source, session_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(chat_id) DO UPDATE SET reason = excluded.reason, source = excluded.source,
+       session_id = COALESCE(excluded.session_id, optouts.session_id)`,
     normalized,
     phoneFromChatId(normalized),
     reason,
     source,
+    sessionId,
     nowIso(),
   );
 }
@@ -54,17 +58,27 @@ export function looksLikeBlock(message: string | null | undefined): boolean {
 }
 
 /** Marca un destino como bloqueado y lo añade a la lista negra global. */
-export function markBlocked(chatId: string, reason = 'El destinatario bloqueó el número'): void {
-  addOptout(chatId, reason, 'blocked');
+export function markBlocked(chatId: string, reason = 'El destinatario bloqueó el número', sessionId: string | null = null): void {
+  addOptout(chatId, reason, 'blocked', sessionId);
 }
 
 export function listOptouts(): OptoutRow[] {
   return all<OptoutRow>('SELECT * FROM optouts ORDER BY created_at DESC');
 }
 
-/** Detecta una petición de baja en un mensaje entrante. */
-export function isOptoutRequest(body: string | null | undefined): boolean {
+/**
+ * Detecta una petición de baja en un mensaje entrante. `extraKeywords`: palabras
+ * adicionales de la política (separadas por coma), sin distinguir acentos.
+ */
+export function isOptoutRequest(body: string | null | undefined, extraKeywords = ''): boolean {
   const text = (body ?? '').trim().toUpperCase();
   if (!text) return false;
-  return /\b(BAJA|STOP|CANCELAR|SALIR|UNSUBSCRIBE|NO MOLESTAR)\b/u.test(text);
+  if (/\b(BAJA|STOP|CANCELAR|SALIR|UNSUBSCRIBE|NO MOLESTAR)\b/u.test(text)) return true;
+  const fold = (v: string) => v.normalize('NFD').replace(/\p{Mn}/gu, '').toUpperCase();
+  const folded = fold(text);
+  return extraKeywords
+    .split(',')
+    .map((k) => fold(k.trim()))
+    .filter((k) => k.length >= 2)
+    .some((k) => new RegExp(`(^|[^\\p{L}\\p{N}])${k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^\\p{L}\\p{N}])`, 'u').test(folded));
 }

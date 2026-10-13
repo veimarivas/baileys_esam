@@ -1,4 +1,4 @@
-import { get, run } from '../db/index.js';
+import { all, db, get, run } from '../db/index.js';
 import { nowIso } from '../util/async.js';
 import { digits } from './phone.js';
 
@@ -30,56 +30,86 @@ export function rememberLid(lid: string | null | undefined, pn: string | null | 
 /**
  * Cuando se descubre el número real de un LID, las conversaciones y mensajes
  * ya guardados con el LID se migran al número para que el panel los una.
+ * Se hace línea por línea: el mismo LID puede existir en varias sesiones y
+ * cada una tiene su propia conversación y su propia ficha.
  */
 function migrateLidChat(lidChatId: string, pnChatId: string): void {
   try {
-    const existing = get<{ id: number }>('SELECT id FROM conversations WHERE chat_id = ?', pnChatId);
-    if (existing) {
-      // Ya hay una conversación con el número: se fusiona (suma de no leídos).
-      const lid = get<{ unread_count: number; last_message_at: string | null; last_direction: string | null }>(
-        'SELECT unread_count, last_message_at, last_direction FROM conversations WHERE chat_id = ?',
-        lidChatId,
-      );
-      if (lid) {
-        run(
-          `UPDATE conversations
-             SET unread_count = unread_count + ?,
-                 last_message_at = MAX(COALESCE(last_message_at, ''), COALESCE(?, '')),
-                 updated_at = ?
-           WHERE chat_id = ?`,
-          Number(lid.unread_count ?? 0),
-          lid.last_message_at,
-          nowIso(),
-          pnChatId,
-        );
-        run('DELETE FROM conversations WHERE chat_id = ?', lidChatId);
+    const sessions = all<{ session_id: string }>(
+      `SELECT session_id FROM conversations WHERE chat_id = ?
+       UNION SELECT session_id FROM contacts WHERE chat_id = ?
+       UNION SELECT DISTINCT session_id FROM messages WHERE chat_id = ?`,
+      lidChatId,
+      lidChatId,
+      lidChatId,
+    );
+    for (const { session_id: sid } of sessions) {
+      try {
+        // Savepoint (no BEGIN): se anida si quien llama ya abrió una transacción.
+        db.exec('SAVEPOINT lid_merge');
+        migrateLidChatInSession(sid, lidChatId, pnChatId);
+        db.exec('RELEASE lid_merge');
+      } catch {
+        try {
+          db.exec('ROLLBACK TO lid_merge');
+          db.exec('RELEASE lid_merge');
+        } catch {
+          /* savepoint no abierto */
+        }
       }
-    } else {
-      run('UPDATE conversations SET chat_id = ? WHERE chat_id = ?', pnChatId, lidChatId);
-    }
-    run('UPDATE messages SET chat_id = ? WHERE chat_id = ?', pnChatId, lidChatId);
-
-    // La ficha de contacto tambien pasa al chat con numero.
-    const pnPhone = digits(pnChatId);
-    const pnContact = get<{ id: number }>('SELECT id FROM contacts WHERE chat_id = ?', pnChatId);
-    const lidContact = get<{ id: number }>('SELECT id FROM contacts WHERE chat_id = ?', lidChatId);
-    if (lidContact && pnContact && pnContact.id !== lidContact.id) {
-      run('DELETE FROM contacts WHERE id = ?', lidContact.id);
-    } else if (lidContact) {
-      run(
-        'UPDATE contacts SET chat_id = ?, phone = COALESCE(phone, ?), updated_at = ? WHERE id = ?',
-        pnChatId,
-        pnPhone,
-        nowIso(),
-        lidContact.id,
-      );
-    }
-    const finalContact = get<{ id: number }>('SELECT id FROM contacts WHERE chat_id = ?', pnChatId);
-    if (finalContact) {
-      run('UPDATE conversations SET contact_id = ? WHERE chat_id = ?', finalContact.id, pnChatId);
     }
   } catch {
     // best-effort: si falla la fusión no se pierde el mapeo.
+  }
+}
+
+function migrateLidChatInSession(sid: string, lidChatId: string, pnChatId: string): void {
+  const existing = get<{ id: number }>('SELECT id FROM conversations WHERE session_id = ? AND chat_id = ?', sid, pnChatId);
+  const lid = get<{ unread_count: number; last_message_at: string | null }>(
+    'SELECT unread_count, last_message_at FROM conversations WHERE session_id = ? AND chat_id = ?',
+    sid,
+    lidChatId,
+  );
+  if (existing && lid) {
+    // Ya hay una conversación con el número en esta línea: se fusiona (suma de no leídos).
+    run(
+      `UPDATE conversations
+         SET unread_count = unread_count + ?,
+             last_message_at = MAX(COALESCE(last_message_at, ''), COALESCE(?, '')),
+             updated_at = ?
+       WHERE id = ?`,
+      Number(lid.unread_count ?? 0),
+      lid.last_message_at,
+      nowIso(),
+      existing.id,
+    );
+    run('DELETE FROM conversations WHERE session_id = ? AND chat_id = ?', sid, lidChatId);
+  } else if (lid) {
+    run('UPDATE conversations SET chat_id = ? WHERE session_id = ? AND chat_id = ?', pnChatId, sid, lidChatId);
+  }
+  run('UPDATE messages SET chat_id = ? WHERE session_id = ? AND chat_id = ?', pnChatId, sid, lidChatId);
+
+  // La ficha de contacto también pasa al chat con número.
+  const pnPhone = digits(pnChatId);
+  const pnContact = get<{ id: number }>('SELECT id FROM contacts WHERE session_id = ? AND chat_id = ?', sid, pnChatId);
+  const lidContact = get<{ id: number }>('SELECT id FROM contacts WHERE session_id = ? AND chat_id = ?', sid, lidChatId);
+  if (lidContact && pnContact && pnContact.id !== lidContact.id) {
+    // Las notas pasan a la ficha con número antes de borrar la del LID
+    // (el borrado en cascada las perdería).
+    run('UPDATE contact_notes SET contact_id = ? WHERE contact_id = ?', pnContact.id, lidContact.id);
+    run('DELETE FROM contacts WHERE id = ?', lidContact.id);
+  } else if (lidContact) {
+    run(
+      'UPDATE contacts SET chat_id = ?, phone = COALESCE(phone, ?), updated_at = ? WHERE id = ?',
+      pnChatId,
+      pnPhone,
+      nowIso(),
+      lidContact.id,
+    );
+  }
+  const finalContact = get<{ id: number }>('SELECT id FROM contacts WHERE session_id = ? AND chat_id = ?', sid, pnChatId);
+  if (finalContact) {
+    run('UPDATE conversations SET contact_id = ? WHERE session_id = ? AND chat_id = ?', finalContact.id, sid, pnChatId);
   }
 }
 

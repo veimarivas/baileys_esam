@@ -177,12 +177,33 @@
   var QUICK_EMOJIS = ['👍', '❤️', '😂', '😮', '🙏', '🔥', '😊', '👏'];
   var EMOJI_LIST = ['😀','😁','😂','🤣','😊','😍','🤔','😎','😢','😡','👍','👎','❤️','🔥','🎉','🙏','👏','💯','✅','❌'];
 
-  function toast(msg, isErr) {
+  // Una sola conexión SSE por página, compartida por el inbox, /notes y los
+  // recordatorios. Solo en páginas del panel con acceso a Conversaciones.
+  var liveSourceInstance;
+  function liveSource() {
+    if (liveSourceInstance !== undefined) return liveSourceInstance;
+    liveSourceInstance = null;
+    if (window.EventSource && document.getElementById('page-topbar') && document.querySelector('a[href="/conversations"]')) {
+      liveSourceInstance = new EventSource('/events');
+    }
+    return liveSourceInstance;
+  }
+
+  // `action` opcional: { label, run } agrega un botón (p. ej. «Deshacer»).
+  function toast(msg, isErr, action) {
     var el = document.createElement('div');
-    el.className = 'inbox-toast' + (isErr ? ' err' : '');
+    el.className = 'inbox-toast' + (isErr ? ' err' : '') + (action ? ' has-action' : '');
     el.textContent = msg;
+    if (action) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'toast-action';
+      btn.textContent = action.label;
+      btn.addEventListener('click', function () { el.remove(); action.run(); });
+      el.appendChild(btn);
+    }
     document.body.appendChild(el);
-    setTimeout(function () { el.remove(); }, 3200);
+    setTimeout(function () { el.remove(); }, action ? 6000 : 3200);
   }
 
   function api(url, options) {
@@ -521,9 +542,16 @@
         '</button>' +
         '<button type="button" class="act-react" title="Reaccionar">' +
           '<svg class="w-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>' +
-        '</button>';
+        '</button>' +
+        (ctx.onNote
+          ? '<button type="button" class="act-note" title="Guardar como nota o tarea">' +
+              '<svg class="w-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h4M7 3h10a2 2 0 012 2v14l-4-3H7a2 2 0 01-2-2V5a2 2 0 012-2z"/></svg>' +
+            '</button>'
+          : '');
       box.querySelector('.act-reply').addEventListener('click', function () { ctx.onReply(msg); });
       box.querySelector('.act-speak').addEventListener('click', function () { ctx.onSpeak(msg); });
+      var noteBtn = box.querySelector('.act-note');
+      if (noteBtn) noteBtn.addEventListener('click', function () { ctx.onNote(msg); });
       var reactBtn = box.querySelector('.act-react');
       reactBtn.addEventListener('click', function (ev) {
         ev.stopPropagation();
@@ -749,13 +777,14 @@
     function dueLabel(n) {
       if (!n.due_at) return '';
       var d = daysFromToday(n.due_at);
+      var at = n.due_time ? ' · ' + n.due_time : '';
       if (n.done_at) return 'Era para el ' + fmtDay(n.due_at);
       if (d < -1) return 'Venció hace ' + (-d) + ' días';
       if (d === -1) return 'Venció ayer';
-      if (d === 0) return 'Seguimiento hoy';
-      if (d === 1) return 'Mañana';
-      if (d <= 7) return 'En ' + d + ' días · ' + fmtDay(n.due_at);
-      return fmtDay(n.due_at);
+      if (d === 0) return (n.due_time ? 'Hoy a las ' + n.due_time : 'Seguimiento hoy');
+      if (d === 1) return 'Mañana' + at;
+      if (d <= 7) return 'En ' + d + ' días · ' + fmtDay(n.due_at) + at;
+      return fmtDay(n.due_at) + at;
     }
 
     function relTime(iso) {
@@ -787,7 +816,7 @@
       }).join('');
     }
 
-    function duePickerHtml(due) {
+    function duePickerHtml(due, time) {
       var chips = DUE_PRESETS.map(function (p) {
         var v = addDays(p.days);
         return '<button type="button" class="nk-due-chip' + (due === v ? ' on' : '') + '" data-due="' + v + '">' + p.label + '</button>';
@@ -798,13 +827,19 @@
           '<span class="ri-calendar-event-line" aria-hidden="true"></span>' +
           '<input type="date" class="nk-due-input" value="' + escapeHtml(due || '') + '" aria-label="Fecha de seguimiento" />' +
         '</label>' +
-      '</div>';
+      '</div>' +
+      (due
+        ? '<label class="nk-time"><span class="ri-alarm-line" aria-hidden="true"></span>Recordarme a las ' +
+            '<input type="time" class="nk-time-input" value="' + escapeHtml(time || '') + '" aria-label="Hora del recordatorio" />' +
+            '<span class="nk-hint">(opcional)</span></label>'
+        : '');
     }
 
     // Selector de etiquetas y fecha dentro de un contenedor; devuelve getters.
-    function bindPickers(box, tags, initialTags, initialDue, onChange) {
+    function bindPickers(box, tags, initialTags, initialDue, onChange, initialTime) {
       var selected = (initialTags || []).slice();
       var due = initialDue || '';
+      var time = initialTime || '';
       var tagBox = box.querySelector('.nk-tag-picker');
       var dueBox = box.querySelector('.nk-due-wrap');
       function renderTags() {
@@ -822,19 +857,22 @@
       }
       function renderDue() {
         if (!dueBox) return;
-        dueBox.innerHTML = duePickerHtml(due);
+        dueBox.innerHTML = duePickerHtml(due, time);
         Array.prototype.forEach.call(dueBox.querySelectorAll('.nk-due-chip'), function (chip) {
           chip.addEventListener('click', function () { due = chip.getAttribute('data-due') || ''; renderDue(); if (onChange) onChange(); });
         });
         var input = dueBox.querySelector('.nk-due-input');
         input.addEventListener('change', function () { due = input.value || ''; renderDue(); if (onChange) onChange(); });
+        var timeInput = dueBox.querySelector('.nk-time-input');
+        if (timeInput) timeInput.addEventListener('change', function () { time = timeInput.value || ''; if (onChange) onChange(); });
       }
       renderTags();
       renderDue();
       return {
         tags: function () { return selected.slice(); },
         due: function () { return due || null; },
-        reset: function () { selected = []; due = ''; renderTags(); renderDue(); },
+        time: function () { return due && time ? time : null; },
+        reset: function () { selected = []; due = ''; time = ''; renderTags(); renderDue(); },
       };
     }
 
@@ -844,9 +882,59 @@
       }).join('');
     }
 
+    // Línea (número de WhatsApp del sistema) desde la que se registró la nota.
+    function lineLabel(n) {
+      var name = n.session_name || '';
+      var phone = n.session_phone ? '+' + String(n.session_phone).replace(/^\+/, '') : '';
+      return name && phone ? name + ' · ' + phone : (name || phone || 'otra línea');
+    }
+
+    function isPinned(n) { return !!n.pinned && !n.done_at; }
+
+    // Personas a las que se puede asignar una tarea (se pide una vez por página).
+    var assigneesPromise = null;
+    var assigneesData = { me: null, users: [] };
+    function loadAssignees() {
+      if (!assigneesPromise) {
+        assigneesPromise = api('/notes/assignees')
+          .then(function (d) { assigneesData = { me: d.me, users: d.users || [] }; return assigneesData; })
+          .catch(function () { assigneesPromise = null; return assigneesData; });
+      }
+      return assigneesPromise;
+    }
+
+    function assigneeOptions(selected) {
+      var me = assigneesData.me;
+      var opts = '<option value="">Sin responsable</option>';
+      if (me) opts += '<option value="' + me + '"' + (selected === me ? ' selected' : '') + '>Yo</option>';
+      assigneesData.users.forEach(function (u) {
+        if (u.id === me) return;
+        opts += '<option value="' + u.id + '"' + (selected === u.id ? ' selected' : '') + '>' + escapeHtml(u.name || ('Usuario ' + u.id)) + '</option>';
+      });
+      return opts;
+    }
+
+    // Llena un <select> de responsables cuando llega la lista.
+    function bindAssignee(select, selected, onChange) {
+      if (!select) return function () { return null; };
+      var value = selected || null;
+      select.innerHTML = assigneeOptions(value);
+      loadAssignees().then(function () { select.innerHTML = assigneeOptions(value); });
+      select.addEventListener('change', function () { value = Number(select.value) || null; if (onChange) onChange(value); });
+      return function () { return value; };
+    }
+
     function cardHtml(n, opts) {
       opts = opts || {};
       var st = dueState(n);
+      var pinned = isPinned(n);
+      // En la ficha del chat solo se marca el origen si vino de otra línea; en /notes siempre.
+      var fromOther = opts.currentSession && n.session_id && n.session_id !== opts.currentSession;
+      var origin = (fromOther || (opts.showContact && n.session_id))
+        ? '<span class="nk-meta-item nk-origin' + (fromOther ? ' other' : '') + '" title="' +
+            (fromOther ? 'Registrada al atender a esta persona desde otra línea' : 'Línea desde la que se registró') + '">' +
+            '<span class="ri-smartphone-line" aria-hidden="true"></span>' + (fromOther ? 'Desde ' : '') + escapeHtml(lineLabel(n)) + '</span>'
+        : '';
       var name = n.contact_name || n.contact_phone || String(n.chat_id || '').split('@')[0];
       var contact = opts.showContact
         ? '<div class="nk-contact">' + avatarHtml(name, 'avatar-xs') +
@@ -857,16 +945,37 @@
       var due = n.due_at
         ? '<span class="nk-due nk-due-' + st + '"><span class="' + (st === 'overdue' ? 'ri-alarm-warning-line' : st === 'done' ? 'ri-calendar-check-line' : 'ri-calendar-event-line') + '" aria-hidden="true"></span>' + escapeHtml(dueLabel(n)) + '</span>'
         : '';
+      var pinBadge = pinned
+        ? '<span class="nk-pin-badge"><span class="ri-pushpin-2-fill" aria-hidden="true"></span>Importante</span>'
+        : '';
+      if (n.assigned_to) {
+        pinBadge += '<span class="nk-assignee' + (n.assigned_to_me ? ' me' : '') + '" title="Responsable de la tarea">' +
+          '<span class="ri-user-received-2-line" aria-hidden="true"></span>' +
+          (n.assigned_to_me ? 'Para vos' : escapeHtml(n.assigned_name || 'Asignada')) + '</span>';
+      }
+      var canGoto = n.source_message_id && opts.onGotoMessage && n.session_id === opts.currentSession;
+      var gotoLink = canGoto
+        ? '<button type="button" class="nk-goto" title="Ir al mensaje del chat que originó la nota">' +
+            '<span class="ri-chat-quote-line" aria-hidden="true"></span>Ver mensaje</button>'
+        : '';
       var meta = '<span class="nk-meta-item" title="' + escapeHtml(fmtDateTime(n.created_at)) + '">' +
+          '<span class="ri-user-3-line" aria-hidden="true"></span>' +
           escapeHtml(n.author_name || 'Equipo') + ' · ' + escapeHtml(relTime(n.created_at)) +
           (n.updated_at ? ' · editada' : '') + '</span>' +
+        origin + gotoLink +
         (n.done_at ? '<span class="nk-meta-item nk-done-by"><span class="ri-check-double-line" aria-hidden="true"></span>Hecho por ' + escapeHtml(n.done_by_name || 'el equipo') + ' ' + escapeHtml(relTime(n.done_at)) + '</span>' : '');
-      var actions = n.can_edit
+      var pinTitle = n.pinned ? 'Quitar de importantes' : 'Marcar como importante (se fija arriba del chat en todas las líneas)';
+      if (n.deleted_at) return trashCardHtml(n, opts, contact);
+      var actions = '<button type="button" class="nk-icon nk-hist" title="Ver historial de cambios" aria-label="Ver historial de cambios" aria-expanded="false">' +
+          '<span class="ri-history-line"></span></button>' +
+        '<button type="button" class="nk-icon nk-pin' + (n.pinned ? ' on' : '') + '" title="' + pinTitle + '" aria-label="' + pinTitle + '" aria-pressed="' + !!n.pinned + '">' +
+          '<span class="' + (n.pinned ? 'ri-pushpin-2-fill' : 'ri-pushpin-2-line') + '"></span></button>' +
+        (n.can_edit
         ? '<button type="button" class="nk-icon nk-edit" title="Editar nota" aria-label="Editar nota"><span class="ri-pencil-line"></span></button>' +
           '<button type="button" class="nk-icon nk-del" title="Eliminar nota" aria-label="Eliminar nota"><span class="ri-delete-bin-6-line"></span></button>'
-        : '';
-      var checkTitle = n.done_at ? 'Reabrir seguimiento' : (n.due_at ? 'Marcar seguimiento como hecho' : 'Marcar como resuelta');
-      return '<article class="nk-card nk-' + st + '" data-id="' + n.id + '">' +
+        : '');
+      var checkTitle = n.done_at ? 'Reabrir' : (n.due_at ? 'Marcar tarea como hecha' : 'Marcar como resuelta');
+      return '<article class="nk-card nk-' + st + (pinned ? ' nk-pinned' : '') + '" data-id="' + n.id + '">' +
         contact +
         '<div class="nk-row">' +
           '<button type="button" class="nk-check' + (n.done_at ? ' on' : '') + '" title="' + checkTitle + '" aria-label="' + checkTitle + '" aria-pressed="' + !!n.done_at + '">' +
@@ -875,25 +984,94 @@
             '<div class="nk-view">' +
               (n.note_text ? '<p class="nk-text">' + linkifyHtml(escapeHtml(n.note_text)) + '</p>' : '') +
               (n.audio_path ? '<audio controls preload="none" src="/inbox/notes/' + n.id + '/audio"></audio>' : '') +
-              ((n.tags && n.tags.length) || due ? '<div class="nk-badges">' + due + tagsHtml(n) + '</div>' : '') +
+              ((n.tags && n.tags.length) || due || pinBadge ? '<div class="nk-badges">' + pinBadge + due + tagsHtml(n) + '</div>' : '') +
               '<div class="nk-meta">' + meta + '</div>' +
             '</div>' +
             '<div class="nk-editor" hidden></div>' +
+            '<div class="nk-history" hidden></div>' +
           '</div>' +
           '<div class="nk-actions">' + actions + '</div>' +
         '</div>' +
         '<div class="nk-confirm" hidden>' +
-          '<span>¿Eliminar esta nota? No se puede deshacer.</span>' +
-          '<button type="button" class="btn btn-sm btn-danger nk-confirm-yes">Eliminar</button>' +
+          '<span>¿Enviar esta nota a la papelera? Se puede restaurar desde Notas y tareas.</span>' +
+          '<button type="button" class="btn btn-sm btn-danger nk-confirm-yes">Enviar a la papelera</button>' +
           '<button type="button" class="btn btn-sm btn-light nk-confirm-no">Cancelar</button>' +
         '</div>' +
       '</article>';
+    }
+
+    // Nota en la papelera: solo lectura, con quién la eliminó y «Restaurar».
+    function trashCardHtml(n, opts, contact) {
+      return '<article class="nk-card nk-trashed" data-id="' + n.id + '">' + contact +
+        '<div class="nk-row"><span class="nk-trash-ic ri-delete-bin-6-line" aria-hidden="true"></span>' +
+          '<div class="nk-main">' +
+            (n.note_text ? '<p class="nk-text">' + linkifyHtml(escapeHtml(n.note_text)) + '</p>' : '<p class="nk-text"><i>Nota de voz</i></p>') +
+            '<div class="nk-meta">' +
+              '<span class="nk-meta-item"><span class="ri-user-3-line" aria-hidden="true"></span>' + escapeHtml(n.author_name || 'Equipo') + ' · ' + escapeHtml(relTime(n.created_at)) + '</span>' +
+              '<span class="nk-meta-item nk-deleted-by"><span class="ri-delete-bin-line" aria-hidden="true"></span>Eliminada por ' +
+                escapeHtml(n.deleted_by_name || 'el equipo') + ' ' + escapeHtml(relTime(n.deleted_at)) + '</span>' +
+            '</div>' +
+            '<div class="nk-history" hidden></div>' +
+          '</div>' +
+          '<div class="nk-trash-actions">' +
+            '<button type="button" class="nk-icon nk-hist" title="Ver historial de cambios" aria-label="Ver historial de cambios" aria-expanded="false"><span class="ri-history-line"></span></button>' +
+            (n.can_edit ? '<button type="button" class="btn btn-sm btn-soft-primary nk-restore"><span class="ri-arrow-go-back-line me-1"></span>Restaurar</button>' : '') +
+          '</div>' +
+        '</div>' +
+      '</article>';
+    }
+
+    var HISTORY_LABELS = {
+      edited: 'Editó la nota',
+      done: 'La marcó como hecha',
+      reopened: 'La reabrió',
+      pinned: 'La marcó como importante',
+      unpinned: 'La quitó de importantes',
+      deleted: 'La envió a la papelera',
+      restored: 'La restauró',
+      assigned: 'Cambió el responsable',
+      snoozed: 'Pospuso el recordatorio',
+      template: 'La creó desde una plantilla',
+    };
+    var HISTORY_ICONS = {
+      edited: 'ri-pencil-line', done: 'ri-check-double-line', reopened: 'ri-restart-line',
+      pinned: 'ri-pushpin-2-fill', unpinned: 'ri-unpin-line', deleted: 'ri-delete-bin-6-line', restored: 'ri-arrow-go-back-line',
+      assigned: 'ri-user-received-2-line',
+      snoozed: 'ri-alarm-snooze-line', template: 'ri-file-list-3-line',
+    };
+
+    // Línea de tiempo: la creación sale de la propia nota; el resto, del historial.
+    function historyHtml(n, entries) {
+      var item = function (icon, who, what, when, extra) {
+        return '<li class="nk-h-item"><span class="nk-h-ic ' + icon + '" aria-hidden="true"></span>' +
+          '<div><b>' + escapeHtml(who || 'Equipo') + '</b> ' + escapeHtml(what) +
+          ' <span class="nk-h-when" title="' + escapeHtml(fmtDateTime(when)) + '">' + escapeHtml(relTime(when)) + '</span>' +
+          (extra || '') + '</div></li>';
+      };
+      var rows = [item('ri-add-circle-line', n.author_name, 'Registró la nota', n.created_at)];
+      entries.forEach(function (e) {
+        var extra = '';
+        if (e.action === 'edited') {
+          var prev = [];
+          if (e.prev_text) prev.push('<span class="nk-h-prev">' + escapeHtml(e.prev_text) + '</span>');
+          prev.push('<span class="nk-h-sub">Fecha: ' + escapeHtml(e.prev_due_at ? fmtDay(e.prev_due_at) : 'sin fecha') +
+            (e.prev_tags && e.prev_tags.length ? ' · Etiquetas: ' + escapeHtml(e.prev_tags.join(', ')) : '') + '</span>');
+          extra = '<div class="nk-h-before"><span class="nk-h-label">Antes decía</span>' + prev.join('') + '</div>';
+        }
+        var what = HISTORY_LABELS[e.action] || e.action;
+        if (e.action === 'assigned') what = e.detail ? 'Asignó la tarea a ' + e.detail : 'Quitó el responsable';
+        if (e.action === 'snoozed' && e.detail) what = 'Pospuso el recordatorio para ' + e.detail;
+        if (e.action === 'template' && e.detail) what = 'La creó desde la plantilla «' + e.detail + '»';
+        rows.push(item(HISTORY_ICONS[e.action] || 'ri-record-circle-line', e.user_name, what, e.created_at, extra));
+      });
+      return '<div class="nk-h-head">Historial</div><ol class="nk-h-list">' + rows.join('') + '</ol>';
     }
 
     function editorHtml(n) {
       return '<textarea class="form-control nk-textarea nk-edit-text" rows="3" maxlength="4000">' + escapeHtml(n.note_text || '') + '</textarea>' +
         '<div class="nk-field-label">Etiquetas</div><div class="nk-tag-picker"></div>' +
         '<div class="nk-field-label">Seguimiento</div><div class="nk-due-wrap"></div>' +
+        '<div class="nk-field-label">Responsable</div><select class="form-select form-select-sm nk-assignee-select" aria-label="Responsable"></select>' +
         '<div class="nk-editor-foot">' +
           '<span class="nk-hint">Ctrl + Enter para guardar · Esc para cancelar</span>' +
           '<button type="button" class="btn btn-sm btn-light nk-edit-cancel">Cancelar</button>' +
@@ -918,22 +1096,59 @@
         var view = card.querySelector('.nk-view');
         var editor = card.querySelector('.nk-editor');
         var confirmBox = card.querySelector('.nk-confirm');
+        var histBox = card.querySelector('.nk-history');
+
+        var histBtn = card.querySelector('.nk-hist');
+        if (histBtn) histBtn.addEventListener('click', function () {
+          if (!histBox.hidden) { histBox.hidden = true; histBtn.setAttribute('aria-expanded', 'false'); return; }
+          histBox.hidden = false;
+          histBtn.setAttribute('aria-expanded', 'true');
+          histBox.innerHTML = '<div class="nk-hint">Cargando historial…</div>';
+          api('/inbox/notes/' + id + '/history')
+            .then(function (entries) { histBox.innerHTML = historyHtml(note, entries || []); })
+            .catch(function (e) { histBox.innerHTML = '<div class="nk-hint">' + escapeHtml(e.message) + '</div>'; });
+        });
+
+        var gotoBtn = card.querySelector('.nk-goto');
+        if (gotoBtn) gotoBtn.addEventListener('click', function () { opts.onGotoMessage(note.source_message_id); });
+
+        var restoreBtn = card.querySelector('.nk-restore');
+        if (restoreBtn) restoreBtn.addEventListener('click', function () {
+          restoreBtn.disabled = true;
+          jsonApi('/inbox/notes/' + id + '/restore', 'POST')
+            .then(function (updated) { toast('Nota restaurada'); opts.onChanged(updated, id); })
+            .catch(function (e) { restoreBtn.disabled = false; toast(e.message, true); });
+        });
+        if (note.deleted_at) return;
 
         card.querySelector('.nk-check').addEventListener('click', function (ev) {
+          histBox.hidden = true;
           var btn = ev.currentTarget;
           btn.disabled = true;
           jsonApi('/inbox/notes/' + id + '/done', 'PATCH', { done: !note.done_at })
             .then(function (updated) {
-              toast(updated.done_at ? 'Seguimiento marcado como hecho' : 'Seguimiento reabierto');
+              toast(updated.done_at ? (updated.due_at ? 'Tarea marcada como hecha' : 'Nota marcada como resuelta') : 'Nota reabierta');
               opts.onChanged(updated, id);
             })
             .catch(function (e) { btn.disabled = false; toast(e.message, true); });
         });
 
+        var pinBtn = card.querySelector('.nk-pin');
+        if (pinBtn) pinBtn.addEventListener('click', function () {
+          pinBtn.disabled = true;
+          jsonApi('/inbox/notes/' + id + '/pin', 'PATCH', { pinned: !note.pinned })
+            .then(function (updated) {
+              toast(updated.pinned ? 'Marcada como importante: la verá todo el equipo al abrir el chat' : 'Quitada de importantes');
+              opts.onChanged(updated, id);
+            })
+            .catch(function (e) { pinBtn.disabled = false; toast(e.message, true); });
+        });
+
         var editBtn = card.querySelector('.nk-edit');
         if (editBtn) editBtn.addEventListener('click', function () {
           editor.innerHTML = editorHtml(note);
-          var pickers = bindPickers(editor, opts.tags(), (note.tags || []).map(function (t) { return t.id; }), note.due_at);
+          var pickers = bindPickers(editor, opts.tags(), (note.tags || []).map(function (t) { return t.id; }), note.due_at, null, note.due_time);
+          var assignee = bindAssignee(editor.querySelector('.nk-assignee-select'), note.assigned_to);
           var ta = editor.querySelector('.nk-edit-text');
           var close = function () { editor.hidden = true; editor.innerHTML = ''; view.hidden = false; card.classList.remove('editing'); };
           var save = function () {
@@ -941,7 +1156,7 @@
             if (!text && !note.audio_path) { toast('La nota no puede quedar vacía', true); ta.focus(); return; }
             var saveBtn = editor.querySelector('.nk-edit-save');
             saveBtn.disabled = true;
-            jsonApi('/inbox/notes/' + id, 'PUT', { text: text, due_at: pickers.due(), tag_ids: pickers.tags() })
+            jsonApi('/inbox/notes/' + id, 'PUT', { text: text, due_at: pickers.due(), due_time: pickers.time(), tag_ids: pickers.tags(), assigned_to: assignee() })
               .then(function (updated) { toast('Nota actualizada'); opts.onChanged(updated, id); })
               .catch(function (e) { saveBtn.disabled = false; toast(e.message, true); });
           };
@@ -972,7 +1187,17 @@
         confirmBox.querySelector('.nk-confirm-yes').addEventListener('click', function (ev) {
           ev.currentTarget.disabled = true;
           api('/inbox/notes/' + id, { method: 'DELETE' })
-            .then(function () { toast('Nota eliminada'); opts.onChanged(null, id); })
+            .then(function () {
+              opts.onChanged(null, id);
+              toast('Nota enviada a la papelera', false, {
+                label: 'Deshacer',
+                run: function () {
+                  jsonApi('/inbox/notes/' + id + '/restore', 'POST')
+                    .then(function (restored) { toast('Nota restaurada'); opts.onChanged(restored, id); })
+                    .catch(function (e) { toast(e.message, true); });
+                },
+              });
+            })
             .catch(function (e) { ev.currentTarget.disabled = false; toast(e.message, true); });
         });
       });
@@ -980,6 +1205,10 @@
 
     return {
       dueState: dueState,
+      isPinned: isPinned,
+      lineLabel: lineLabel,
+      loadAssignees: loadAssignees,
+      bindAssignee: bindAssignee,
       relTime: relTime,
       fmtDay: fmtDay,
       daysFromToday: daysFromToday,
@@ -990,6 +1219,208 @@
       tagStyle: tagStyle,
     };
   })();
+
+  /* ── Recordatorios y resumen del día (en cualquier página del panel) ── */
+  function initReminders() {
+    var es = liveSource();
+    if (!es) return;
+    var stack = null;
+    function getStack() {
+      if (!stack) {
+        stack = document.createElement('div');
+        stack.className = 'rem-stack';
+        stack.setAttribute('aria-live', 'polite');
+        document.body.appendChild(stack);
+      }
+      return stack;
+    }
+    function ymd(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+    function minutesUntilTomorrow9() {
+      var t = new Date(); t.setDate(t.getDate() + 1); t.setHours(9, 0, 0, 0);
+      return Math.round((t - Date.now()) / 60000);
+    }
+
+    function showReminder(d) {
+      var card = document.createElement('section');
+      card.className = 'rem-card';
+      card.setAttribute('role', 'alert');
+      card.innerHTML =
+        '<div class="rem-head"><span class="ri-alarm-line" aria-hidden="true"></span>Recordatorio · ' + escapeHtml(d.dueTime || '') +
+          '<button type="button" class="rem-x" aria-label="Cerrar"><span class="ri-close-line"></span></button></div>' +
+        '<p class="rem-text">' + escapeHtml(d.text || '') + '</p>' +
+        '<div class="rem-contact"><span class="ri-user-3-line" aria-hidden="true"></span>' + escapeHtml(d.contact || '') + '</div>' +
+        '<div class="rem-actions">' +
+          '<button type="button" class="btn btn-sm btn-primary rem-done"><span class="ri-check-line me-1"></span>Hecho</button>' +
+          '<a class="btn btn-sm btn-soft-primary" href="/conversations/' + encodeURIComponent(d.chatId || '') + '">Abrir chat</a>' +
+          '<span class="rem-snooze"><span class="nk-hint">Posponer:</span>' +
+            '<button type="button" data-min="15">15 min</button><button type="button" data-min="60">1 h</button>' +
+            '<button type="button" data-min="tomorrow">Mañana 9:00</button></span>' +
+        '</div>' +
+        ('Notification' in window && Notification.permission === 'default'
+          ? '<button type="button" class="rem-notify">Avisarme también cuando esté en otra pestaña</button>' : '');
+      getStack().appendChild(card);
+      var close = function () { card.remove(); };
+      card.querySelector('.rem-x').addEventListener('click', close);
+      card.querySelector('.rem-done').addEventListener('click', function (ev) {
+        ev.currentTarget.disabled = true;
+        jsonApi('/inbox/notes/' + d.noteId + '/done', 'PATCH', { done: true })
+          .then(function () { toast('Tarea marcada como hecha'); close(); })
+          .catch(function (e) { toast(e.message, true); });
+      });
+      Array.prototype.forEach.call(card.querySelectorAll('.rem-snooze button'), function (b) {
+        b.addEventListener('click', function () {
+          var m = b.getAttribute('data-min');
+          var minutes = m === 'tomorrow' ? minutesUntilTomorrow9() : Number(m);
+          jsonApi('/inbox/notes/' + d.noteId + '/snooze', 'POST', { minutes: minutes })
+            .then(function (n) { toast('Te lo recuerdo ' + (m === 'tomorrow' ? 'mañana a las 9:00' : 'a las ' + n.due_time)); close(); })
+            .catch(function (e) { toast(e.message, true); });
+        });
+      });
+      var notify = card.querySelector('.rem-notify');
+      if (notify) notify.addEventListener('click', function () {
+        Notification.requestPermission().then(function () { notify.remove(); });
+      });
+      // Si la pestaña no está a la vista, también una notificación del sistema.
+      if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+        try { new Notification('Recordatorio: ' + (d.contact || ''), { body: d.text || '', tag: 'note-' + d.noteId }); } catch (e) {}
+      }
+    }
+
+    es.addEventListener('reminder', function (e) {
+      var d; try { d = JSON.parse(e.data); } catch (_) { return; }
+      if (d && d.noteId) showReminder(d);
+    });
+
+    // Resumen del día: una vez por día y navegador.
+    var key = 'myday:' + ymd(new Date());
+    var seen = false;
+    try { seen = !!localStorage.getItem(key); } catch (e) {}
+    if (seen) return;
+    api('/notes/my-day').then(function (day) {
+      if (!day || (!day.today && !day.overdue)) return;
+      try { localStorage.setItem(key, '1'); } catch (e) {}
+      var parts = [];
+      if (day.today) parts.push(day.today + ' para hoy');
+      if (day.overdue) parts.push(day.overdue + ' vencida' + (day.overdue > 1 ? 's' : ''));
+      var card = document.createElement('section');
+      card.className = 'rem-card rem-day';
+      card.innerHTML =
+        '<div class="rem-head"><span class="ri-sun-line" aria-hidden="true"></span>Tu día: ' + escapeHtml(parts.join(' · ')) +
+          '<button type="button" class="rem-x" aria-label="Cerrar"><span class="ri-close-line"></span></button></div>' +
+        '<ul class="rem-list">' + (day.items || []).map(function (i) {
+          var late = i.due_at < ymd(new Date());
+          return '<li class="' + (late ? 'late' : '') + '"><span class="rem-when">' + (late ? 'Vencida' : (i.due_time || 'Hoy')) + '</span>' +
+            '<span class="rem-what">' + escapeHtml(i.note_text || 'Nota de voz') + '</span>' +
+            '<span class="rem-who">' + escapeHtml(i.contact || '') + '</span></li>';
+        }).join('') + '</ul>' +
+        '<div class="rem-actions"><a class="btn btn-sm btn-primary" href="/notes#asignadas">Ver mis tareas</a></div>';
+      getStack().appendChild(card);
+      card.querySelector('.rem-x').addEventListener('click', function () { card.remove(); });
+    }).catch(function () {});
+  }
+
+  /* ── /notes: gestor de plantillas de tareas ── */
+  function initTemplatesManager() {
+    var box = document.getElementById('np-templates');
+    if (!box) return;
+    var list = [];
+    var editing = null; // plantilla en edición (o {} si es nueva)
+
+    function load() {
+      return api('/notes/templates').then(function (d) { list = d || []; render(); }).catch(function (e) { toast(e.message, true); });
+    }
+
+    function stepRow(i) {
+      i = i || { text: '', due_days: '', due_time: '', pinned: false };
+      return '<div class="tpl-step">' +
+        '<input class="form-control form-control-sm tpl-text" maxlength="500" placeholder="Ej.: Pedir comprobante de pago" value="' + escapeHtml(i.text || '') + '" aria-label="Tarea" />' +
+        '<label class="tpl-days" title="Días desde que se aplica (vacío = sin fecha)"><span>en</span>' +
+          '<input type="number" min="0" max="365" class="form-control form-control-sm tpl-days-input" value="' + (i.due_days === null || i.due_days === undefined ? '' : i.due_days) + '" aria-label="Días" /><span>días</span></label>' +
+        '<input type="time" class="form-control form-control-sm tpl-time" value="' + escapeHtml(i.due_time || '') + '" aria-label="Hora del recordatorio" />' +
+        '<label class="tpl-pin" title="Importante"><input type="checkbox" class="tpl-pin-input"' + (i.pinned ? ' checked' : '') + ' /><span class="ri-pushpin-2-line"></span></label>' +
+        '<button type="button" class="nk-icon tpl-del" title="Quitar paso" aria-label="Quitar paso"><span class="ri-close-line"></span></button>' +
+      '</div>';
+    }
+
+    function render() {
+      if (editing) return renderEditor();
+      box.innerHTML =
+        (list.length
+          ? list.map(function (t) {
+              return '<div class="tpl-item" data-id="' + t.id + '">' +
+                '<div class="tpl-item-main"><b>' + escapeHtml(t.name) + '</b>' +
+                  '<span>' + t.items.length + ' tarea' + (t.items.length > 1 ? 's' : '') + (t.programa ? ' · ' + escapeHtml(t.programa) : '') + '</span></div>' +
+                '<button type="button" class="nk-icon tpl-edit" title="Editar plantilla" aria-label="Editar plantilla"><span class="ri-pencil-line"></span></button>' +
+              '</div>';
+            }).join('')
+          : '<p class="nk-hint">Agrupá pasos que se repiten (p. ej. «Inscripción»: comprobante, documentos, cronograma) y crealos en un clic desde el chat.</p>') +
+        '<button type="button" class="btn btn-sm btn-soft-primary w-100 tpl-new"><span class="ri-add-line"></span> Nueva plantilla</button>';
+      box.querySelector('.tpl-new').addEventListener('click', function () { editing = {}; render(); });
+      Array.prototype.forEach.call(box.querySelectorAll('.tpl-edit'), function (b) {
+        b.addEventListener('click', function () {
+          var id = Number(b.closest('.tpl-item').getAttribute('data-id'));
+          editing = list.filter(function (t) { return t.id === id; })[0] || null;
+          render();
+        });
+      });
+    }
+
+    function renderEditor() {
+      var t = editing;
+      box.innerHTML =
+        '<div class="nk-field-label">Nombre</div><input class="form-control form-control-sm tpl-name" maxlength="60" placeholder="Ej.: Inscripción" value="' + escapeHtml(t.name || '') + '" />' +
+        '<div class="nk-field-label">Programa <span class="nk-field-hint">· opcional, se sugiere primero en esos chats</span></div>' +
+        '<input class="form-control form-control-sm tpl-prog" maxlength="120" placeholder="Ej.: Diplomado en Educación Superior" value="' + escapeHtml(t.programa || '') + '" />' +
+        '<div class="nk-field-label">Tareas</div><div class="tpl-steps">' + ((t.items && t.items.length ? t.items : [null]).map(stepRow).join('')) + '</div>' +
+        '<button type="button" class="btn btn-sm btn-light w-100 tpl-add"><span class="ri-add-line"></span> Agregar tarea</button>' +
+        '<div class="tpl-foot">' +
+          (t.id ? '<button type="button" class="btn btn-sm btn-soft-danger tpl-remove">Eliminar</button>' : '') +
+          '<button type="button" class="btn btn-sm btn-light tpl-cancel">Cancelar</button>' +
+          '<button type="button" class="btn btn-sm btn-primary tpl-save"><span class="ri-check-line me-1"></span>Guardar</button>' +
+        '</div>';
+      var steps = box.querySelector('.tpl-steps');
+      var bindDel = function () {
+        Array.prototype.forEach.call(steps.querySelectorAll('.tpl-del'), function (b) {
+          b.onclick = function () { if (steps.children.length > 1) b.closest('.tpl-step').remove(); };
+        });
+      };
+      bindDel();
+      box.querySelector('.tpl-add').addEventListener('click', function () {
+        steps.insertAdjacentHTML('beforeend', stepRow());
+        bindDel();
+        steps.lastElementChild.querySelector('.tpl-text').focus();
+      });
+      box.querySelector('.tpl-cancel').addEventListener('click', function () { editing = null; render(); });
+      var remove = box.querySelector('.tpl-remove');
+      if (remove) remove.addEventListener('click', function () {
+        if (!confirm('¿Eliminar la plantilla «' + t.name + '»? Las tareas ya creadas no se tocan.')) return;
+        api('/notes/templates/' + t.id, { method: 'DELETE' })
+          .then(function () { toast('Plantilla eliminada'); editing = null; load(); })
+          .catch(function (e) { toast(e.message, true); });
+      });
+      box.querySelector('.tpl-save').addEventListener('click', function (ev) {
+        var items = Array.prototype.map.call(steps.querySelectorAll('.tpl-step'), function (row) {
+          var days = row.querySelector('.tpl-days-input').value;
+          return {
+            text: row.querySelector('.tpl-text').value.trim(),
+            due_days: days === '' ? null : Number(days),
+            due_time: row.querySelector('.tpl-time').value || null,
+            pinned: row.querySelector('.tpl-pin-input').checked,
+          };
+        });
+        var body = { name: box.querySelector('.tpl-name').value.trim(), programa: box.querySelector('.tpl-prog').value.trim(), items: items };
+        ev.currentTarget.disabled = true;
+        var btn = ev.currentTarget;
+        (t.id ? jsonApi('/notes/templates/' + t.id, 'PUT', body) : jsonApi('/notes/templates', 'POST', body))
+          .then(function () { toast('Plantilla guardada'); editing = null; load(); })
+          .catch(function (e) { btn.disabled = false; toast(e.message, true); });
+      });
+      box.querySelector('.tpl-name').focus();
+    }
+
+    load();
+    if (location.hash === '#plantillas') box.closest('.np-side-card').scrollIntoView({ behavior: 'smooth' });
+  }
 
   function initInbox() {
     var root = document.getElementById('inbox');
@@ -1122,10 +1553,24 @@
             '<span class="convo-time">' + timeAgo(c.last_message_at) + '</span></div>' +
           '<div class="convo-last">' + escapeHtml(c.last_message_text || '—') + '</div>' +
         '</div>' +
+        convoNotesHtml(c) +
         (c.unread_count > 0 ? '<span class="unread-pill">' + c.unread_count + '</span>' : '') +
         (phone ? '<span class="convo-phone-mini" title="' + escapeHtml(phone) + '"></span>' : '');
       el.addEventListener('click', function () { openChat(c.session_id, c.chat_id, true); });
       return el;
+    }
+
+    // Indicador de notas pendientes de la persona (de cualquier línea).
+    function convoNotesHtml(c) {
+      var n = c.notes || {};
+      if (!n.open) return '';
+      var tone = n.overdue ? 'danger' : n.pinned ? 'pin' : 'info';
+      var icon = n.pinned ? 'ri-pushpin-2-fill' : n.overdue ? 'ri-alarm-warning-line' : 'ri-sticky-note-line';
+      var parts = [n.open + ' pendiente' + (n.open > 1 ? 's' : '')];
+      if (n.pinned) parts.push(n.pinned + ' importante' + (n.pinned > 1 ? 's' : ''));
+      if (n.overdue) parts.push(n.overdue + ' vencida' + (n.overdue > 1 ? 's' : ''));
+      return '<span class="convo-notes ' + tone + '" title="Notas: ' + parts.join(' · ') + '">' +
+        '<span class="' + icon + '" aria-hidden="true"></span>' + n.open + '</span>';
     }
 
     function emptyPane() {
@@ -1151,6 +1596,7 @@
       state.memberFilter = '';
       state.notes = [];
       state.noteDraft = emptyNoteDraft();
+      state.person = null;
       state.chatToken++;
       root.classList.remove('list-hidden');
       renderTabs();
@@ -1159,6 +1605,7 @@
       fetchMessages(true);
       loadNotes();
       loadTags();
+      loadPerson();
       if (state.tab === 'group') loadParticipants();
       if (push) history.pushState({ chat: chatId }, '', '/conversations/' + encodeURIComponent(chatId));
       // Acuse de lectura (local + WhatsApp).
@@ -1322,7 +1769,27 @@
         var text = msg.content_type === 'text' ? msg.body : msg.transcription;
         if (text) speakText(text);
       },
+      onNote: function (msg) { noteFromMessage(msg); },
     };
+
+    // Abre el compositor de notas con el mensaje citado y enlazado.
+    function noteFromMessage(msg) {
+      var body = msg.content_type === 'text' ? msg.body : (msg.transcription || msg.body || '');
+      var who = msg.direction === 'in' ? 'El contacto escribió' : 'Le respondimos';
+      var when = fmtDateTime(msg.occurred_at);
+      var quote = body ? who + (when ? ' (' + when + ')' : '') + ': «' + String(body).trim() + '»\n' : '';
+      var d = state.noteDraft;
+      d.open = true;
+      d.text = quote + (d.text && d.text.indexOf(quote) === -1 ? d.text : '');
+      d.sourceMessageId = msg.id;
+      d.sourceLabel = (msg.direction === 'in' ? 'Mensaje del contacto' : 'Mensaje enviado') + (when ? ' · ' + when : '');
+      root.classList.remove('contact-hidden');
+      renderNoteComposer();
+      var sec = els.contact.querySelector('.nk-section');
+      if (sec) sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      var ta = els.contact.querySelector('#nk-composer textarea');
+      if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+    }
 
     function reloadStream() {
       state.messages = [];
@@ -1336,10 +1803,11 @@
     function renderPane() {
       var c = selectedConversation();
       if (!c) { els.pane.innerHTML = emptyPane(); els.contact.innerHTML = ''; els.contact.classList.add('d-none'); root.classList.add('contact-hidden'); return; }
-      els.pane.innerHTML = chatHeaderHtml(c) + '<div class="chat-body"></div>' + composerHtml(c);
+      els.pane.innerHTML = chatHeaderHtml(c) + '<div id="chat-notes-banner"></div><div class="chat-body"></div>' + composerHtml(c);
       els.contact.classList.remove('d-none');
       root.classList.remove('contact-hidden');
       bindPane(c);
+      renderNotesBanner();
       var body = els.pane.querySelector('.chat-body');
       body.innerHTML = '<div class="text-muted text-center p-3">Cargando mensajes…</div>';
     }
@@ -1520,14 +1988,64 @@
       if (!state.selectedChat) return;
       var token = state.chatToken;
       api('/inbox/' + encodeURIComponent(state.selectedSession) + '/' + encodeURIComponent(state.selectedChat) + '/notes')
-        .then(function (notes) { if (token !== state.chatToken) return; state.notes = notes || []; refreshNotesSection(); })
+        .then(function (notes) { if (token !== state.chatToken) return; state.notes = notes || []; refreshNotesSection(); syncNoteCounts(); })
         .catch(function () { if (token !== state.chatToken) return; state.notes = []; refreshNotesSection(); });
+    }
+
+    // Mantiene al día el indicador de la lista sin esperar a recargarla.
+    function syncNoteCounts() {
+      var c = selectedConversation();
+      if (!c) return;
+      var open = state.notes.filter(function (n) { return !n.done_at; });
+      c.notes = {
+        open: open.length,
+        pinned: open.filter(function (n) { return n.pinned; }).length,
+        overdue: open.filter(function (n) { return NoteKit.dueState(n) === 'overdue'; }).length,
+      };
+      renderList();
+    }
+
+    // Aviso fijado arriba del chat: lo importante y lo vencido, para que nadie
+    // responda sin verlo (esté atendiendo desde la línea que sea).
+    function renderNotesBanner() {
+      var box = els.pane.querySelector('#chat-notes-banner');
+      if (!box) return;
+      var open = (state.notes || []).filter(function (n) { return !n.done_at; });
+      var pinned = open.filter(function (n) { return n.pinned; });
+      var overdue = open.filter(function (n) { return NoteKit.dueState(n) === 'overdue'; });
+      var today = open.filter(function (n) { return NoteKit.dueState(n) === 'today'; });
+      var lead = pinned[0] || overdue[0] || today[0];
+      if (!lead) { box.innerHTML = ''; return; }
+      var tone = pinned.length ? 'pin' : overdue.length ? 'danger' : 'warn';
+      var icon = pinned.length ? 'ri-pushpin-2-fill' : overdue.length ? 'ri-alarm-warning-line' : 'ri-calendar-todo-line';
+      var label = pinned.length ? 'Importante' : overdue.length ? 'Tarea vencida' : 'Tarea para hoy';
+      var text = lead.note_text || 'Nota de voz';
+      if (text.length > 160) text = text.slice(0, 157) + '…';
+      var extra = [];
+      if (pinned.length > 1) extra.push((pinned.length - 1) + ' importante' + (pinned.length > 2 ? 's' : '') + ' más');
+      if (pinned.length && overdue.length) extra.push(overdue.length + ' vencida' + (overdue.length > 1 ? 's' : ''));
+      if ((pinned.length || overdue.length) && today.length) extra.push(today.length + ' para hoy');
+      if (!pinned.length && overdue.length > 1) extra.push((overdue.length - 1) + ' vencida' + (overdue.length > 2 ? 's' : '') + ' más');
+      box.innerHTML = '<div class="chat-notes-banner ' + tone + '" role="note">' +
+        '<span class="cnb-ic ' + icon + '" aria-hidden="true"></span>' +
+        '<div class="cnb-body"><b>' + label + ':</b> ' + escapeHtml(text) +
+          (extra.length ? '<span class="cnb-more">' + escapeHtml(extra.join(' · ')) + '</span>' : '') +
+          '<span class="cnb-by">' + escapeHtml(lead.author_name || 'Equipo') + ' · ' + escapeHtml(NoteKit.relTime(lead.created_at)) + '</span>' +
+        '</div>' +
+        '<button type="button" class="cnb-open">Ver notas</button>' +
+      '</div>';
+      box.querySelector('.cnb-open').addEventListener('click', function () {
+        root.classList.remove('contact-hidden');
+        var sec = els.contact.querySelector('.nk-section');
+        if (sec) sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
     }
 
     // Solo la lista si la ficha ya está dibujada; si no, la ficha completa (primer render).
     function refreshNotesSection() {
       if (els.contact.querySelector('#nk-list')) renderNotesList();
       else renderContact();
+      renderNotesBanner();
     }
 
     // Etiquetas de notas (globales).
@@ -1541,15 +2059,18 @@
         .catch(function () {});
     }
 
-    function emptyNoteDraft() { return { open: false, text: '', tags: [], due: '' }; }
+    function emptyNoteDraft() {
+      return { open: false, text: '', tags: [], due: '', time: '', pinned: false, assignedTo: null, sourceMessageId: null, sourceLabel: '' };
+    }
 
     function notesSectionHtml() {
       return '<div class="panel-section nk-section">' +
         '<div class="nk-section-head">' +
-          '<h6><span class="ri-sticky-note-line"></span> Notas internas</h6>' +
+          '<h6><span class="ri-sticky-note-line"></span> Notas y tareas</h6>' +
           '<span class="nk-counts" id="nk-counts"></span>' +
         '</div>' +
-        '<p class="nk-intro">Lo que sabés del contacto y no queda en el chat: preferencias, acuerdos, próximos pasos. Solo lo ve tu equipo.</p>' +
+        '<p class="nk-intro"><span class="ri-team-line" aria-hidden="true"></span>' +
+          'Acuerdos, datos y pendientes de esta persona. Los ve todo el equipo, escriba al número del sistema que escriba. No se envían al contacto.</p>' +
         '<div id="nk-composer"></div>' +
         '<div id="nk-list" class="nk-list"></div>' +
       '</div>';
@@ -1561,9 +2082,14 @@
       if (!box) return;
       var d = state.noteDraft;
       if (!d.open) {
-        box.innerHTML = '<button type="button" class="nk-composer-collapsed">' +
-          '<span class="ri-add-line" aria-hidden="true"></span> Agregar una nota sobre este contacto</button>';
-        box.firstChild.addEventListener('click', function () {
+        box.innerHTML = '<div class="nk-composer-row">' +
+          '<button type="button" class="nk-composer-collapsed">' +
+            '<span class="ri-add-line" aria-hidden="true"></span> Registrar una nota o tarea</button>' +
+          '<button type="button" class="nk-template-btn" title="Crear varias tareas desde una plantilla" aria-expanded="false">' +
+            '<span class="ri-file-list-3-line" aria-hidden="true"></span><span class="visually-hidden">Usar plantilla</span></button>' +
+        '</div><div class="nk-template-pick" hidden></div>';
+        box.querySelector('.nk-template-btn').addEventListener('click', function (ev) { toggleTemplatePicker(box, ev.currentTarget); });
+        box.querySelector('.nk-composer-collapsed').addEventListener('click', function () {
           d.open = true;
           renderNoteComposer();
           var t = box.querySelector('textarea');
@@ -1572,10 +2098,23 @@
         return;
       }
       box.innerHTML = '<form class="nk-composer" novalidate>' +
+        (d.sourceMessageId
+          ? '<div class="nk-source"><span class="ri-chat-quote-line" aria-hidden="true"></span>' +
+              '<span>Enlazada a: ' + escapeHtml(d.sourceLabel || 'un mensaje del chat') + '</span>' +
+              '<button type="button" class="nk-source-x" title="Quitar el enlace al mensaje" aria-label="Quitar el enlace al mensaje"><span class="ri-close-line"></span></button></div>'
+          : '') +
         '<textarea class="form-control nk-textarea" rows="3" maxlength="4000" aria-label="Texto de la nota"' +
-          ' placeholder="Ej.: Prefiere que lo llamen por la tarde. Consultó por el diplomado; volver a escribirle con el cronograma."></textarea>' +
+          ' placeholder="Ej.: Pagó la 1.ª cuota por transferencia; falta el comprobante. Enviarle el cronograma del diplomado."></textarea>' +
+        '<label class="nk-pin-toggle' + (d.pinned ? ' on' : '') + '">' +
+          '<input type="checkbox" class="nk-pin-input"' + (d.pinned ? ' checked' : '') + ' />' +
+          '<span class="nk-pin-switch" aria-hidden="true"></span>' +
+          '<span class="nk-pin-text"><b><span class="ri-pushpin-2-line" aria-hidden="true"></span> Importante</b>' +
+            '<small>Se muestra fijada arriba del chat para quien atienda a esta persona.</small></span>' +
+        '</label>' +
+        '<div class="nk-field-label">¿Es una tarea? Fecha de seguimiento</div><div class="nk-due-wrap"></div>' +
+        '<div class="nk-field-label">Responsable <span class="nk-field-hint">· puede ser de otra línea</span></div>' +
+        '<select class="form-select form-select-sm nk-assignee-select" aria-label="Responsable de la tarea"></select>' +
         '<div class="nk-field-label">Etiquetas</div><div class="nk-tag-picker"></div>' +
-        '<div class="nk-field-label">¿Requiere seguimiento?</div><div class="nk-due-wrap"></div>' +
         '<div class="nk-composer-foot">' +
           '<span class="nk-rec" title="Grabar una nota de voz"></span>' +
           '<span class="nk-hint">Ctrl + Enter</span>' +
@@ -1587,10 +2126,19 @@
       var ta = form.querySelector('textarea');
       ta.value = d.text;
       ta.addEventListener('input', function () { d.text = ta.value; });
+      var assignee = NoteKit.bindAssignee(form.querySelector('.nk-assignee-select'), d.assignedTo, function (v) { d.assignedTo = v; });
+      var sourceX = form.querySelector('.nk-source-x');
+      if (sourceX) sourceX.addEventListener('click', function () { d.sourceMessageId = null; d.sourceLabel = ''; renderNoteComposer(); });
+      var pinInput = form.querySelector('.nk-pin-input');
+      pinInput.addEventListener('change', function () {
+        d.pinned = pinInput.checked;
+        pinInput.closest('.nk-pin-toggle').classList.toggle('on', d.pinned);
+      });
       var pickers = NoteKit.bindPickers(form, state.tags, d.tags, d.due, function () {
         d.tags = pickers.tags();
         d.due = pickers.due() || '';
-      });
+        d.time = pickers.time() || '';
+      }, d.time);
       NoteKit.autosize(ta);
 
       var notesUrl = '/inbox/' + encodeURIComponent(state.selectedSession) + '/' + encodeURIComponent(state.selectedChat) + '/notes';
@@ -1600,14 +2148,17 @@
         state.noteDraft = emptyNoteDraft();
         renderNoteComposer();
         loadNotes();
-        toast('Nota registrada');
+        toast('Nota registrada. Ya la ve todo el equipo.');
       };
       var submit = function () {
         var text = ta.value.trim();
         if (!text) { toast('Escribí la nota (o grabá un audio)', true); ta.focus(); return; }
         var btn = form.querySelector('.nk-save');
         btn.disabled = true;
-        jsonApi(notesUrl, 'POST', { text: text, due_at: pickers.due(), tag_ids: pickers.tags() })
+        jsonApi(notesUrl, 'POST', {
+          text: text, due_at: pickers.due(), due_time: pickers.time(), tag_ids: pickers.tags(), pinned: d.pinned,
+          assigned_to: assignee(), source_message_id: d.sourceMessageId,
+        })
           .then(done)
           .catch(function (e) { btn.disabled = false; toast(e.message, true); });
       };
@@ -1625,11 +2176,135 @@
         fd.append('audio', file);
         if (ta.value.trim()) fd.append('text', ta.value.trim());
         if (pickers.due()) fd.append('due_at', pickers.due());
+        if (pickers.time()) fd.append('due_time', pickers.time());
         fd.append('tag_ids', JSON.stringify(pickers.tags()));
+        if (d.pinned) fd.append('pinned', '1');
+        if (assignee()) fd.append('assigned_to', String(assignee()));
+        if (d.sourceMessageId) fd.append('source_message_id', String(d.sourceMessageId));
         fetch(notesUrl, { method: 'POST', body: fd, headers: { 'Accept': 'application/json' }, credentials: 'same-origin' })
           .then(function (r) { if (!r.ok) throw new Error('No se pudo guardar la nota de voz'); done(); })
           .catch(function (e) { toast(e.message, true); });
       }));
+    }
+
+    // Plantillas de tareas: se eligen, se revisan los pasos y se crean de una vez.
+    var templatesCache = null;
+    function loadTemplates(force) {
+      if (!templatesCache || force) templatesCache = api('/notes/templates').catch(function () { templatesCache = null; return []; });
+      return templatesCache;
+    }
+
+    function toggleTemplatePicker(box, btn) {
+      var pick = box.querySelector('.nk-template-pick');
+      if (!pick.hidden) { pick.hidden = true; btn.setAttribute('aria-expanded', 'false'); return; }
+      pick.hidden = false;
+      btn.setAttribute('aria-expanded', 'true');
+      pick.innerHTML = '<div class="nk-hint">Cargando plantillas…</div>';
+      loadTemplates(true).then(function (list) {
+        list = list || [];
+        if (!list.length) {
+          pick.innerHTML = '<div class="nk-hint">Todavía no hay plantillas. Crealas en <a href="/notes#plantillas">Notas y tareas</a>.</div>';
+          return;
+        }
+        var programa = (state.person && state.person.programa) || '';
+        var norm = function (s) { return String(s || '').toLowerCase(); };
+        list = list.slice().sort(function (a, b) {
+          var am = programa && norm(a.programa) === norm(programa) ? 0 : 1;
+          var bm = programa && norm(b.programa) === norm(programa) ? 0 : 1;
+          return am - bm || a.name.localeCompare(b.name);
+        });
+        pick.innerHTML =
+          '<label class="nk-field-label" for="nk-tpl-select">Plantilla</label>' +
+          '<select id="nk-tpl-select" class="form-select form-select-sm">' + list.map(function (t) {
+            var match = programa && norm(t.programa) === norm(programa);
+            return '<option value="' + t.id + '">' + escapeHtml(t.name) + (match ? ' · sugerida para ' + escapeHtml(t.programa) : '') + '</option>';
+          }).join('') + '</select>' +
+          '<ol class="nk-tpl-steps"></ol>' +
+          '<div class="nk-field-label">Responsable</div><select class="form-select form-select-sm nk-assignee-select" aria-label="Responsable de las tareas"></select>' +
+          '<div class="nk-composer-foot">' +
+            '<button type="button" class="btn btn-sm btn-light nk-tpl-cancel">Cancelar</button>' +
+            '<button type="button" class="btn btn-sm btn-primary nk-tpl-apply"></button>' +
+          '</div>';
+        var select = pick.querySelector('#nk-tpl-select');
+        var steps = pick.querySelector('.nk-tpl-steps');
+        var apply = pick.querySelector('.nk-tpl-apply');
+        var assignee = NoteKit.bindAssignee(pick.querySelector('.nk-assignee-select'), null);
+        var current = function () { return list.filter(function (t) { return String(t.id) === select.value; })[0]; };
+        var when = function (i) {
+          if (i.due_days === null || i.due_days === undefined) return 'sin fecha';
+          var label = i.due_days === 0 ? 'hoy' : i.due_days === 1 ? 'mañana' : 'en ' + i.due_days + ' días';
+          return label + (i.due_time ? ' a las ' + i.due_time : '');
+        };
+        var renderSteps = function () {
+          var t = current();
+          steps.innerHTML = t.items.map(function (i) {
+            return '<li>' + (i.pinned ? '<span class="ri-pushpin-2-fill nk-tpl-pin" title="Importante"></span>' : '') +
+              escapeHtml(i.text) + ' <span class="nk-tpl-when">' + escapeHtml(when(i)) + '</span></li>';
+          }).join('');
+          apply.innerHTML = '<span class="ri-check-double-line me-1"></span>Crear ' + t.items.length + ' tarea' + (t.items.length > 1 ? 's' : '');
+        };
+        select.addEventListener('change', renderSteps);
+        renderSteps();
+        pick.querySelector('.nk-tpl-cancel').addEventListener('click', function () { pick.hidden = true; btn.setAttribute('aria-expanded', 'false'); });
+        var token = state.chatToken;
+        apply.addEventListener('click', function () {
+          apply.disabled = true;
+          jsonApi('/inbox/' + encodeURIComponent(state.selectedSession) + '/' + encodeURIComponent(state.selectedChat) + '/notes/template', 'POST',
+            { template_id: Number(select.value), assigned_to: assignee() })
+            .then(function (r) {
+              if (token !== state.chatToken) return;
+              pick.hidden = true;
+              btn.setAttribute('aria-expanded', 'false');
+              toast(r.created + ' tarea' + (r.created > 1 ? 's' : '') + ' creada' + (r.created > 1 ? 's' : '') + ' desde «' + current().name + '»');
+              loadNotes();
+            })
+            .catch(function (e) { apply.disabled = false; toast(e.message, true); });
+        });
+      });
+    }
+
+    // ── La persona en otras líneas (ficha única) ──
+    function loadPerson() {
+      if (!state.selectedChat || state.tab === 'group') return;
+      var token = state.chatToken;
+      api('/inbox/' + encodeURIComponent(state.selectedSession) + '/' + encodeURIComponent(state.selectedChat) + '/person')
+        .then(function (p) { if (token !== state.chatToken) return; state.person = p; renderPerson(); })
+        .catch(function () { if (token !== state.chatToken) return; state.person = null; });
+    }
+
+    function renderPerson() {
+      var p = state.person;
+      var fillBox = els.contact.querySelector('#person-fill');
+      var linesBox = els.contact.querySelector('#person-lines');
+      if (!p || !fillBox || !linesBox) return;
+      var f = p.fill || {};
+      var fillRow = function (label, item) {
+        return item ? '<div class="pf-row"><span class="pf-label">' + label + '</span><span class="pf-value">' + escapeHtml(item.value) +
+          '</span><span class="pf-src" title="Dato registrado en otra línea">según ' + escapeHtml(item.line) + '</span></div>' : '';
+      };
+      var programa = p.programa
+        ? '<div class="pf-row"><span class="pf-label">Programa</span><span class="pf-value">' + escapeHtml(p.programa) + '</span></div>'
+        : fillRow('Programa', f.programa);
+      fillBox.innerHTML = fillRow('Nombre', f.name) + fillRow('Email', f.email) + fillRow('Empresa', f.company) + programa;
+      var lines = p.lines || [];
+      if (!lines.length) { linesBox.innerHTML = ''; linesBox.hidden = true; return; }
+      linesBox.hidden = false;
+      linesBox.innerHTML = '<h6><span class="ri-links-line" aria-hidden="true"></span> También escribió a</h6>' +
+        lines.map(function (l) {
+          var line = l.session_name || 'Otra línea';
+          var phone = l.session_phone ? '+' + String(l.session_phone).replace(/^\+/, '') : '';
+          var waiting = l.last_direction === 'in' && l.status !== 'closed';
+          var activity = l.last_message_at
+            ? (l.last_direction === 'in' ? 'Escribió ' : 'Le respondieron ') + timeAgo(l.last_message_at)
+            : 'Sin mensajes todavía';
+          return '<div class="pl-row' + (waiting ? ' waiting' : '') + '">' +
+            '<span class="pl-ic ri-whatsapp-line" aria-hidden="true"></span>' +
+            '<div class="pl-body"><div class="pl-line">' + escapeHtml(line) + (phone ? ' <span class="pl-phone">' + escapeHtml(phone) + '</span>' : '') + '</div>' +
+              '<div class="pl-meta">' + escapeHtml(activity) + (l.programa ? ' · ' + escapeHtml(l.programa) : '') + '</div></div>' +
+            (waiting ? '<span class="pl-badge" title="El último mensaje es del contacto">Sin responder</span>' : '') +
+          '</div>';
+        }).join('') +
+        '<p class="nk-hint pl-hint">Las notas y tareas de esas líneas se ven abajo, en «Notas y tareas».</p>';
     }
 
     // Lista: pendientes arriba (por fecha de seguimiento) y resueltas plegadas.
@@ -1641,20 +2316,29 @@
       var done = notes.filter(function (n) { return n.done_at; });
       var overdue = open.filter(function (n) { return NoteKit.dueState(n) === 'overdue'; }).length;
       var today = open.filter(function (n) { return NoteKit.dueState(n) === 'today'; }).length;
+      var others = notes.filter(function (n) { return n.session_id && n.session_id !== state.selectedSession; }).length;
       var counts = els.contact.querySelector('#nk-counts');
       if (counts) {
         counts.innerHTML =
           (overdue ? '<span class="nk-count danger">' + overdue + ' vencida' + (overdue > 1 ? 's' : '') + '</span>' : '') +
           (today ? '<span class="nk-count warn">' + today + ' hoy</span>' : '') +
-          (notes.length ? '<span class="nk-count">' + notes.length + '</span>' : '');
+          (open.length ? '<span class="nk-count" title="Pendientes">' + open.length + ' pend.</span>' : '');
       }
       if (!notes.length) {
         list.innerHTML = '<div class="nk-empty"><span class="ri-sticky-note-add-line" aria-hidden="true"></span>' +
-          '<p>Todavía no hay notas sobre este contacto.</p></div>';
+          '<p>Todavía no hay notas sobre esta persona.</p>' +
+          '<small>Registrá lo que no hay que olvidar: así cualquier compañero puede continuar la atención.</small></div>';
         return;
       }
-      var card = function (n) { return NoteKit.cardHtml(n); };
-      list.innerHTML = open.map(card).join('') +
+      var card = function (n) { return NoteKit.cardHtml(n, { currentSession: state.selectedSession, onGotoMessage: true }); };
+      var pinnedOpen = open.filter(function (n) { return n.pinned; });
+      var restOpen = open.filter(function (n) { return !n.pinned; });
+      var groupTitle = function (label, count) { return '<div class="nk-group-title">' + label + ' <span>' + count + '</span></div>'; };
+      list.innerHTML =
+        (others ? '<div class="nk-shared-hint"><span class="ri-links-line" aria-hidden="true"></span>' +
+          others + ' nota' + (others > 1 ? 's' : '') + ' registrada' + (others > 1 ? 's' : '') + ' desde otra línea del sistema.</div>' : '') +
+        (pinnedOpen.length ? groupTitle('Importantes', pinnedOpen.length) + pinnedOpen.map(card).join('') : '') +
+        (restOpen.length ? (pinnedOpen.length ? groupTitle('Pendientes', restOpen.length) : '') + restOpen.map(card).join('') : '') +
         (done.length
           ? '<details class="nk-done-group"' + (state.notesShowDone ? ' open' : '') + '>' +
               '<summary>Resueltas (' + done.length + ')</summary>' + done.map(card).join('') + '</details>'
@@ -1665,6 +2349,7 @@
         find: function (id) { return notes.filter(function (n) { return n.id === id; })[0]; },
         tags: function () { return state.tags; },
         onChanged: function () { loadNotes(); },
+        onGotoMessage: function (id) { goToMessage(id); },
       });
     }
 
@@ -1743,7 +2428,9 @@
           '<div class="contact-phone">' + escapeHtml(ct.phone || '') + '</div>' +
           (ct.email ? '<div class="contact-email">' + escapeHtml(ct.email) + '</div>' : '') +
         '</div>' +
+        '<div class="person-fill" id="person-fill"></div>' +
         membersHtml +
+        '<div class="panel-section person-lines" id="person-lines" hidden></div>' +
         notesSectionHtml() +
         '<div class="panel-section contact-meta"><h6>Conversación</h6><dl>' +
           '<dt>Inicio</dt><dd>' + (c.created_at ? new Date(c.created_at).toLocaleDateString() : '—') + '</dd>' +
@@ -1753,6 +2440,7 @@
       // Notas internas: compositor (con borrador) y lista.
       renderNoteComposer();
       renderNotesList();
+      renderPerson();
 
       // Miembros del grupo: buscador + clic para iniciar conversación.
       var msearch = els.contact.querySelector('#members-search');
@@ -1829,9 +2517,18 @@
     if (els.rail) els.rail.addEventListener('click', function () { root.classList.remove('list-hidden'); });
 
     /* ── SSE + polling ── */
+    // «Te asignaron una tarea»: solo al responsable y si no se la asignó él mismo.
+    function notifyAssignment(d) {
+      if (!d || d.action !== 'assigned' || !d.assignedTo) return;
+      NoteKit.loadAssignees().then(function (a) {
+        if (!a.me || d.assignedTo !== a.me || d.actorId === a.me) return;
+        toast('Te asignaron una tarea nueva', false, { label: 'Ver', run: function () { location.href = '/notes#asignadas'; } });
+      });
+    }
+
     function initLive() {
-      if (window.EventSource) {
-        var es = new EventSource('/events');
+      var es = liveSource();
+      if (es) {
         var timer = null;
         // Agrupa ráfagas de eventos (p. ej. cientos de mensajes offline al
         // reconectar): refresca como mucho cada ~1,5 s. Antes era un debounce
@@ -1863,6 +2560,19 @@
             } catch (_) {}
             queue();
           });
+        });
+        // Notas de la persona cambiadas por otro compañero (en cualquier línea).
+        var noteTimer = null;
+        es.addEventListener('note', function (e) {
+          var d; try { d = JSON.parse(e.data); } catch (_) { return; }
+          var chats = (d && d.chats) || [];
+          var open = chats.some(function (c) { return c.sessionId === state.selectedSession && c.chatId === state.selectedChat; });
+          clearTimeout(noteTimer);
+          noteTimer = setTimeout(function () {
+            if (open) loadNotes();
+            loadConversations();
+          }, 300);
+          notifyAssignment(d);
         });
         es.addEventListener('presence', function (e) {
           var d; try { d = JSON.parse(e.data); } catch (_) { return; }
@@ -1918,21 +2628,24 @@
       { key: 'overdue', label: 'Vencidas', icon: 'ri-alarm-warning-line', tone: 'danger' },
       { key: 'today', label: 'Para hoy', icon: 'ri-sun-line', tone: 'warn' },
       { key: 'week', label: 'Próximos 7 días', icon: 'ri-calendar-event-line', tone: 'info' },
+      { key: 'pinned', label: 'Importantes', icon: 'ri-pushpin-2-line', tone: 'pin' },
       { key: 'pending', label: 'Pendientes', icon: 'ri-time-line', tone: 'brand' },
       { key: 'done', label: 'Resueltas', icon: 'ri-check-double-line', tone: 'ok' },
       { key: 'all', label: 'Todas', icon: 'ri-stack-line', tone: 'mute' },
     ];
     var GROUP_LABELS = {
-      overdue: 'Vencidas', today: 'Para hoy', soon: 'Próximos 7 días',
+      pinned: 'Importantes', overdue: 'Vencidas', today: 'Para hoy', soon: 'Próximos 7 días',
       later: 'Más adelante', none: 'Sin fecha de seguimiento', done: 'Resueltas',
+      trash: 'En la papelera',
     };
-    var GROUP_ORDER = ['overdue', 'today', 'soon', 'later', 'none', 'done'];
+    var GROUP_ORDER = ['pinned', 'overdue', 'today', 'soon', 'later', 'none', 'done', 'trash'];
 
     var els = {
       stats: root.querySelector('#np-stats'),
       search: root.querySelector('#notes-search'),
       order: root.querySelector('#notes-order'),
       mine: root.querySelector('#notes-mine'),
+      assigned: root.querySelector('#notes-assigned'),
       active: root.querySelector('#np-active'),
       list: root.querySelector('#notes-list'),
       tags: root.querySelector('#np-tags'),
@@ -1961,6 +2674,7 @@
       if (els.search.value.trim()) p.push('q=' + encodeURIComponent(els.search.value.trim()));
       if (st.tag) p.push('tag=' + st.tag);
       if (els.mine.checked) p.push('mine=1');
+      if (els.assigned && els.assigned.checked) p.push('assigned=1');
       els.list.classList.add('loading');
       return api('/notes/all?' + p.join('&')).then(function (d) {
         st.notes = (d && d.notes) || [];
@@ -1987,6 +2701,14 @@
       Array.prototype.forEach.call(els.stats.querySelectorAll('.np-stat'), function (b) {
         b.addEventListener('click', function () { st.status = b.getAttribute('data-status'); loadNotes(); });
       });
+      var trashBtn = root.querySelector('#notes-trash');
+      if (trashBtn) {
+        var on = st.status === 'trash';
+        trashBtn.classList.toggle('on', on);
+        trashBtn.setAttribute('aria-pressed', String(on));
+        var cnt = trashBtn.querySelector('.np-trash-count');
+        if (cnt) cnt.textContent = s.trash ? String(s.trash) : '';
+      }
     }
 
     function renderActive() {
@@ -2000,11 +2722,12 @@
     }
 
     function groupKey(n) {
+      if (n.deleted_at) return 'trash';
       if ((els.order.value || 'due') === 'created') {
         var days = Math.floor((Date.now() - new Date(n.created_at).getTime()) / 86400000);
         return days < 1 ? 'Registradas hoy' : days < 2 ? 'Ayer' : days < 7 ? 'Esta semana' : days < 31 ? 'Este mes' : 'Anteriores';
       }
-      return NoteKit.dueState(n);
+      return NoteKit.isPinned(n) ? 'pinned' : NoteKit.dueState(n);
     }
 
     function renderNotes() {
@@ -2014,17 +2737,19 @@
           overdue: '¡Al día! No hay seguimientos vencidos.',
           today: 'No hay seguimientos para hoy.',
           week: 'No hay seguimientos en los próximos 7 días.',
+          pinned: 'No hay notas marcadas como importantes.',
+          trash: 'La papelera está vacía.',
           pending: 'No hay notas pendientes de seguimiento.',
           done: 'Todavía no se marcó ninguna nota como resuelta.',
           all: 'Todavía no hay notas.',
         }[st.status];
-        var filtered = els.search.value.trim() || st.tag || els.mine.checked;
+        var filtered = els.search.value.trim() || st.tag || els.mine.checked || (els.assigned && els.assigned.checked);
         els.list.innerHTML = '<div class="np-empty"><span class="' + (st.status === 'overdue' ? 'ri-checkbox-circle-line' : 'ri-sticky-note-line') + '" aria-hidden="true"></span>' +
           '<p>' + (filtered ? 'No hay notas para los filtros elegidos.' : msg) + '</p>' +
           '<span class="np-empty-sub">Las notas se registran desde la ficha del contacto, dentro de cada conversación.</span></div>';
         return;
       }
-      var byDue = (els.order.value || 'due') === 'due';
+      var byDue = (els.order.value || 'due') === 'due' || st.status === 'trash';
       var groups = {};
       var order = [];
       notes.forEach(function (n) {
@@ -2136,9 +2861,26 @@
     els.tagName.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); createTag(); } });
 
     var timer = null;
+    var trashToggle = root.querySelector('#notes-trash');
+    if (trashToggle) trashToggle.addEventListener('click', function () {
+      st.status = st.status === 'trash' ? 'pending' : 'trash';
+      loadNotes();
+    });
+    // En vivo: lo que el equipo registra o completa aparece sin recargar.
+    if (liveSource()) {
+      var liveTimer = null;
+      liveSource().addEventListener('note', function () {
+        clearTimeout(liveTimer);
+        liveTimer = setTimeout(refresh, 600);
+      });
+    }
     els.search.addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(loadNotes, 250); });
     els.order.addEventListener('change', loadNotes);
     els.mine.addEventListener('change', loadNotes);
+    if (els.assigned) {
+      if (location.hash === '#asignadas') els.assigned.checked = true;
+      els.assigned.addEventListener('change', loadNotes);
+    }
 
     // Desde el compositor de la ficha se llega con #tags para crear etiquetas.
     loadTags().then(function () { if (location.hash === '#tags') setManaging(true); });
@@ -2209,7 +2951,193 @@
     setInterval(load, 60000);
   }
 
+  /* ── Seguimiento y reportes: gráficos + actualización automática ──
+     Paleta categórica validada (referencia del skill de visualización): azul,
+     naranja y aguamarina en orden fijo; los colores de estado no se usan para series. */
+  function initFollowupCharts() {
+    var dataEl = document.getElementById('fu-data');
+    var page = document.querySelector('.fu-page');
+    if (!page) return;
+
+    // Actualización automática (Seguimiento): solo con la pestaña visible y sin
+    // un campo con foco, para no interrumpir a quien está filtrando.
+    var every = Number(page.getAttribute('data-autorefresh') || 0);
+    var stamp = document.getElementById('fu-updated');
+    if (stamp) {
+      stamp.textContent = 'Actualizado ' + new Date().toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit' });
+    }
+    if (every > 0) {
+      setInterval(function () {
+        var tag = (document.activeElement && document.activeElement.tagName) || '';
+        if (document.visibilityState === 'visible' && !/INPUT|SELECT|TEXTAREA/.test(tag)) location.reload();
+      }, every * 1000);
+    }
+
+    if (!dataEl || !window.ApexCharts) return;
+    var data;
+    try { data = JSON.parse(dataEl.textContent || '{}'); } catch (e) { return; }
+
+    var dark = document.documentElement.getAttribute('data-bs-theme') === 'dark';
+    var C = dark
+      ? { s1: '#3987e5', s2: '#d95926', s3: '#199e70', ink: '#c3cedd', mute: '#8b9cb3', grid: '#223148' }
+      : { s1: '#2a78d6', s2: '#eb6834', s3: '#1baf7a', ink: '#475467', mute: '#98a2b3', grid: '#e6ebf1' };
+    var font = getComputedStyle(document.body).fontFamily || 'inherit';
+
+    function base(type, extra) {
+      return Object.assign({
+        chart: { type: type, height: 300, fontFamily: font, toolbar: { show: false }, foreColor: C.ink, animations: { enabled: false }, background: 'transparent' },
+        theme: { mode: dark ? 'dark' : 'light' },
+        dataLabels: { enabled: false },
+        grid: { borderColor: C.grid, strokeDashArray: 3, padding: { left: 8, right: 8 } },
+        legend: { position: 'top', horizontalAlign: 'left', fontSize: '12px', markers: { size: 6 } },
+        tooltip: { theme: dark ? 'dark' : 'light' },
+        stroke: { width: 2 }
+      }, extra || {});
+    }
+    function render(id, opts) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      new ApexCharts(el, opts).render();
+    }
+    function empty(id, text) {
+      var el = document.getElementById(id);
+      if (el) el.innerHTML = '<div class="fu-chart-empty"><span class="ri-bar-chart-2-line"></span>' + text + '</div>';
+    }
+    function shortDay(d) {
+      var p = String(d).split('-');
+      return p.length === 3 ? p[2] + '/' + p[1] : d;
+    }
+    var barEnds = { bar: { borderRadius: 4, borderRadiusApplication: 'end', columnWidth: '60%' } };
+
+    if (data.kind === 'monitoring') {
+      var hours = data.hours || [];
+      var used = hours.filter(function (h) { return h.received || h.sent; });
+      if (!used.length) { empty('fuHours', 'Todavía no hay mensajes en el período.'); return; }
+      // Rango útil del día (sin las horas vacías de la madrugada/noche).
+      var first = Math.max(0, Math.min(7, used[0].hour)), last = Math.min(23, Math.max(20, used[used.length - 1].hour));
+      var slice = hours.filter(function (h) { return h.hour >= first && h.hour <= last; });
+      render('fuHours', base('bar', {
+        series: [
+          { name: 'Recibidos', data: slice.map(function (h) { return h.received; }) },
+          { name: 'Enviados', data: slice.map(function (h) { return h.sent; }) }
+        ],
+        colors: [C.s1, C.s2],
+        plotOptions: barEnds,
+        stroke: { width: 2, colors: ['transparent'] },
+        xaxis: { categories: slice.map(function (h) { return String(h.hour).padStart(2, '0') + 'h'; }), axisBorder: { color: C.grid }, axisTicks: { show: false } },
+        yaxis: { labels: { formatter: function (v) { return Math.round(v); } } },
+        tooltip: { shared: true, intersect: false, theme: dark ? 'dark' : 'light' }
+      }));
+      return;
+    }
+
+    if (data.kind === 'reports') {
+      var daily = data.daily || [];
+      if (daily.some(function (d) { return d.received || d.sent; })) {
+        render('fuDaily', base('line', {
+          series: [
+            { name: 'Recibidos', data: daily.map(function (d) { return d.received; }) },
+            { name: 'Enviados', data: daily.map(function (d) { return d.sent; }) }
+          ],
+          colors: [C.s1, C.s2],
+          markers: { size: daily.length > 20 ? 0 : 4, strokeWidth: 2, strokeColors: dark ? '#111b2a' : '#fff', hover: { size: 6 } },
+          xaxis: { categories: daily.map(function (d) { return shortDay(d.day); }), tickAmount: Math.min(daily.length, 10), axisBorder: { color: C.grid }, axisTicks: { show: false }, labels: { rotate: 0, hideOverlappingLabels: true } },
+          yaxis: { labels: { formatter: function (v) { return Math.round(v); } } },
+          tooltip: { shared: true, intersect: false, theme: dark ? 'dark' : 'light' }
+        }));
+      } else empty('fuDaily', 'Sin mensajes en el período.');
+
+      var resp = daily.filter(function (d) { return d.medianMin != null; });
+      if (resp.length) {
+        render('fuResponse', base('bar', {
+          series: [{ name: 'Mediana (min)', data: daily.map(function (d) { return d.medianMin; }) }],
+          colors: [C.s1],
+          plotOptions: barEnds,
+          legend: { show: false },
+          xaxis: { categories: daily.map(function (d) { return shortDay(d.day); }), tickAmount: Math.min(daily.length, 10), axisBorder: { color: C.grid }, axisTicks: { show: false }, labels: { rotate: 0, hideOverlappingLabels: true } },
+          yaxis: { labels: { formatter: function (v) { return Math.round(v) + ' min'; } } },
+          tooltip: { theme: dark ? 'dark' : 'light', y: { formatter: function (v) { return v == null ? 'sin respuestas' : Math.round(v) + ' min'; } } }
+        }));
+      } else empty('fuResponse', 'Sin respuestas en el período.');
+
+      function hbar(id, items, color, emptyText) {
+        if (!items.length) { empty(id, emptyText); return; }
+        render(id, base('bar', {
+          chart: { type: 'bar', height: Math.max(180, items.length * 34 + 60), fontFamily: font, toolbar: { show: false }, foreColor: C.ink, animations: { enabled: false }, background: 'transparent' },
+          series: [{ name: 'Envíos', data: items.map(function (t) { return t.total; }) }],
+          colors: [color],
+          legend: { show: false },
+          plotOptions: { bar: { horizontal: true, borderRadius: 4, borderRadiusApplication: 'end', barHeight: '62%' } },
+          dataLabels: { enabled: true, style: { colors: [C.ink], fontWeight: 600 }, offsetX: 18, textAnchor: 'start' },
+          xaxis: { categories: items.map(function (t) { return t.label; }), axisBorder: { show: false }, axisTicks: { show: false } },
+          grid: { borderColor: C.grid, strokeDashArray: 3, xaxis: { lines: { show: true } }, yaxis: { lines: { show: false } } }
+        }));
+      }
+      hbar('fuTipo', data.tipos || [], C.s1, 'Sin envíos de lotes o cronogramas en el período.');
+      hbar('fuPrograma', data.programas || [], C.s1, 'Sin envíos por programa en el período.');
+    }
+  }
+
+  // Formularios de acción única (desvincular, reconectar): evita el doble envío.
+  function initOnceForms() {
+    Array.prototype.forEach.call(document.querySelectorAll('form.js-once'), function (form) {
+      form.addEventListener('submit', function () {
+        var btn = form.querySelector('[type="submit"]');
+        if (!btn) return;
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>Procesando…';
+      });
+    });
+  }
+
+  // Confirmación antes de acciones delicadas: `data-confirm` en el formulario o
+  // en el botón que lo envía (p. ej. «Aplicar valores del perfil»).
+  document.addEventListener('submit', function (ev) {
+    var form = ev.target;
+    if (!form || form.tagName !== 'FORM') return;
+    var btn = ev.submitter;
+    var msg = (btn && btn.getAttribute('data-confirm')) || form.getAttribute('data-confirm');
+    if (msg && !window.confirm(msg)) ev.preventDefault();
+  }, true);
+
+  // Editor de plantillas: vista previa con formato de WhatsApp mientras se escribe
+  // (mismo formato que `waPreview` en src/panel/admin-views.ts).
+  (function initTemplateEditor() {
+    var form = document.querySelector('[data-tpl-editor]');
+    if (!form) return;
+    var ta = form.querySelector('textarea[name="body"]');
+    var preview = form.querySelector('[data-tpl-preview]');
+    var vars = form.querySelector('[data-tpl-vars]');
+    var count = form.querySelector('[data-tpl-count]');
+    var hint = form.querySelector('[data-tpl-spinhint]');
+    var SPIN = /\{[^{}]*\|[^{}]*\}/;
+    function wa(body) {
+      return escapeHtml(body)
+        .replace(/\{\{\s*([\w.]+)\s*\}\}/g, '<span class="tpl-var">$1</span>')
+        .replace(/\{([^{}]*\|[^{}]*)\}/g, function (_m, g) { return '<span class="tpl-spin" title="Se elige una al azar">' + g.split('|').join('<i>|</i>') + '</span>'; })
+        .replace(/\*([^*\n]+)\*/g, '<b>$1</b>')
+        .replace(/(^|[\s(])_([^_\n]+)_/g, '$1<i>$2</i>')
+        .replace(/~([^~\n]+)~/g, '<s>$1</s>')
+        .replace(/\n/g, '<br>');
+    }
+    function update() {
+      var body = ta.value;
+      preview.innerHTML = body.trim() ? wa(body) : '<span class="text-muted">Escribí el texto para ver cómo llega.</span>';
+      var found = {};
+      body.replace(/\{\{\s*([\w.]+)\s*\}\}/g, function (_m, n) { found[n] = true; return _m; });
+      vars.innerHTML = Object.keys(found).map(function (n) { return '<span class="tpl-var">' + escapeHtml(n) + '</span>'; }).join('');
+      count.textContent = body.length + ' caracteres';
+      hint.hidden = !body.trim() || SPIN.test(body);
+    }
+    ta.addEventListener('input', update);
+    update();
+  })();
+
   initInbox();
   initNotes();
+  initReminders();
+  initTemplatesManager();
   initActivity();
+  initOnceForms();
+  initFollowupCharts();
 })();

@@ -34,6 +34,20 @@ const STUB_CIPHERTEXT = 2;
 const SENT_CACHE_SIZE = 3000;
 
 /**
+ * Vigilantes contra la sesión "conectada pero sorda" (defectos de Baileys 6.7.x):
+ * - el mutex que procesa cada mensaje entrante no tiene tiempo máximo; si una
+ *   tarea se cuelga (p. ej. la descarga de un bloque de historial al reconectar),
+ *   todos los mensajes siguientes quedan esperando para siempre;
+ * - el búfer de eventos solo se vacía por su máquina de estados, sin límite.
+ */
+const PROCESSING_TIMEOUT_MS = Number(process.env.WATCHDOG_TASK_TIMEOUT_MS) || 90_000;
+const BUFFER_MAX_MS = Number(process.env.WATCHDOG_BUFFER_MAX_MS) || 60_000;
+/** Bloqueos del mutex en esta ventana que fuerzan a reabrir la conexión. */
+const STALLS_TO_RECONNECT = 2;
+const STALL_WINDOW_MS = 15 * 60_000;
+const TIMED_OUT = Symbol('timed-out');
+
+/**
  * Serializa la parte necesaria de un mensaje con media (clave + contenido) para
  * poder descargar el archivo más tarde (al abrirlo en el panel).
  */
@@ -235,6 +249,14 @@ export class WaSession extends EventEmitter {
   lastError: string | null = null;
   private sock: WASocket | null = null;
   private reconnecting = false;
+  /** Arranque de socket en curso (evita abrir dos a la vez). */
+  private connecting: Promise<void> | null = null;
+  /** Vigilante del búfer de eventos del socket actual. */
+  private watchTimer: NodeJS.Timeout | null = null;
+  /** Instantes de los últimos bloqueos del mutex (para decidir reconectar). */
+  private stalls: number[] = [];
+  /** Último evento recibido de WhatsApp (diagnóstico de salud). */
+  lastInboundAt: number | null = null;
   private authPath: string;
   /** Asunto de grupo cacheado por JID (evita `groupMetadata` repetido). */
   private groupNames = new Map<string, string>();
@@ -265,8 +287,21 @@ export class WaSession extends EventEmitter {
     return this.status === 'ready' && this.sock !== null;
   }
 
-  /** Arranca (o reinicia) el socket. */
-  async connect(): Promise<void> {
+  /**
+   * Arranca (o reinicia) el socket. Las llamadas simultáneas comparten el mismo
+   * arranque: dos sockets con las mismas credenciales corrompen el cifrado.
+   */
+  connect(): Promise<void> {
+    if (this.sock) return Promise.resolve();
+    if (!this.connecting) {
+      this.connecting = this.openSocket().finally(() => {
+        this.connecting = null;
+      });
+    }
+    return this.connecting;
+  }
+
+  private async openSocket(): Promise<void> {
     if (this.sock) return;
     fs.mkdirSync(this.authPath, { recursive: true });
 
@@ -294,9 +329,10 @@ export class WaSession extends EventEmitter {
       getMessage: async (key: WAMessageKey) => (key?.id ? this.sentCache.get(key.id) : undefined),
     });
     this.sock = sock;
+    this.installWatchdogs(sock);
 
     sock.ev.on('creds.update', saveCreds);
-    sock.ev.on('connection.update', (update: any) => void this.onConnection(update));
+    sock.ev.on('connection.update', (update: any) => void this.onConnection(update, sock));
     sock.ev.on('messages.upsert', (payload: any) => void this.onUpsert(payload));
     sock.ev.on('messages.update', (updates: any) => void this.onUpdate(updates));
     sock.ev.on('messaging-history.set', (payload: any) => void this.onHistorySet(payload));
@@ -304,11 +340,110 @@ export class WaSession extends EventEmitter {
     sock.ev.on('contacts.upsert', (contacts: any) => this.onContacts(contacts));
     sock.ev.on('contacts.update', (contacts: any) => this.onContacts(contacts));
     sock.ev.on('presence.update', (presence: any) => void this.onPresence(presence));
+    // Lecturas hechas en el teléfono: el panel refleja lo que se leyó en WhatsApp.
+    sock.ev.on('message-receipt.update', (updates: any) => this.onReceiptUpdate(updates));
+    sock.ev.on('chats.update', (chats: any) => this.onChatsUpdate(chats));
+    sock.ev.on('chats.upsert', (chats: any) => this.onChatsUpdate(chats));
 
     this.emit('status', this.status);
   }
 
-  private async onConnection(update: any): Promise<void> {
+  /**
+   * Instala los vigilantes sobre un socket recién creado:
+   * 1. Cada tarea del mutex de procesamiento de Baileys tiene un tiempo máximo:
+   *    si se cuelga, la cola sigue (la tarea colgada termina por su cuenta) y, si
+   *    se repite, se reabre la conexión (sin re-vincular).
+   * 2. Si el búfer de eventos queda retenido más de `BUFFER_MAX_MS`, se libera.
+   */
+  private installWatchdogs(sock: WASocket): void {
+    this.clearWatchdogs();
+    const mutex = (sock as any).processingMutex;
+    if (mutex && typeof mutex.mutex === 'function' && !mutex.__esamGuarded) {
+      const original = mutex.mutex.bind(mutex);
+      mutex.mutex = (code: () => Promise<unknown>) => original(() => this.guardTask(sock, code));
+      mutex.__esamGuarded = true;
+    } else if (!mutex) {
+      logger.warn({ session: this.name }, 'Baileys no expone processingMutex: vigilante de procesamiento inactivo');
+    }
+
+    let bufferedSince: number | null = null;
+    this.watchTimer = setInterval(() => {
+      if (this.sock !== sock) return;
+      const ev = sock.ev as any;
+      if (typeof ev?.isBuffering !== 'function') return;
+      if (!ev.isBuffering()) {
+        bufferedSince = null;
+        return;
+      }
+      bufferedSince ??= Date.now();
+      if (Date.now() - bufferedSince >= BUFFER_MAX_MS) {
+        logger.warn(
+          { session: this.name, seconds: Math.round((Date.now() - bufferedSince) / 1000) },
+          'Baileys retenía los eventos (sincronización inicial sin terminar): se liberan para que entren los mensajes',
+        );
+        bufferedSince = null;
+        try {
+          ev.flush();
+        } catch (err) {
+          logger.warn({ session: this.name, err: (err as Error).message }, 'No se pudo liberar el búfer de eventos');
+        }
+      }
+    }, 5_000);
+  }
+
+  private clearWatchdogs(): void {
+    if (this.watchTimer) clearInterval(this.watchTimer);
+    this.watchTimer = null;
+  }
+
+  /** Ejecuta una tarea del mutex de Baileys con tiempo máximo. */
+  private async guardTask(sock: WASocket, code: () => Promise<unknown>): Promise<unknown> {
+    let timer: NodeJS.Timeout | undefined;
+    const work = Promise.resolve().then(code);
+    const timeout = new Promise<typeof TIMED_OUT>((resolve) => {
+      timer = setTimeout(() => resolve(TIMED_OUT), PROCESSING_TIMEOUT_MS);
+    });
+    try {
+      const result = await Promise.race([work, timeout]);
+      if (result === TIMED_OUT) {
+        // La tarea sigue en segundo plano; se evita que su error quede sin capturar.
+        work.catch(() => undefined);
+        this.onProcessingStall(sock);
+        return undefined;
+      }
+      return result;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /** Una tarea de Baileys superó el tiempo máximo: liberar la cola y, si se repite, reconectar. */
+  private onProcessingStall(sock: WASocket): void {
+    const now = Date.now();
+    this.stalls = this.stalls.filter((t) => now - t < STALL_WINDOW_MS);
+    this.stalls.push(now);
+    logger.warn(
+      { session: this.name, seconds: PROCESSING_TIMEOUT_MS / 1000, recent: this.stalls.length },
+      'Una tarea de Baileys quedó colgada; se libera la cola de mensajes entrantes',
+    );
+    this.emit('stall', { count: this.stalls.length });
+    if (this.stalls.length >= STALLS_TO_RECONNECT && this.sock === sock) {
+      this.stalls = [];
+      logger.warn({ session: this.name }, 'Procesamiento bloqueado repetidamente: se reabre la conexión (sin desvincular)');
+      try {
+        sock.end(new Error('Vigilante: procesamiento de mensajes bloqueado'));
+      } catch {
+        // si ya estaba cerrado, onConnection('close') no llega: se fuerza la reconexión
+        this.sock = null;
+        void this.connect().catch(() => undefined);
+      }
+    }
+  }
+
+  private async onConnection(update: any, sock: WASocket): Promise<void> {
+    // Eventos de un socket que ya no es el actual (cerrado a propósito con
+    // stop/reconnect o reemplazado): se ignoran para no reconectar dos veces.
+    if (sock !== this.sock) return;
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
@@ -350,6 +485,7 @@ export class WaSession extends EventEmitter {
 
       // Si aún no está registrado (esperando QR) y el socket se cae, se reinicia
       // el ciclo de QR en vez de quedar en bucle con credenciales a medias.
+      this.clearWatchdogs();
       this.sock = null;
       this.status = loggedOut ? 'disconnected' : 'connecting';
       this.emit('status', this.status);
@@ -378,6 +514,7 @@ export class WaSession extends EventEmitter {
     // `notify`: mensaje nuevo. `append`: mensaje que llego mientras el socket
     // estaba desconectado (Baileys lo marca como offline). Ambos se procesan.
     const type = payload?.type;
+    this.lastInboundAt = Date.now();
     if (type !== 'notify' && type !== 'append') return;
     const incoming = (payload.messages ?? []) as WAMessage[];
     if (type === 'append' && incoming.length) {
@@ -480,6 +617,9 @@ export class WaSession extends EventEmitter {
       // Cede el event loop para no bloquear el panel durante el historial.
       if (++i % 25 === 0) await delay(0);
     }
+    // Los chats del historial traen el contador real de no leídos del teléfono:
+    // se aplica DESPUÉS de los mensajes para que sea el valor final.
+    this.onChatsUpdate(payload?.chats ?? []);
   }
 
   /** WhatsApp comparte el número real detrás de un LID: se guarda el mapeo. */
@@ -652,7 +792,39 @@ export class WaSession extends EventEmitter {
       // Baileys: 0=error, 1=pending, 2=server ack, 3=delivered, 4=read, 5=played
       const mapped =
         status <= 0 ? 'failed' : status === 3 ? 'delivered' : status === 4 ? 'read' : status >= 5 ? 'played' : 'sent';
+      // Un "leído" sobre un mensaje ENTRANTE es un recibo `read-self`: lo leyó
+      // este mismo número en el teléfono (o en otro dispositivo vinculado).
+      if (!u.key.fromMe && (mapped === 'read' || mapped === 'played')) {
+        this.emit('read-self', { chatId: resolveChatId(u.key.remoteJid ?? ''), messageIds: [id] });
+        continue;
+      }
       this.emit('ack', { messageId: id, status: mapped });
+    }
+  }
+
+  /** Recibos de lectura en grupos: si quien leyó es este mismo número, es `read-self`. */
+  private onReceiptUpdate(updates: any): void {
+    const me = this.sock?.user;
+    const mine = new Set([phoneFromJid(me?.id ?? ''), phoneFromJid((me as any)?.lid ?? '')].filter(Boolean));
+    const byChat = new Map<string, string[]>();
+    for (const u of updates ?? []) {
+      const reader = phoneFromJid(u?.receipt?.userJid ?? '');
+      if (!u?.receipt?.readTimestamp || !reader || !mine.has(reader) || !u?.key?.id) continue;
+      const chatId = resolveChatId(u.key.remoteJid ?? '');
+      byChat.set(chatId, [...(byChat.get(chatId) ?? []), u.key.id]);
+    }
+    for (const [chatId, messageIds] of byChat) this.emit('read-self', { chatId, messageIds });
+  }
+
+  /**
+   * Contador de no leídos que informa WhatsApp para un chat (sincronización del
+   * estado de la app o historial): 0 = leído en el teléfono, -1 = marcado como
+   * no leído, N = mensajes sin leer. `null`/ausente = sin información.
+   */
+  private onChatsUpdate(chats: any): void {
+    for (const c of (chats ?? []) as any[]) {
+      if (!c?.id || typeof c.unreadCount !== 'number') continue;
+      this.emit('chat-unread', { chatId: resolveChatId(c.id), unreadCount: c.unreadCount });
     }
   }
 
@@ -969,6 +1141,7 @@ export class WaSession extends EventEmitter {
     } catch {
       // si el socket ya se cerró, igual limpiamos
     }
+    this.clearWatchdogs();
     this.clearAuthDir();
     this.status = 'disconnected';
     this.phone = null;
@@ -978,12 +1151,16 @@ export class WaSession extends EventEmitter {
   }
 
   async stop(): Promise<void> {
+    this.clearWatchdogs();
+    // Se suelta el socket ANTES de cerrarlo: así su evento de cierre se ignora y
+    // no dispara la reconexión automática (cierre intencional).
+    const sock = this.sock;
+    this.sock = null;
     try {
-      this.sock?.end(undefined);
+      sock?.end(undefined);
     } catch {
       // ignore
     }
-    this.sock = null;
     this.status = 'disconnected';
     this.emit('status', this.status);
   }

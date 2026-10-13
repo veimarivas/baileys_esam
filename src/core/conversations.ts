@@ -4,6 +4,7 @@ import { nowIso } from '../util/async.js';
 import { sessionScopeFor, type UserRow } from '../auth/users.js';
 import { phoneFromChatId } from './phone.js';
 import { resolveChatId } from './lid.js';
+import { noteCountsFor, type PersonNoteCounts } from './contacts.js';
 import type { ConversationRow, MessageRow } from '../types.js';
 
 /**
@@ -37,6 +38,8 @@ export interface ConversationDTO {
     avatar_path: string | null;
   };
   assigned_agent: { id: number; name: string | null } | null;
+  /** Notas pendientes de la persona (sumando todas las líneas). */
+  notes: PersonNoteCounts;
 }
 
 export interface MessageDTO {
@@ -133,7 +136,9 @@ interface ConvJoinRow {
   agent_name: string | null;
 }
 
-function mapConversation(row: ConvJoinRow): ConversationDTO {
+const NO_NOTES: PersonNoteCounts = { open: 0, pinned: 0, overdue: 0 };
+
+function mapConversation(row: ConvJoinRow, notes?: Map<number, PersonNoteCounts>): ConversationDTO {
   return {
     id: row.id,
     session_id: row.session_id,
@@ -152,7 +157,13 @@ function mapConversation(row: ConvJoinRow): ConversationDTO {
       avatar_path: row.ct_avatar,
     },
     assigned_agent: row.agent_id ? { id: row.agent_id, name: row.agent_name } : null,
+    notes: (row.contact_id && notes?.get(row.contact_id)) || NO_NOTES,
   };
+}
+
+function mapConversations(rows: ConvJoinRow[]): ConversationDTO[] {
+  const notes = noteCountsFor(rows.map((r) => r.contact_id ?? 0));
+  return rows.map((r) => mapConversation(r, notes));
 }
 
 const CONV_SELECT = `SELECT c.id, c.session_id, c.chat_id, c.status, c.unread_count, c.last_message_text,
@@ -164,6 +175,11 @@ const CONV_SELECT = `SELECT c.id, c.session_id, c.chat_id, c.status, c.unread_co
   LEFT JOIN contacts ct ON ct.id = c.contact_id
   LEFT JOIN users u ON u.id = c.assigned_agent_id`;
 
+/** ¿El mensaje pertenece a ese chat de esa línea? (para enlazar una nota a su mensaje). */
+export function messageInChat(messageId: number, sessionId: string, chatId: string): boolean {
+  return !!get('SELECT 1 FROM messages WHERE id = ? AND session_id = ? AND chat_id = ?', messageId, sessionId, chatId);
+}
+
 /** DTO de una conversacion puntual (con contacto y agente). */
 export function conversationDTO(sessionId: string, chatId: string): ConversationDTO | undefined {
   const row = get<ConvJoinRow>(
@@ -171,7 +187,7 @@ export function conversationDTO(sessionId: string, chatId: string): Conversation
     sessionId,
     chatId,
   );
-  return row ? mapConversation(row) : undefined;
+  return row ? mapConversations([row])[0] : undefined;
 }
 
 /** Lista de conversaciones del alcance del usuario, filtrable por estado y texto. */
@@ -205,7 +221,7 @@ export function listConversations(
      ORDER BY COALESCE(c.last_message_at, c.updated_at) DESC LIMIT ${limit}`,
     ...params,
   );
-  return rows.map(mapConversation);
+  return mapConversations(rows);
 }
 
 function messageReactions(messageIds: number[]): Map<number, MessageDTO['reactions']> {

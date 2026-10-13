@@ -3,13 +3,15 @@ import { nowIso } from '../util/async.js';
 
 export class MissingTemplateVariableError extends Error {}
 
-interface TemplateRow {
+export interface TemplateRow {
   id: number;
   name: string;
   category: string;
   body: string;
   variables: string | null;
   active: number;
+  created_at: string;
+  updated_at: string;
 }
 
 /** Nombres de variables `{{ x }}` presentes en un cuerpo. */
@@ -95,6 +97,51 @@ export function createTemplate(name: string, category: string, body: string, act
     now,
   );
   return res.lastInsertRowid;
+}
+
+export function listTemplates(): TemplateRow[] {
+  return all<TemplateRow>('SELECT * FROM templates ORDER BY category COLLATE NOCASE, name COLLATE NOCASE');
+}
+
+/** Variables declaradas de una plantilla. */
+export function templateVariables(t: Pick<TemplateRow, 'variables'>): string[] {
+  return parseVars(t.variables);
+}
+
+export function updateTemplate(id: number, name: string, category: string, body: string): void {
+  run(
+    'UPDATE templates SET name = ?, category = ?, body = ?, variables = ?, updated_at = ? WHERE id = ?',
+    name,
+    category,
+    body,
+    JSON.stringify(extractVariables(body)),
+    nowIso(),
+    id,
+  );
+}
+
+export function setTemplateActive(id: number, active: boolean): void {
+  run('UPDATE templates SET active = ?, updated_at = ? WHERE id = ?', active ? 1 : 0, nowIso(), id);
+}
+
+export function deleteTemplate(id: number): void {
+  run('DELETE FROM templates WHERE id = ?', id);
+}
+
+/**
+ * ¿Es la única plantilla activa de su categoría? Los envíos de cronogramas
+ * eligen la plantilla por categoría (`resolveTemplate`): sin ninguna activa,
+ * esos envíos fallan.
+ */
+export function isLastActiveOfCategory(id: number): boolean {
+  const t = getTemplate(id);
+  if (!t || !t.active) return false;
+  const others = get<{ c: number }>(
+    'SELECT COUNT(*) AS c FROM templates WHERE category = ? AND active = 1 AND id <> ?',
+    t.category,
+    id,
+  );
+  return (others?.c ?? 0) === 0;
 }
 
 const COBRANZA_BODY = `Sr(a). *{{ nombre_completo }}*, participante del programa *{{ programa }}* ({{ programa_codigo }}).

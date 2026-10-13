@@ -53,8 +53,14 @@ export function recomputeHealth(sessionId: string, opts: { lastError?: string | 
   const delivered = num(counts?.delivered);
   const read = num(counts?.read);
   const failed = num(counts?.failed);
+  // Bloqueos y pedidos de baja originados en ESTA línea (antes se contaban los de
+  // todas las sesiones, y un bloqueo en una ponía en riesgo a las demás).
   const blocked = num(
-    get<{ c: number }>("SELECT COUNT(*) AS c FROM optouts WHERE source = 'blocked' AND created_at >= ?", since)?.c,
+    get<{ c: number }>(
+      "SELECT COUNT(*) AS c FROM optouts WHERE session_id = ? AND source IN ('blocked', 'reply') AND created_at >= ?",
+      sessionId,
+      since,
+    )?.c,
   );
   const deliveryRate = sent > 0 ? delivered / sent : 1;
   const reportRate = sent > 0 ? blocked / sent : 0;
@@ -72,12 +78,18 @@ export function recomputeHealth(sessionId: string, opts: { lastError?: string | 
   if (quarantine) {
     health = 'red';
     reason = 'En cuarentena por el sistema';
+  } else if (sent >= 20 && blocked >= 2 && reportRate >= policy.block_rate_threshold) {
+    health = 'red';
+    reason = `Muchos bloqueos y bajas (${blocked} · ${(reportRate * 100).toFixed(1)}% de lo enviado)`;
   } else if (sent >= 5 && deliveryRate < policy.health_delivery_threshold) {
     health = 'red';
     reason = `Tasa de entrega baja (${Math.round(deliveryRate * 100)}%)`;
   } else if (sent >= 5 && deliveryRate < policy.health_delivery_threshold + 0.05) {
     health = 'yellow';
     reason = `Tasa de entrega acercandose al umbral (${Math.round(deliveryRate * 100)}%)`;
+  } else if (blocked >= 2 && reportRate >= policy.block_rate_threshold / 2) {
+    health = 'yellow';
+    reason = `Bloqueos y bajas en aumento (${blocked} en 24 h)`;
   } else if (warm.active) {
     health = 'yellow';
     reason = `En calentamiento (dia ${warm.day})`;

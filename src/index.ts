@@ -12,6 +12,7 @@ import { startScheduler } from './core/scheduler.js';
 import { startWebhookQueueWorker } from './core/webhook-queue.js';
 import { startRetentionWorker } from './core/retention.js';
 import { startBackupWorker } from './core/backup.js';
+import { startNoteReminderWorker } from './core/note-reminders.js';
 import { acquireInstanceLock } from './core/instance-lock.js';
 import { runtime } from './core/runtime.js';
 
@@ -77,6 +78,7 @@ async function main(): Promise<void> {
   startWebhookQueueWorker();
   startRetentionWorker();
   startBackupWorker();
+  startNoteReminderWorker();
   setInterval(() => {
     try {
       pruneCooldownsImpl();

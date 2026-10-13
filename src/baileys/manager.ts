@@ -174,6 +174,13 @@ export class SessionManager implements OutboundSender {
     session.on('message', (msg: InboundMessage) => this.enqueueInbound(sessionId, () => this.onMessage(sessionId, msg)));
     session.on('history', (msg: InboundMessage) => this.enqueueInbound(sessionId, () => this.onHistory(sessionId, msg)));
     session.on('decrypt-failure', (f: DecryptFailure) => this.onDecryptFailure(sessionId, f));
+    // Lecturas hechas en el teléfono (van por la misma cola: después de guardar los mensajes).
+    session.on('read-self', (r: { chatId: string; messageIds: string[] }) =>
+      this.enqueueInbound(sessionId, async () => this.onReadSelf(sessionId, r.chatId, r.messageIds)),
+    );
+    session.on('chat-unread', (u: { chatId: string; unreadCount: number }) =>
+      this.enqueueInbound(sessionId, async () => this.onChatUnread(sessionId, u.chatId, u.unreadCount)),
+    );
     session.on('ack', (ack: { messageId: string; status: string }) => void this.onAck(sessionId, ack));
     session.on('presence', (p: { chatId: string; typing: boolean }) => void this.onPresence(sessionId, p));
 
@@ -188,6 +195,18 @@ export class SessionManager implements OutboundSender {
       await session.connect();
       return;
     }
+    await session.connect();
+  }
+
+  /**
+   * Reabre la conexión con las mismas credenciales (sin desvincular): sale de un
+   * socket "conectado pero sordo" y WhatsApp entrega lo pendiente como offline.
+   */
+  async reconnect(sessionId: string): Promise<void> {
+    const session = await this.instance(sessionId);
+    logger.info({ sessionId }, 'Reconexión manual solicitada');
+    await session.stop();
+    await delay(1500);
     await session.connect();
   }
 
@@ -430,7 +449,7 @@ export class SessionManager implements OutboundSender {
     const message = (err as Error).message;
     try {
       if (looksLikeBlock(message)) {
-        markBlocked(chatId, `Bloqueo detectado al enviar: ${message}`);
+        markBlocked(chatId, `Bloqueo detectado al enviar: ${message}`, sessionId);
         resetTrust(sessionId);
         logger.warn({ sessionId, chatId }, 'Posible bloqueo/reporte detectado: destino en lista negra');
       }
@@ -632,8 +651,8 @@ export class SessionManager implements OutboundSender {
 
     // Auto-respuestas y opt-out solo aplican a chats individuales.
     if (!msg.isGroup) {
-      if (isOptoutRequest(msg.body)) {
-        addOptout(msg.chatId, 'Solicitó la baja', 'reply');
+      if (isOptoutRequest(msg.body, getPolicy(null).optout_keywords)) {
+        addOptout(msg.chatId, 'Solicitó la baja', 'reply', sessionId);
       }
       // Respuestas automáticas por palabra clave (texto entrante).
       if (msg.type === 'text' && msg.body && this.autoReplyHandler) {
@@ -677,6 +696,91 @@ export class SessionManager implements OutboundSender {
       hasMedia: !!media,
       media,
     }).catch((err) => logger.warn({ err: (err as Error).message }, 'No se pudo despachar el webhook de mensaje'));
+  }
+
+  /**
+   * El número leyó mensajes en el teléfono (recibo `read-self`). WhatsApp marca
+   * como leído todo lo anterior al último mensaje leído, así que se marcan como
+   * leídos los entrantes hasta el más reciente de esos y se recalcula el
+   * contador con los que quedan después.
+   */
+  private onReadSelf(sessionId: string, chatId: string, messageIds: string[]): void {
+    if (!chatId || !messageIds.length) return;
+    const placeholders = messageIds.map(() => '?').join(',');
+    const last = get<{ occurred_at: string }>(
+      `SELECT MAX(occurred_at) AS occurred_at FROM messages
+        WHERE session_id = ? AND wa_message_id IN (${placeholders})`,
+      sessionId,
+      ...messageIds,
+    );
+    if (!last?.occurred_at) return;
+    this.applyReadUpTo(sessionId, chatId, last.occurred_at);
+  }
+
+  /** Contador de no leídos informado por WhatsApp para el chat. */
+  private onChatUnread(sessionId: string, chatId: string, unreadCount: number): void {
+    if (!chatId) return;
+    const conv = get<{ unread_count: number }>(
+      'SELECT unread_count FROM conversations WHERE session_id = ? AND chat_id = ?',
+      sessionId,
+      chatId,
+    );
+    if (!conv) return;
+    if (unreadCount === 0) {
+      // Leído en el teléfono: todo lo entrante queda leído.
+      this.applyReadUpTo(sessionId, chatId, null);
+      return;
+    }
+    if (unreadCount > 0) {
+      // Los N entrantes más recientes son los que siguen sin leer en el teléfono.
+      run(
+        `UPDATE messages SET status = 'received'
+          WHERE id IN (SELECT id FROM messages WHERE session_id = ? AND chat_id = ? AND direction = 'in'
+                        ORDER BY occurred_at DESC, id DESC LIMIT ?)
+            AND COALESCE(status, '') IN ('read', 'received')`,
+        sessionId,
+        chatId,
+        unreadCount,
+      );
+    }
+    // -1 = "marcar como no leído" en el teléfono; N = mensajes sin leer.
+    const value = unreadCount < 0 ? Math.max(1, conv.unread_count) : unreadCount;
+    if (value === conv.unread_count) return;
+    run('UPDATE conversations SET unread_count = ?, updated_at = ? WHERE session_id = ? AND chat_id = ?', value, nowIso(), sessionId, chatId);
+    panelBus.publish('conversation', { sessionId, chatId, unread_count: value });
+  }
+
+  /**
+   * Marca como leídos los entrantes del chat hasta `upTo` (o todos si es null) y
+   * deja el contador con los entrantes posteriores aún no leídos.
+   */
+  private applyReadUpTo(sessionId: string, chatId: string, upTo: string | null): void {
+    run(
+      `UPDATE messages SET status = 'read'
+        WHERE session_id = ? AND chat_id = ? AND direction = 'in'
+          AND COALESCE(status, '') NOT IN ('read', 'played')
+          ${upTo ? 'AND occurred_at <= ?' : ''}`,
+      ...(upTo ? [sessionId, chatId, upTo] : [sessionId, chatId]),
+    );
+    const pending = upTo
+      ? get<{ c: number }>(
+          `SELECT COUNT(*) AS c FROM messages
+            WHERE session_id = ? AND chat_id = ? AND direction = 'in' AND occurred_at > ?
+              AND COALESCE(status, '') NOT IN ('read', 'played')`,
+          sessionId,
+          chatId,
+          upTo,
+        )?.c ?? 0
+      : 0;
+    const res = run(
+      'UPDATE conversations SET unread_count = ?, updated_at = ? WHERE session_id = ? AND chat_id = ? AND unread_count <> ?',
+      pending,
+      nowIso(),
+      sessionId,
+      chatId,
+      pending,
+    );
+    if (res.changes) panelBus.publish('read', { sessionId, chatId, unread_count: pending });
   }
 
   /** Encola el procesamiento de un mensaje entrante (orden y sin solapes por sesión). */
@@ -913,7 +1017,8 @@ export class SessionManager implements OutboundSender {
 
   /** Nombre a mostrar de la conversación: asunto del grupo o pushName. */
   private async conversationName(sessionId: string, msg: InboundMessage): Promise<string | null> {
-    if (!msg.isGroup) return msg.pushName ?? null;
+    // En un mensaje propio el pushName es el del dueño del número, no el del contacto.
+    if (!msg.isGroup) return msg.fromMe ? null : msg.pushName ?? null;
     const contact = get<{ name: string | null }>(
       'SELECT name FROM contacts WHERE session_id = ? AND chat_id = ?',
       sessionId,
@@ -959,14 +1064,19 @@ export class SessionManager implements OutboundSender {
         replyToWaId: msg.quotedWaId ?? null,
       });
     } else {
-      this.persistInbound(sessionId, row.phone ?? null, msg, mediaPath);
+      // Entrante del historial: se guarda como leído (no genera tildes azules al
+      // abrir el chat); si sigue sin leer en el teléfono, lo indica `chat-unread`.
+      this.persistInbound(sessionId, row.phone ?? null, msg, mediaPath, 'read');
     }
     this.upsertConversation(
       sessionId,
       msg.chatId,
       convName,
       msg.fromMe ? 'out' : 'in',
-      !msg.fromMe,
+      // El historial NO suma no leídos: son mensajes viejos que en general ya se
+      // leyeron en el teléfono. El contador real llega con los chats del
+      // historial (`chat-unread`) y con los recibos `read-self`.
+      false,
       messagePreview(msg.body, msg.type),
       new Date(msg.timestamp * 1000).toISOString(),
     );
@@ -980,10 +1090,16 @@ export class SessionManager implements OutboundSender {
     return (row?.c ?? 0) > 0;
   }
 
-  private persistInbound(sessionId: string, sessionPhone: string | null, msg: InboundMessage, mediaPath: string | null): number {
+  private persistInbound(
+    sessionId: string,
+    sessionPhone: string | null,
+    msg: InboundMessage,
+    mediaPath: string | null,
+    status: 'received' | 'read' = 'received',
+  ): number {
     const result = run(
       `INSERT INTO messages (session_id, session_phone, chat_id, contact_name, direction, content_type, body, media_mime, media_path, media_filename, media_seconds, wa_message_id, reply_to_wa_id, sender_jid, media_ref, media_state, sender_type, status, occurred_at, created_at)
-       VALUES (?, ?, ?, ?, 'in', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'customer', 'received', ?, ?)`,
+       VALUES (?, ?, ?, ?, 'in', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'customer', ?, ?, ?)`,
       sessionId,
       sessionPhone,
       msg.chatId,
@@ -999,6 +1115,7 @@ export class SessionManager implements OutboundSender {
       msg.senderJid ?? null,
       msg.mediaRef ?? null,
       mediaPath ? 'ok' : null,
+      status,
       new Date(msg.timestamp * 1000).toISOString(),
       nowIso(),
     );
@@ -1011,7 +1128,7 @@ export class SessionManager implements OutboundSender {
     panelBus.publish('ack', { sessionId, messageId: ack.messageId, status: ack.status });
     if (ack.status === 'failed') {
       const row = get<{ chat_id: string }>('SELECT chat_id FROM messages WHERE wa_message_id = ? LIMIT 1', ack.messageId);
-      if (row?.chat_id) markBlocked(row.chat_id, 'Fallo de entrega reportado por WhatsApp');
+      if (row?.chat_id) markBlocked(row.chat_id, 'Fallo de entrega reportado por WhatsApp', sessionId);
       recomputeHealth(sessionId, { lastError: 'Fallo de entrega reportado por WhatsApp' });
     }
     await dispatchEvent(sessionId, 'message.ack', { messageId: ack.messageId, status: ack.status });

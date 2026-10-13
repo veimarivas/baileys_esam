@@ -41,7 +41,7 @@ export function listTagsWithUsage(sessionIds: string[] | null): Array<NoteTagRow
             SUM(CASE WHEN n.id IS NOT NULL AND n.done_at IS NULL THEN 1 ELSE 0 END) AS pending
        FROM note_tags t
        LEFT JOIN contact_note_tags nt ON nt.tag_id = t.id
-       LEFT JOIN contact_notes n ON n.id = nt.note_id
+       LEFT JOIN contact_notes n ON n.id = nt.note_id AND n.deleted_at IS NULL
          AND EXISTS (SELECT 1 FROM contacts ct WHERE ct.id = n.contact_id ${scope})
       GROUP BY t.id
       ORDER BY t.name COLLATE NOCASE`,

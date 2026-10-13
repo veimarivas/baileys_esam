@@ -5,6 +5,8 @@ import { config } from '../config.js';
 import { Pacing } from './pacing.js';
 import {
   batchDeliveryRate,
+  hoursSinceLastBatchSend,
+  unansweredStreak,
   countNewContactsToday,
   getPolicy,
   isNewContact,
@@ -158,6 +160,24 @@ export class BatchRunner {
         continue;
       }
 
+      // ── Protección del contacto: no repetir campañas ni insistir ──────────
+      if (policy.active && policy.recontact_cooldown_hours > 0) {
+        const hours = hoursSinceLastBatchSend(sessionId, item.chat_id);
+        if (hours !== null && hours < policy.recontact_cooldown_hours) {
+          updateItem(item.id, 'skipped', `Recibió un envío masivo hace ${Math.max(1, Math.round(hours))} h (espera mínima: ${policy.recontact_cooldown_hours} h)`, null);
+          recount(batchId);
+          continue;
+        }
+      }
+      if (policy.active && policy.max_unanswered > 0) {
+        const streak = unansweredStreak(sessionId, item.chat_id);
+        if (streak >= policy.max_unanswered) {
+          updateItem(item.id, 'skipped', `Ya tiene ${streak} mensajes sin responder (máximo: ${policy.max_unanswered})`, null);
+          recount(batchId);
+          continue;
+        }
+      }
+
       // ── Contactos nuevos (en frío): tope diario y verificación del número ──
       const firstContact = policy.active && isNewContact(sessionId, item.chat_id);
       if (firstContact && policy.new_contacts_daily_limit > 0 && newContactsToday >= policy.new_contacts_daily_limit) {
@@ -215,7 +235,17 @@ export class BatchRunner {
         }
         if (++sinceHealthRefresh >= 10) {
           sinceHealthRefresh = 0;
-          recomputeHealth(sessionId);
+          const health = recomputeHealth(sessionId);
+          // Bloqueos y bajas por encima del umbral: frenar antes de que WhatsApp lo haga.
+          if (policy.active && health.health === 'red' && health.sent_24h >= 20 && health.report_rate >= policy.block_rate_threshold) {
+            pauseBatch(
+              batchId,
+              `Demasiados bloqueos y bajas en 24 h (${(health.report_rate * 100).toFixed(1)}% ≥ ${(policy.block_rate_threshold * 100).toFixed(1)}%). Revisá el mensaje y la lista antes de reanudar.`,
+            );
+            logger.warn({ batch: batchId, sessionId, rate: health.report_rate }, 'Lote pausado por bloqueos y bajas');
+            recount(batchId);
+            return;
+          }
           // Entregabilidad del lote en caída = señal temprana de reportes/bloqueos.
           if (policy.active && policy.auto_pause_low_delivery) {
             const d = batchDeliveryRate(batchId);
@@ -235,7 +265,7 @@ export class BatchRunner {
         logger.warn({ item: item.id, err: message }, 'Fallo el envío del destinatario');
         if (looksLikeBlock(message)) {
           // Bloqueo/reporte: se marca el destino y se reinicia la confianza.
-          markBlocked(item.chat_id, `Bloqueo detectado al enviar: ${message}`);
+          markBlocked(item.chat_id, `Bloqueo detectado al enviar: ${message}`, sessionId);
           resetTrust(sessionId);
           updateItem(item.id, 'failed', `Bloqueado: ${message}`, null);
           recomputeHealth(sessionId, { lastError: message });

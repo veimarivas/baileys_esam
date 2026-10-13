@@ -430,6 +430,8 @@ compilado que todavía no se aplicó.
 | cronogramas muestra `cURL error 7 ... port 8020` | El servicio no está corriendo | Revisar `storage/logs/` y arrancar (§8) |
 | Log: "Ya hay otra instancia de baileys_esam…" | Otro proceso tiene el bloqueo | Detener la otra instancia (a menudo un `npm run dev`) o usar `npm run restart` |
 | Log: "No se pudo abrir el puerto; saliendo" | Puerto ocupado por otro programa o instancia | Liberar el puerto o cambiar `PORT`/`API_PORT`/`PANEL_PORT` |
+| La sesión figura conectada pero las conversaciones no se actualizan | Procesamiento de Baileys trabado (se recupera solo en ~1–2 min gracias a los vigilantes) | Panel → Conexión → **Reconectar** (no pide QR). Desvincular solo si eso no alcanza |
+| Log: "Una tarea de Baileys quedó colgada…" / "se reabre la conexión" | Los vigilantes liberaron la cola o reabrieron la conexión | Nada: es la recuperación automática. Si se repite seguido, revisar la red |
 | Los mensajes enviados desde el celular no aparecen; Anti-Baneo muestra "mensajes sin descifrar… del propio teléfono" | Sesión de cifrado con el teléfono rota (típico tras dos instancias a la vez) | Desvincular el dispositivo en el teléfono y volver a escanear el QR (§6) |
 | Imagen/video "sin descargar" | Guardado sin referencia o llegado con el sistema cerrado | Pulsar **Descargar** con el teléfono conectado |
 | Imagen/video "no disponible" | WhatsApp ya no tiene el archivo | Pedir al contacto que lo reenvíe |

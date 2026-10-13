@@ -61,6 +61,19 @@ export function mediaExists(filePath: string | null | undefined): boolean {
   return !!filePath && fs.existsSync(filePath);
 }
 
+/** Carpeta de las notas de voz internas: la retención de media no la toca. */
+export const NOTES_MEDIA_DIR = 'notes';
+
+/** Guarda una nota de voz interna (permanente, fuera de la retención). */
+export function storeNoteAudio(contents: Buffer, mime: string | null, filename?: string | null): string {
+  const ext = extensionFor(mime, filename);
+  const dir = path.resolve(config.storageDir, NOTES_MEDIA_DIR, new Date().toISOString().slice(0, 7));
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${randomUUID()}.${ext}`);
+  fs.writeFileSync(file, contents);
+  return file;
+}
+
 /** Guarda media entrante (webhook) y devuelve la ruta. */
 export function storeIncoming(contents: Buffer, mime: string | null, filename?: string | null): string {
   const ext = extensionFor(mime, filename);

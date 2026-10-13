@@ -86,5 +86,7 @@ export function quarantineAndRotate(
   reason: string,
 ): { moved: number; to: string | null } {
   setQuarantine(sessionId, true, reason);
-  return rotateBatches(sessionId, enqueue);
+  const rot = rotateBatches(sessionId, enqueue);
+  audit('anti_ban.quarantine', { session_id: sessionId, quarantine: true, reason, moved: rot.moved, to: rot.to });
+  return rot;
 }

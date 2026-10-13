@@ -30,7 +30,10 @@ import {
 import { listOptouts, addOptout, removeOptout } from '../core/optout.js';
 import { audit } from '../core/webhooks.js';
 import { getConfig, setConfig } from '../core/config-store.js';
-import { monitoringData, reportsData, activityData } from '../core/monitoring.js';
+import { monitoringData, activityData } from '../core/monitoring.js';
+import { attentionData, deliveryStats, notesFollowup, pendingReplies, previousPeriod, protectionStats, resolvePeriod, sessionActivity, userPerformance } from '../core/followup.js';
+import { getHealth } from '../core/health.js';
+import { renderMonitoring, renderReports, reportsCsv, type MonitoringTab, type ReportsTab } from './followup-views.js';
 import { recount } from '../core/batches.js';
 import type { BatchRunner } from '../core/batches.js';
 import { normalizePhone } from '../core/phone.js';
@@ -42,6 +45,7 @@ import { importCsvToBatch } from '../core/csv.js';
 import { createBatch } from '../core/batch-service.js';
 import { scheduleBatch } from '../core/scheduler.js';
 import { registerAntiBanRoutes } from './anti-ban.js';
+import { registerAdminRoutes } from './admin-views.js';
 import { registerInboxRoutes } from './inbox.js';
 import type { SessionRow } from '../types.js';
 
@@ -121,7 +125,10 @@ function renderNotesPage(): string {
             <option value="due">Por fecha de seguimiento</option>
             <option value="created">Más recientes primero</option>
           </select>
-          <label class="np-mine"><input type="checkbox" class="form-check-input" id="notes-mine" /> Solo mis notas</label>
+          <label class="np-mine"><input type="checkbox" class="form-check-input" id="notes-mine" /> Registradas por mí</label>
+          <label class="np-mine"><input type="checkbox" class="form-check-input" id="notes-assigned" /> Asignadas a mí</label>
+          <button type="button" id="notes-trash" class="np-trash-btn" aria-pressed="false" title="Notas eliminadas (se pueden restaurar)">
+            <span class="ri-delete-bin-6-line" aria-hidden="true"></span> Papelera <span class="np-trash-count"></span></button>
         </div>
         <div id="np-active" class="np-active"></div>
         <div id="notes-list" class="np-list" aria-live="polite"></div>
@@ -140,6 +147,12 @@ function renderNotesPage(): string {
             <div id="tag-colors" class="tag-colors"></div>
             <button id="tag-save" type="button" class="btn btn-primary btn-sm w-100"><span class="ri-add-line"></span> Crear etiqueta</button>
           </div>
+        </div>
+        <div class="np-side-card" id="plantillas">
+          <div class="np-side-head">
+            <h6><span class="ri-file-list-3-line" aria-hidden="true"></span> Plantillas de tareas</h6>
+          </div>
+          <div id="np-templates" class="np-templates"></div>
         </div>
         <div class="np-side-card np-tips">
           <h6><span class="ri-lightbulb-line" aria-hidden="true"></span> Para que sirvan de verdad</h6>
@@ -387,9 +400,32 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
       // texto del mensaje: no deben llegar a otras cuentas).
       const scope = sessionScopeFor(req.user!);
       const onEvent = (event: { type: string; payload: Record<string, unknown> }) => {
+        // Privados (p. ej. recordatorios con el texto de la nota): solo a sus destinatarios.
+        if (event.payload?.private) {
+          const to = event.payload.userIds;
+          if (Array.isArray(to) && to.includes(req.user!.id)) {
+            res.write(`event: ${event.type}\ndata: ${JSON.stringify(event.payload)}\n\n`);
+          }
+          return;
+        }
         const sid = event.payload?.sessionId;
         if (scope !== null && typeof sid === 'string' && !scope.includes(sid)) return;
-        res.write(`event: ${event.type}\ndata: ${JSON.stringify(event.payload)}\n\n`);
+        // Eventos de varias líneas (notas de una persona): solo si alguna es suya,
+        // y sin revelar los chats de líneas ajenas.
+        const sids = event.payload?.sessionIds;
+        const uids = event.payload?.userIds;
+        const forMe = Array.isArray(uids) && uids.includes(req.user!.id);
+        let payload = event.payload;
+        if (scope !== null && Array.isArray(sids)) {
+          if (!forMe && !sids.some((s) => scope.includes(String(s)))) return;
+          const chats = Array.isArray(payload.chats) ? (payload.chats as Array<{ sessionId: string }>) : [];
+          payload = {
+            ...payload,
+            sessionIds: sids.filter((s) => scope.includes(String(s))),
+            chats: chats.filter((c) => scope.includes(c.sessionId)),
+          };
+        }
+        res.write(`event: ${event.type}\ndata: ${JSON.stringify(payload)}\n\n`);
       };
       panelBus.on('event', onEvent);
 
@@ -519,6 +555,20 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
         logger.warn({ err: (err as Error).message }, 'Pairing falló');
       }
       res.redirect('/settings');
+    }),
+  );
+
+  // Reabre la conexión con WhatsApp sin desvincular (no requiere QR).
+  app.post(
+    '/settings/reconnect',
+    requireUser,
+    requireSection('settings'),
+    ah(async (req: AuthedRequest, res) => {
+      const session = sessionForUser(req.user!) ?? (esamEsAdmin(req.user!) ? manager.primary() : undefined);
+      if (!session) return res.redirect('/settings');
+      await manager.reconnect(session.id);
+      audit('session.reconnect', { session_id: session.id, by: req.user!.id });
+      res.redirect('/settings?ok=' + encodeURIComponent('Reconectando con WhatsApp… en unos segundos llegan los mensajes pendientes.'));
     }),
   );
 
@@ -807,48 +857,7 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     }),
   );
 
-  // ── Plantillas ───────────────────────────────────────────────────────────────
-  app.get(
-    '/templates',
-    requireUser,
-    requireSection('templates'),
-    ah(async (req: AuthedRequest, res) => {
-      const rows = all<any>('SELECT * FROM templates ORDER BY category, id DESC');
-      const body = `
-        ${card(
-          'Nueva plantilla',
-          `<form method="post" action="/templates">
-            <div class="row g-2 mb-3">
-              <div class="col-md-6"><input name="name" class="form-control" placeholder="Nombre" required /></div>
-              <div class="col-md-4"><select name="category" class="form-select"><option value="cobranza">cobranza</option><option value="academico">academico</option><option value="general">general</option></select></div>
-              <div class="col-md-2"><button class="btn btn-success w-100" type="submit">Guardar</button></div>
-            </div>
-            <textarea name="body" class="form-control" rows="5" placeholder="Texto con {{ variables }}"></textarea>
-          </form>`,
-        )}
-        <div class="card"><div class="card-body pt-0">${table(
-          ['Nombre', 'Categoría', 'Variables', 'Activa'],
-          rows.map((t) => [esc(t.name), esc(t.category), `<span class="ff-monospace">${esc(t.variables ?? '[]')}</span>`, t.active ? '<span class="badge bg-success-subtle text-success">Sí</span>' : 'No']),
-        )}</div></div>`;
-      res.send(
-        renderLayout('Plantillas', req.user!, 'templates', body, {
-          subtitle: 'Textos reutilizables con variables para tus envíos.',
-          activeHref: '/templates',
-        }),
-      );
-    }),
-  );
-
-  app.post(
-    '/templates',
-    requireUser,
-    requireSection('templates'),
-    ah(async (req: AuthedRequest, res) => {
-      const { createTemplate } = await import('../core/templates.js');
-      createTemplate(String(req.body?.name ?? 'Plantilla'), String(req.body?.category ?? 'general'), String(req.body?.body ?? ''));
-      res.redirect('/templates');
-    }),
-  );
+  // /templates: ver admin-views.ts
 
   // ── Plantillas rápidas (atajos del compositor) ────────────────────────────────
 
@@ -1097,8 +1106,8 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     requireSection('conversations'),
     (_req: AuthedRequest, res) => {
       res.send(
-        renderLayout('Notas', _req.user!, 'conversations', renderNotesPage(), {
-          subtitle: 'Lo que el equipo sabe de cada contacto y los seguimientos pendientes.',
+        renderLayout('Notas y tareas', _req.user!, 'conversations', renderNotesPage(), {
+          subtitle: 'Lo que el equipo sabe de cada persona y sus pendientes, compartido entre todas las líneas de WhatsApp.',
           activeHref: '/notes',
         }),
       );
@@ -1233,333 +1242,119 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
   );
 
 
-  // ── Monitoreo ────────────────────────────────────────────────────────────────
+  // ── Seguimiento (monitoreo) y reportes ───────────────────────────────────────
+
+  /** Sesiones visibles para el usuario y la seleccionada en `?session=`. */
+  const followupScope = (req: AuthedRequest) => {
+    const sessionIds = sessionScopeFor(req.user!);
+    const visible = manager.list().filter((s) => sessionIds === null || sessionIds.includes(s.id));
+    const requested = typeof req.query.session === 'string' ? req.query.session : '';
+    const selected = visible.some((s) => s.id === requested) ? requested : '';
+    return { scope: { sessionIds, sessionId: selected || null }, visible, selected };
+  };
+  const qstr = (req: AuthedRequest, k: string) => (typeof req.query[k] === 'string' ? String(req.query[k]) : '');
 
   app.get(
     '/monitoring',
     requireUser,
     requireSection('monitoring'),
     ah(async (req: AuthedRequest, res) => {
-      const sessions = manager.list();
-      const q = (k: string) => (typeof req.query[k] === 'string' ? String(req.query[k]) : '');
-      const active = {
-        from: q('from'),
-        to: q('to'),
-        day: q('day'),
-        programa: q('programa'),
-        account: q('account'),
-        area: q('area'),
-        tipo: q('tipo'),
-      };
-      const data = monitoringData(
-        {
-          from: active.from || undefined,
-          to: active.to || undefined,
-          day: active.day || undefined,
-          programa: active.programa || undefined,
-          account: active.account || undefined,
-          area: active.area || undefined,
-          tipo: active.tipo || undefined,
-        },
-        14,
-      );
-
-      const option = (value: string, label: string, selected: boolean) =>
-        `<option value="${esc(value)}"${selected ? ' selected' : ''}>${esc(label)}</option>`;
-      const tipoTotal = (t: string) => data.byTipo.find((x) => x.tipo === t)?.total ?? 0;
-      const masivos = (m: Record<string, number>) => (m.participantes ?? 0) + (m.grupo ?? 0);
-
-      const filtersForm = `<form method="get" action="/monitoring" class="card toolbar mb-3">
-        <div class="card-body">
-          <div class="toolbar-row">
-            <div class="toolbar-field" style="flex:0 1 150px"><label>Desde</label><input type="date" name="from" value="${esc(active.from || data.from)}" class="form-control form-control-sm"></div>
-            <div class="toolbar-field" style="flex:0 1 150px"><label>Hasta</label><input type="date" name="to" value="${esc(active.to || data.to)}" class="form-control form-control-sm"></div>
-            <div class="toolbar-field" style="flex:0 1 160px"><label>Día o mes</label><input type="text" name="day" value="${esc(active.day)}" placeholder="2026-10-04 o 2026-10" class="form-control form-control-sm" title="Filtrar un día (YYYY-MM-DD) o un mes (YYYY-MM)"></div>
-            <div class="toolbar-field" style="flex:1 1 200px"><label>Programa</label><select name="programa" class="form-select form-select-sm">
-              ${option('', 'Todos los programas', !active.programa)}${data.options.programas.map((p) => option(p, p, active.programa === p)).join('')}
-            </select></div>
-            <div class="toolbar-field" style="flex:1 1 170px"><label>Usuario</label><select name="account" class="form-select form-select-sm">
-              ${option('', 'Todos', !active.account)}${data.options.users.map((u) => option(u.id, u.name, active.account === u.id)).join('')}
-            </select></div>
-            <div class="toolbar-field" style="flex:1 1 150px"><label>Área</label><select name="area" class="form-select form-select-sm">
-              ${option('', 'Todas', !active.area)}${data.options.areas.map((a) => option(a, a, active.area === a)).join('')}
-            </select></div>
-            <div class="toolbar-field" style="flex:1 1 140px"><label>Tipo</label><select name="tipo" class="form-select form-select-sm">
-              ${option('', 'Todos', !active.tipo)}${data.options.tipos.map((t) => option(t.id, t.label, active.tipo === t.id)).join('')}
-            </select></div>
-            <div class="toolbar-actions">
-              <button class="btn btn-primary btn-sm" type="submit"><i class="ri-filter-3-line me-1"></i>Filtrar</button>
-              <a class="btn btn-soft-secondary btn-sm" href="/monitoring">Limpiar</a>
-            </div>
-          </div>
-        </div>
-      </form>`;
-
-      const analysisTable = (title: string, rows: string[][], first: string) =>
-        `<div class="card mb-3"><div class="card-header"><h5 class="card-title mb-0">${esc(title)}</h5></div>
-          <div class="card-body pt-0">${
-            rows.length
-              ? table([first, 'Total', 'Masivos', 'Contable', 'Notas', 'Bandeja'], rows)
-              : emptyState('ri-filter-off-line', 'Sin resultados', 'No hay envíos con los filtros seleccionados.')
-          }</div></div>`;
-
-      const programRows = data.byPrograma.map((p) => [
-        esc(p.programa),
-        `<b>${p.total}</b>`,
-        String(masivos(p.byTipo)),
-        String(p.byTipo.cobranza ?? 0),
-        String(p.byTipo.notas ?? 0),
-        String(p.byTipo.inbox ?? 0),
-      ]);
-      const userRows = data.byUser.map((u) => [
-        esc(u.name),
-        `<b>${u.total}</b>`,
-        String(masivos(u.byTipo)),
-        String(u.byTipo.cobranza ?? 0),
-        String(u.byTipo.notas ?? 0),
-        String(u.byTipo.inbox ?? 0),
-      ]);
-
-      // Tabla de actividad por usuario (seguimiento y control de mensajes).
-      const activityTableHtml = `<div class="card mb-3" id="activity-card"
-          data-activity-url="/api/activity"
-          data-activity-from="${esc(data.from)}" data-activity-to="${esc(data.to)}"
-          data-activity-account="${esc(active.account)}" data-activity-area="${esc(active.area)}">
-        <div class="card-header d-flex align-items-center">
-          <h5 class="card-title mb-0 flex-grow-1">Actividad por usuario</h5>
-          <span class="text-muted fs-12 me-2" id="activity-updated"></span>
-          <button type="button" class="btn btn-soft-secondary btn-sm" id="activity-refresh"><i class="ri-refresh-line me-1"></i>Actualizar</button>
-        </div>
-        <div class="card-body pt-0" id="activity-body">
-          <div class="text-muted text-center py-3">Cargando…</div>
-        </div>
-      </div>`;
-
-      const body = `
-        ${filtersForm}
-        ${sectionHead('ri-dashboard-3-line', 'Resumen de actividad', `Envíos, respuestas y resultados del ${esc(data.from)} al ${esc(data.to)}.`)}
-        ${activityTableHtml}
-        <div class="row g-3 mb-3">
-          <div class="col-xl-4 col-md-6">${stat('Cronogramas', data.totals.cronogramas, 'primary', 'ri-send-plane-2-line', 'envíos planificados')}</div>
-          <div class="col-xl-4 col-md-6">${stat('Bandeja ESAM', data.totals.esam, 'info', 'ri-chat-3-line', 'desde el inbox')}</div>
-          <div class="col-xl-4 col-md-6">${stat('Cobranzas', tipoTotal('cobranza'), 'warning', 'ri-hand-coin-line', 'avisos de pago')}</div>
-          <div class="col-xl-4 col-md-6">${stat('Avisos de notas', tipoTotal('notas'), 'success', 'ri-award-line', 'notas cargadas')}</div>
-          <div class="col-xl-4 col-md-6">${stat('Fallidos', data.totals.failed, 'danger', 'ri-error-warning-line', 'sin entrega')}</div>
-          <div class="col-xl-4 col-md-6">${stat('Recibidos', data.totals.received, 'primary', 'ri-inbox-archive-line', 'mensajes entrantes')}</div>
-        </div>
-
-        ${sectionHead('ri-line-chart-line', 'Gráficos', 'Distribución por usuario, origen, programa y evolución diaria.')}
-        <div class="row g-3 mb-3">
-          <div class="col-xl-8">
-            <div class="card h-100"><div class="card-header"><h5 class="card-title mb-0">Mensajes enviados por usuario</h5></div>
-              <div class="card-body"><div id="chartUsuarios"></div></div></div>
-          </div>
-          <div class="col-xl-4">
-            <div class="card h-100"><div class="card-header"><h5 class="card-title mb-0">Por origen</h5></div>
-              <div class="card-body"><div id="chartTipo"></div></div></div>
-          </div>
-        </div>
-
-        <div class="row g-3 mb-3">
-          <div class="col-xl-7">
-            <div class="card h-100"><div class="card-header"><h5 class="card-title mb-0">Mensajes por programa</h5></div>
-              <div class="card-body"><div id="chartPrograma"></div></div></div>
-          </div>
-          <div class="col-xl-5">
-            <div class="card h-100"><div class="card-header"><h5 class="card-title mb-0">Evolución (${esc(data.from)} → ${esc(data.to)})</h5></div>
-              <div class="card-body"><div id="chartDia"></div></div></div>
-          </div>
-        </div>
-
-        ${sectionHead('ri-table-line', 'Seguimiento detallado', 'Desglose de envíos por programa y por usuario.')}
-        ${analysisTable('Seguimiento por programa', programRows, 'Programa')}
-        ${analysisTable('Seguimiento por usuario', userRows, 'Usuario')}
-
-        ${sectionHead('ri-hardware-line', 'Cuentas del gateway', 'Sesiones de WhatsApp y su estado de conexión.')}
-        <div class="card"><div class="card-header"><h5 class="card-title mb-0">Cuentas</h5></div>
-          <div class="card-body pt-0">${table(
-            ['Nombre', 'Área', 'Número', 'Estado', 'Esperado'],
-            sessions.map((s) => [esc(s.owner_name ?? s.name), esc(s.area ?? '—'), `<span class="ff-monospace">${esc(s.phone ?? '—')}</span>`, statusBadge(s.status), `<span class="ff-monospace">${esc(s.expected_phone ?? '—')}</span>`]),
-          )}</div>
-        </div>
-
-        <script src="/assets/libs/apexcharts/apexcharts.min.js"></script>
-        <script>
-        (function () {
-          var d = ${JSON.stringify(data)};
-          if (!window.ApexCharts) return;
-          var fam = getComputedStyle(document.body).fontFamily || 'inherit';
-          function base(type, extra) { return Object.assign({ chart: { type: type, height: 320, fontFamily: fam, toolbar: { show: false } }, dataLabels: { enabled: false } }, extra || {}); }
-
-          new ApexCharts(document.querySelector('#chartUsuarios'), base('bar', {
-            series: [{ name: 'Mensajes', data: d.byUser.map(function (u) { return u.total; }) }],
-            xaxis: { categories: d.byUser.map(function (u) { return u.name; }) },
-            plotOptions: { bar: { horizontal: true, borderRadius: 4 } },
-            colors: ['#0a6a90'], dataLabels: { enabled: true }
-          })).render();
-
-          new ApexCharts(document.querySelector('#chartTipo'), base('donut', {
-            series: d.byTipo.map(function (t) { return t.total; }),
-            labels: d.byTipo.map(function (t) { return t.label + ' (' + t.total + ')'; }),
-            legend: { position: 'bottom' },
-            colors: ['#0a6a90', '#128c7e', '#405189', '#f7b84b', '#f06548', '#878a99', '#b54708']
-          })).render();
-
-          new ApexCharts(document.querySelector('#chartPrograma'), base('bar', {
-            series: [{ name: 'Mensajes', data: d.byPrograma.map(function (p) { return p.total; }) }],
-            xaxis: { categories: d.byPrograma.map(function (p) { return p.programa; }), labels: { rotate: -35, trim: true } },
-            colors: ['#128c7e'], dataLabels: { enabled: true }
-          })).render();
-
-          new ApexCharts(document.querySelector('#chartDia'), base('line', {
-            series: [
-              { name: 'Cronogramas', data: d.byDay.map(function (x) { return x.cronogramas; }) },
-              { name: 'Bandeja ESAM', data: d.byDay.map(function (x) { return x.esam; }) }
-            ],
-            xaxis: { categories: d.byDay.map(function (x) { return x.day; }), labels: { rotate: -30, style: { fontSize: '10px' } } },
-            colors: ['#0a6a90', '#128c7e'], stroke: { curve: 'smooth', width: 3 }, markers: { size: 4 }
-          })).render();
-        })();
-        </script>`;
+      const { scope, visible, selected } = followupScope(req);
+      const period = resolvePeriod({ period: qstr(req, 'period'), from: qstr(req, 'from'), to: qstr(req, 'to') }, 'today');
+      const activity = sessionActivity(scope);
+      const shown = selected ? visible.filter((s) => s.id === selected) : visible;
+      const tab = (['pendientes', 'actividad', 'numeros'] as MonitoringTab[]).includes(qstr(req, 'tab') as MonitoringTab)
+        ? (qstr(req, 'tab') as MonitoringTab)
+        : 'pendientes';
+      const body = renderMonitoring({
+        tab,
+        period,
+        selectedSession: selected,
+        sessions: shown.map((row) => ({
+          row,
+          health: getHealth(row.id),
+          activity: activity.get(row.id),
+          decrypt: manager.decryptStats(row.id),
+        })),
+        attention: attentionData(scope, period),
+        pending: pendingReplies(scope, { maxAgeDays: 7, limit: 60 }),
+        notes: notesFollowup(scope, period),
+      });
       res.send(
-        renderLayout('Monitoreo', req.user!, 'monitoring', body, {
-          subtitle: 'Seguimiento de envíos por fecha, programa, usuario, área y origen.',
+        renderLayout('Seguimiento', req.user!, 'monitoring', body, {
+          subtitle: 'Conversaciones pendientes, tiempos de respuesta y seguimientos del día.',
           actions: `<a class="btn btn-soft-primary btn-sm" href="/reports"><i class="ri-bar-chart-box-line me-1"></i>Reportes</a>`,
         }),
       );
     }),
   );
 
-  // ── Reportes ─────────────────────────────────────────────────────────────────
+  const buildReports = (req: AuthedRequest) => {
+    const { scope, visible, selected } = followupScope(req);
+    const period = resolvePeriod({ period: qstr(req, 'period'), from: qstr(req, 'from'), to: qstr(req, 'to') }, '30d');
+    const filters = { programa: qstr(req, 'programa'), account: qstr(req, 'account'), area: qstr(req, 'area'), tipo: qstr(req, 'tipo') };
+    const attention = attentionData(scope, period);
+    const previous = previousPeriod(period);
+    const tab = (['atencion', 'equipo', 'seguimiento', 'envios'] as ReportsTab[]).includes(qstr(req, 'tab') as ReportsTab)
+      ? (qstr(req, 'tab') as ReportsTab)
+      : 'atencion';
+    const sends = monitoringData(
+      {
+        from: period.from,
+        to: period.to,
+        programa: filters.programa || undefined,
+        account: filters.account || undefined,
+        area: filters.area || undefined,
+        tipo: filters.tipo || undefined,
+      },
+      Math.min(period.days, 31),
+    );
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries({ period: period.preset, from: period.from, to: period.to, session: selected, ...filters })) {
+      if (v) params.set(k, v);
+    }
+    return {
+      tab,
+      period,
+      previous,
+      sessions: visible,
+      selectedSession: selected,
+      attention,
+      prevAttention: attentionData(scope, previous),
+      delivery: deliveryStats(scope, period),
+      prevDelivery: deliveryStats(scope, previous),
+      protection: protectionStats(scope, period),
+      notes: notesFollowup(scope, period),
+      users: userPerformance(scope, period, attention),
+      sends,
+      filters,
+      exportHref: `/reports/export.csv?${params.toString()}`,
+    };
+  };
 
   app.get(
     '/reports',
     requireUser,
     requireSection('reports'),
     ah(async (req: AuthedRequest, res) => {
-      const d = reportsData(30, 14);
-      const rate = d.totals.enviados > 0 ? Math.round((d.totals.entregados / d.totals.enviados) * 100) : 0;
-      const rateInsight =
-        d.totals.enviados === 0
-          ? insight('info', 'Todavía no hay envíos registrados en los últimos 30 días. Los reportes se llenan a medida que se ejecutan los lotes.')
-          : rate >= 90
-            ? insight('good', `Entregabilidad del ${rate}%: el canal entrega con normalidad sobre ${d.totals.enviados} envíos.`)
-            : rate >= 75
-              ? insight('info', `Entregabilidad del ${rate}%: dentro del rango esperado. Vigilá los fallidos si la tendencia sube.`)
-              : insight('warn', `Entregabilidad del ${rate}%: por debajo del objetivo. Revisá la lista negra y la salud de la sesión en Anti-Baneo.`);
-      const statusTotal = d.byStatus.reduce((a, r) => a + r.total, 0) || 1;
-      const statusTable = table(
-        ['Estado', 'Cantidad', 'Participación'],
-        d.byStatus.map((r) => {
-          const pct = Math.round((r.total / statusTotal) * 100);
-          return [
-            statusBadge(r.status),
-            `<b>${r.total}</b>`,
-            `<div class="d-flex align-items-center gap-2"><div class="progress progress-sm flex-grow-1" style="max-width:150px"><div class="progress-bar" style="width:${pct}%"></div></div><span class="text-muted fs-12">${pct}%</span></div>`,
-          ];
-        }),
-      );
-
-      const activityFrom = new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
-      const activityTo = new Date().toISOString().slice(0, 10);
-      const activityTableHtml = `<div class="card mb-3" id="activity-card"
-          data-activity-url="/api/activity"
-          data-activity-from="${activityFrom}" data-activity-to="${activityTo}"
-          data-activity-account="" data-activity-area="">
-        <div class="card-header d-flex align-items-center">
-          <h5 class="card-title mb-0 flex-grow-1">Actividad por usuario</h5>
-          <span class="text-muted fs-12 me-2" id="activity-updated"></span>
-          <button type="button" class="btn btn-soft-secondary btn-sm" id="activity-refresh"><i class="ri-refresh-line me-1"></i>Actualizar</button>
-        </div>
-        <div class="card-body pt-0" id="activity-body">
-          <div class="text-muted text-center py-3">Cargando…</div>
-        </div>
-      </div>`;
-
-      const body = `
-        ${rateInsight}
-
-        ${sectionHead('ri-dashboard-3-line', 'Resumen del período', 'Totales consolidados de los últimos 30 días.')}
-        ${activityTableHtml}
-        <div class="row g-3 mb-3">
-          <div class="col-xl-4 col-md-6">${stat('Enviados', d.totals.enviados, 'primary', 'ri-send-plane-2-line', 'últimos 30 días')}</div>
-          <div class="col-xl-4 col-md-6">${stat('Entregados', d.totals.entregados, 'success', 'ri-check-double-line', `${rate}% de los enviados`)}</div>
-          <div class="col-xl-4 col-md-6">${stat('Leídos', d.totals.leidos, 'info', 'ri-eye-line')}</div>
-          <div class="col-xl-4 col-md-6">${stat('Fallidos', d.totals.fallidos, 'danger', 'ri-error-warning-line')}</div>
-          <div class="col-xl-4 col-md-6">${stat('Recibidos', d.totals.recibidos, 'warning', 'ri-inbox-archive-line')}</div>
-          <div class="col-xl-4 col-md-6">${stat('Entregabilidad', rate + '%', 'success', 'ri-line-chart-line', 'entregados / enviados')}</div>
-        </div>
-
-        ${sectionHead('ri-line-chart-line', 'Tendencias y distribución', 'Cómo se comportan los envíos a lo largo del período.')}
-        <div class="row g-3 mb-3">
-          <div class="col-xl-4"><div class="card h-100"><div class="card-header"><h5 class="card-title mb-0">Destinatarios por estado</h5></div>
-            <div class="card-body"><div id="rStatus"></div></div></div></div>
-          <div class="col-xl-8"><div class="card h-100"><div class="card-header"><h5 class="card-title mb-0">Envíos y recibidos por día</h5></div>
-            <div class="card-body"><div id="rDia"></div></div></div></div>
-        </div>
-
-        <div class="row g-3 mb-3">
-          <div class="col-xl-6"><div class="card h-100"><div class="card-header"><h5 class="card-title mb-0">Envíos por tipo</h5></div>
-            <div class="card-body"><div id="rTipo"></div></div></div></div>
-          <div class="col-xl-6"><div class="card h-100"><div class="card-header"><h5 class="card-title mb-0">Por programa (enviados / fallidos)</h5></div>
-            <div class="card-body"><div id="rPrograma"></div></div></div></div>
-        </div>
-
-        ${sectionHead('ri-list-check-2', 'Detalle por estado', 'Cantidad y peso de cada estado sobre el total.')}
-        <div class="card">
-          <div class="card-body pt-0">${
-            d.byStatus.length
-              ? statusTable
-              : emptyState('ri-filter-off-line', 'Sin envíos en el período', 'Cuando se ejecuten lotes vas a ver acá el desglose por estado.')
-          }</div>
-        </div>
-
-        <script src="/assets/libs/apexcharts/apexcharts.min.js"></script>
-        <script>
-        (function () {
-          var d = ${JSON.stringify(d)};
-          if (!window.ApexCharts) return;
-          var fam = getComputedStyle(document.body).fontFamily || 'inherit';
-          function base(type, extra) { return Object.assign({ chart: { type: type, height: 320, fontFamily: fam, toolbar: { show: false } }, dataLabels: { enabled: false } }, extra || {}); }
-
-          new ApexCharts(document.querySelector('#rStatus'), base('donut', {
-            series: d.byStatus.map(function (x) { return x.total; }),
-            labels: d.byStatus.map(function (x) { return x.status + ' (' + x.total + ')'; }),
-            legend: { position: 'bottom' }, colors: ['#0ab39c', '#f06548', '#f7b84b', '#878a99']
-          })).render();
-
-          new ApexCharts(document.querySelector('#rDia'), base('bar', {
-            series: [
-              { name: 'Enviados', data: d.byDay.map(function (x) { return x.enviados; }) },
-              { name: 'Recibidos', data: d.byDay.map(function (x) { return x.recibidos; }) }
-            ],
-            xaxis: { categories: d.byDay.map(function (x) { return x.day; }), labels: { rotate: -30, style: { fontSize: '10px' } } },
-            colors: ['#0a6a90', '#128c7e'], plotOptions: { bar: { borderRadius: 3, columnWidth: '55%' } }
-          })).render();
-
-          new ApexCharts(document.querySelector('#rTipo'), base('bar', {
-            series: [{ name: 'Enviados', data: d.byTipo.map(function (x) { return x.enviados; }) }],
-            xaxis: { categories: d.byTipo.map(function (x) { return x.label; }) },
-            colors: ['#405189'], plotOptions: { bar: { horizontal: true, borderRadius: 4 } }, dataLabels: { enabled: true }
-          })).render();
-
-          new ApexCharts(document.querySelector('#rPrograma'), base('bar', {
-            series: [
-              { name: 'Enviados', data: d.byPrograma.map(function (x) { return x.enviados; }) },
-              { name: 'Fallidos', data: d.byPrograma.map(function (x) { return x.fallidos; }) }
-            ],
-            xaxis: { categories: d.byPrograma.map(function (x) { return x.programa; }), labels: { rotate: -35, trim: true } },
-            colors: ['#0a6a90', '#f06548'], plotOptions: { bar: { borderRadius: 3 } }
-          })).render();
-        })();
-        </script>`;
+      const view = buildReports(req);
       res.send(
-        renderLayout('Reportes', req.user!, 'reports', body, {
-          subtitle: 'Entrega, lectura y actividad de los últimos 30 días.',
-          actions: `<a class="btn btn-soft-secondary btn-sm" href="/reports"><i class="ri-refresh-line me-1"></i>Actualizar</a>
-            <a class="btn btn-soft-primary btn-sm" href="/monitoring"><i class="ri-radar-line me-1"></i>Monitoreo</a>`,
+        renderLayout('Reportes', req.user!, 'reports', renderReports(view), {
+          subtitle: `Atención, seguimiento y envíos · ${view.period.label}`,
+          actions: `<a class="btn btn-soft-primary btn-sm" href="/monitoring"><i class="ri-pulse-line me-1"></i>Seguimiento</a>`,
         }),
       );
+    }),
+  );
+
+  app.get(
+    '/reports/export.csv',
+    requireUser,
+    requireSection('reports'),
+    ah(async (req: AuthedRequest, res) => {
+      const view = buildReports(req);
+      res.setHeader('Content-Disposition', `attachment; filename="reporte-${view.period.from}_${view.period.to}.csv"`);
+      res.type('text/csv; charset=utf-8').send(reportsCsv(view));
     }),
   );
 
@@ -1590,84 +1385,8 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     }),
   );
 
-  // ── Auditoría ────────────────────────────────────────────────────────────────
-
-  app.get(
-    '/audit',
-    requireUser,
-    requireSection('audit'),
-    ah(async (req: AuthedRequest, res) => {
-      const rows = all<any>('SELECT * FROM audit_logs ORDER BY id DESC LIMIT 200');
-      const body = `<div class="card"><div class="card-body pt-0">${table(
-        ['Acción', 'Contexto', 'Fecha'],
-        rows.map((r) => [`<b>${esc(r.action)}</b>`, `<span class="ff-monospace text-muted">${esc(r.context ?? '')}</span>`, esc(fmtDate(r.created_at))]),
-      )}</div></div>`;
-      res.send(
-        renderLayout('Auditoría', req.user!, 'audit', body, {
-          subtitle: 'Registro cronológico de las acciones realizadas en el panel.',
-        }),
-      );
-    }),
-  );
-
-  // ── Usuarios ─────────────────────────────────────────────────────────────────
-
-  app.get(
-    '/users',
-    requireUser,
-    requireSection('users'),
-    ah(async (req: AuthedRequest, res) => {
-      const rows = listUsers();
-      const admins = rows.filter((u) => esamEsAdmin(u)).length;
-      const authorized = rows.filter((u) => u.esam_autorizado).length;
-      const withNumber = rows.filter((u) => (u.esam_numero ?? '').trim() !== '').length;
-      const body = `
-        ${sectionHead('ri-team-line', 'Equipo con acceso', 'Cuentas del panel, su rol de cronogramas y su nivel de autorización.')}
-        <div class="row g-3 mb-3">
-          <div class="col-xl-3 col-md-6">${stat('Usuarios', rows.length, 'primary', 'ri-team-line', 'cuentas registradas')}</div>
-          <div class="col-xl-3 col-md-6">${stat('Administradores', admins, 'info', 'ri-admin-line', 'acceso total')}</div>
-          <div class="col-xl-3 col-md-6">${stat('Autorizados', authorized, 'success', 'ri-checkbox-circle-line', 'pueden ingresar al panel')}</div>
-          <div class="col-xl-3 col-md-6">${stat('Con número', withNumber, 'warning', 'ri-whatsapp-line', 'sesión vinculada')}</div>
-        </div>
-        <div class="card"><div class="card-body pt-0">${
-          rows.length
-            ? table(
-                ['Usuario', 'Nombre de acceso', 'Rol', 'Origen', 'Área', 'Autorizado', 'Ingresos'],
-                rows.map((u, i) => {
-                  const roles = esamRoles(u);
-                  const rolCell = roles.length
-                    ? roles.map((r) => `<span class="badge bg-primary-subtle text-primary me-1">${esc(r)}</span>`).join('')
-                    : esamEsAdmin(u)
-                      ? '<span class="badge bg-success-subtle text-success">Administrador</span>'
-                      : '<span class="text-muted">—</span>';
-                  return [
-                    `<div class="user-cell">
-                       <span class="avatar-xs rounded-circle av-${i % 8}">${esc(initials(u.name ?? u.username))}</span>
-                       <div class="min-w-0">
-                         <div class="user-name">${esc(u.name ?? '—')}</div>
-                         <div class="user-mail">${esc(u.email ?? '—')}</div>
-                       </div>
-                     </div>`,
-                    `<span class="ff-monospace">${esc(u.username ?? '—')}</span>`,
-                    rolCell,
-                    `<span class="badge bg-secondary-subtle text-secondary">${esc(u.source)}</span>`,
-                    esc(u.esam_area ?? '—'),
-                    u.esam_autorizado
-                      ? '<span class="badge bg-success-subtle text-success"><i class="ri-check-line me-1"></i>Sí</span>'
-                      : '<span class="badge bg-secondary-subtle text-secondary">No</span>',
-                    `<span class="ff-monospace">${u.login_count}</span>`,
-                  ];
-                }),
-              )
-            : emptyState('ri-team-line', 'Todavía no hay usuarios', 'Las cuentas aparecen al iniciar sesión o al sincronizar desde cronogramas.')
-        }</div></div>`;
-      res.send(
-        renderLayout('Usuarios', req.user!, 'users', body, {
-          subtitle: 'Cuentas con acceso al panel, su rol de cronogramas, su área y su último ingreso.',
-        }),
-      );
-    }),
-  );
+  // /audit, /users y /templates: admin-views.ts
+  registerAdminRoutes(app, { requireUser, requireSection, sessions: () => manager.list() });
 
   registerAntiBanRoutes(app, {
     requireUser,

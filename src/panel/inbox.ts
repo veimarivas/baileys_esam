@@ -12,18 +12,28 @@ import {
   getNote,
   getOrCreateContact,
   listAllNotes,
+  listNoteHistory,
   listNotes,
+  markFromTemplate,
+  myDay,
+  noteAssignees,
+  personLines,
   noteDTO,
-  noteSessionId,
   noteStats,
+  noteVisibleIn,
+  personChatsForNote,
+  restoreNote,
   setNoteDone,
+  setNotePinned,
+  snoozeNote,
   updateNote,
   type NoteStatus,
 } from '../core/contacts.js';
 import * as noteTags from '../core/note-tags.js';
+import * as noteTemplates from '../core/note-templates.js';
 import * as quickReplies from '../core/quick-replies.js';
 import { getSticker } from '../core/stickers.js';
-import { storeIncoming } from '../core/media.js';
+import { storeIncoming, storeNoteAudio } from '../core/media.js';
 import { typeForMime } from '../core/phone.js';
 import { transcribe } from '../core/transcriber.js';
 
@@ -93,26 +103,65 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
     return note.user_id === user.id || esamEsAdmin(user);
   }
 
-  function withPermissions<T extends { user_id: number | null }>(user: UserRow, note: T): T & { can_edit: boolean } {
-    return { ...note, can_edit: canEditNote(user, note) };
+  function withPermissions<T extends { user_id: number | null; assigned_to?: number | null }>(
+    user: UserRow,
+    note: T,
+  ): T & { can_edit: boolean; assigned_to_me: boolean } {
+    return { ...note, can_edit: canEditNote(user, note), assigned_to_me: !!note.assigned_to && note.assigned_to === user.id };
+  }
+
+  /** Responsable válido (usuario habilitado) o null. */
+  function parseAssignee(raw: unknown): number | null {
+    const id = Number(raw);
+    if (!Number.isFinite(id) || id <= 0) return null;
+    return noteAssignees().some((u) => u.id === id) ? id : null;
   }
 
   /**
-   * Nota accesible para el usuario: existe y pertenece a una sesión de su
-   * alcance. Responde 404/403 y devuelve `null` si no.
+   * Nota accesible para el usuario: existe y es de una persona que se atiende
+   * en alguna sesión de su alcance (aunque se haya registrado desde otra línea).
+   * Responde 404/403 y devuelve `null` si no.
    */
-  function accessibleNote(req: AuthedRequest, res: Response): NonNullable<ReturnType<typeof getNote>> | null {
+  function accessibleNote(
+    req: AuthedRequest,
+    res: Response,
+    opts: { allowDeleted?: boolean } = {},
+  ): NonNullable<ReturnType<typeof getNote>> | null {
     const note = getNote(Number(req.params.id));
     if (!note) {
       res.status(404).json({ error: 'Nota no encontrada.' });
       return null;
     }
+    if (note.deleted_at && !opts.allowDeleted) {
+      res.status(409).json({ error: 'La nota está en la papelera. Restaurala para modificarla.' });
+      return null;
+    }
     const scope = sessionScopeFor(req.user!);
-    if (scope !== null && !scope.includes(noteSessionId(note.id) ?? '')) {
+    if (!noteVisibleIn(note.id, scope, req.user!.id)) {
       res.status(403).json({ error: 'No tenés acceso a esta nota.' });
       return null;
     }
     return note;
+  }
+
+  /**
+   * Avisa en vivo (SSE) a quien tenga abierta a la persona en cualquier línea.
+   * No lleva el texto de la nota: solo qué chats deben recargar sus notas.
+   */
+  function publishNoteChange(noteId: number, action: string, actorId: number | null = null): void {
+    const chats = personChatsForNote(noteId);
+    const assignedTo = getNote(noteId)?.assigned_to ?? null;
+    if (!chats.length && !assignedTo) return;
+    panelBus.publish('note', {
+      noteId,
+      action,
+      actorId,
+      assignedTo,
+      // El responsable recibe el aviso aunque la persona no esté en su línea.
+      userIds: assignedTo ? [assignedTo] : [],
+      sessionIds: [...new Set(chats.map((c) => c.session_id))],
+      chats: chats.map((c) => ({ sessionId: c.session_id, chatId: c.chat_id })),
+    });
   }
 
   /** `tag_ids` puede llegar como arreglo (JSON) o como texto JSON (multipart). */
@@ -123,6 +172,23 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
     } catch {
       return [];
     }
+  }
+
+  /** Bandera booleana que puede llegar como JSON (true) o multipart ('1'/'true'). */
+  function parseFlag(raw: unknown): boolean {
+    return raw === true || raw === 1 || raw === '1' || raw === 'true';
+  }
+
+  /** Hora válida (HH:MM) o null. */
+  function parseTime(raw: unknown): string | null {
+    const value = String(raw ?? '').trim();
+    return /^([01]\d|2[0-3]):[0-5]\d$/.test(value) ? value : null;
+  }
+
+  /** Fecha local AAAA-MM-DD (misma zona que `date('now','localtime')` de SQLite). */
+  function localYmd(d: Date): string {
+    const p = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
   }
 
   /** Fecha límite válida (AAAA-MM-DD) o null. */
@@ -216,6 +282,31 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       if (!resolved) return;
       const contact = getOrCreateContact(resolved.session.id, resolved.chatId);
       res.json(listNotes(contact.id).map((n) => withPermissions(req.user!, n)));
+    }),
+  );
+
+  // La persona en todas las líneas: datos de su ficha y actividad (sin mensajes).
+  app.get(
+    '/inbox/:session/:chat/person',
+    ...auth,
+    ah((req, res) => {
+      const resolved = resolveAuthorized(req, res, String(req.params.session), String(req.params.chat));
+      if (!resolved) return;
+      const contact = getOrCreateContact(resolved.session.id, resolved.chatId);
+      const lines = personLines(contact.id);
+      const current = lines.find((l) => l.contact_id === contact.id) ?? null;
+      const others = lines.filter((l) => l.contact_id !== contact.id);
+      // Datos que faltan en esta ficha y se conocen desde otra línea.
+      const pick = (key: 'name' | 'email' | 'company' | 'programa') => {
+        if (current?.[key]) return null;
+        const from = others.find((l) => l[key]);
+        return from ? { value: from[key], line: from.session_name || from.session_phone || 'otra línea' } : null;
+      };
+      res.json({
+        programa: current?.programa ?? null,
+        lines: others,
+        fill: { name: pick('name'), email: pick('email'), company: pick('company'), programa: pick('programa') },
+      });
     }),
   );
 
@@ -398,11 +489,26 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
 
       if (text.length > 4000) return res.status(422).json({ error: 'La nota es demasiado larga (máx. 4000 caracteres).' });
 
+      const sourceId = Number(req.body?.source_message_id) || 0;
       let audioPath: string | null = null;
       if (file) {
-        audioPath = storeIncoming(file.buffer, file.mimetype, file.originalname || 'nota-voz.ogg');
+        audioPath = storeNoteAudio(file.buffer, file.mimetype, file.originalname || 'nota-voz.ogg');
       }
-      const note = addNote(contact.id, req.user!.id, text || null, audioPath, parseDue(req.body?.due_at), parseTagIds(req.body?.tag_ids));
+      const note = addNote(
+        contact.id,
+        req.user!.id,
+        text || null,
+        audioPath,
+        parseDue(req.body?.due_at),
+        parseTagIds(req.body?.tag_ids),
+        parseFlag(req.body?.pinned),
+        {
+          assignedTo: parseAssignee(req.body?.assigned_to),
+          dueTime: parseTime(req.body?.due_time),
+          sourceMessageId: sourceId && conversations.messageInChat(sourceId, resolved.session.id, resolved.chatId) ? sourceId : null,
+        },
+      );
+      publishNoteChange(note.id, note.assigned_to && note.assigned_to !== req.user!.id ? 'assigned' : 'created', req.user!.id);
       res.status(201).json(withPermissions(req.user!, note));
     }),
   );
@@ -460,16 +566,122 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       const scope = sessionScopeFor(user);
       const tagId = Number(req.query.tag ?? 0) || null;
       const rawStatus = String(req.query.status ?? (String(req.query.overdue ?? '') === '1' ? 'overdue' : 'pending'));
-      const status = (['pending', 'overdue', 'today', 'week', 'done', 'all'] as NoteStatus[]).includes(rawStatus as NoteStatus)
+      const status = (['pending', 'overdue', 'today', 'week', 'pinned', 'done', 'all', 'trash'] as NoteStatus[]).includes(rawStatus as NoteStatus)
         ? (rawStatus as NoteStatus)
         : 'pending';
       const q = typeof req.query.q === 'string' && req.query.q.trim() ? req.query.q.trim() : null;
       const orderBy = String(req.query.order ?? '') === 'created' ? 'created' : 'due';
       const authorId = String(req.query.mine ?? '') === '1' ? user.id : null;
+      const assignedTo = String(req.query.assigned ?? '') === '1' ? user.id : null;
       res.json({
-        notes: listAllNotes({ tagId, status, q, orderBy, authorId, sessionIds: scope }).map((n) => withPermissions(user, n)),
-        stats: noteStats({ sessionIds: scope, authorId }),
+        notes: listAllNotes({ tagId, status, q, orderBy, authorId, assignedTo, viewerId: user.id, sessionIds: scope })
+          .map((n) => withPermissions(user, n)),
+        stats: noteStats({ sessionIds: scope, authorId, assignedTo, viewerId: user.id }),
       });
+    }),
+  );
+
+  // Resumen del día del usuario (para el aviso al entrar).
+  app.get(
+    '/notes/my-day',
+    ...auth,
+    ah((req, res) => {
+      res.json(myDay(req.user!.id));
+    }),
+  );
+
+  // ── Plantillas de tareas (globales) ─────────────────────────────────────────
+
+  app.get(
+    '/notes/templates',
+    ...auth,
+    ah((_req, res) => {
+      res.json(noteTemplates.listTemplates());
+    }),
+  );
+
+  app.post(
+    '/notes/templates',
+    ...auth,
+    ah((req, res) => {
+      try {
+        res.status(201).json(noteTemplates.createTemplate(req.body ?? {}, req.user!.id));
+      } catch (err) {
+        res.status(422).json({ error: (err as Error).message });
+      }
+    }),
+  );
+
+  app.put(
+    '/notes/templates/:id',
+    ...auth,
+    ah((req, res) => {
+      try {
+        res.json(noteTemplates.updateTemplate(Number(req.params.id), req.body ?? {}));
+      } catch (err) {
+        res.status(422).json({ error: (err as Error).message });
+      }
+    }),
+  );
+
+  app.delete(
+    '/notes/templates/:id',
+    ...auth,
+    ah((req, res) => {
+      noteTemplates.deleteTemplate(Number(req.params.id));
+      res.json({ ok: true });
+    }),
+  );
+
+  // Aplica una plantilla en un chat: una tarea por paso, con fechas desde hoy.
+  app.post(
+    '/inbox/:session/:chat/notes/template',
+    ...auth,
+    ah((req, res) => {
+      const resolved = resolveAuthorized(req, res, String(req.params.session), String(req.params.chat));
+      if (!resolved) return;
+      const template = noteTemplates.getTemplate(Number(req.body?.template_id));
+      if (!template) return res.status(404).json({ error: 'Plantilla no encontrada.' });
+      const contact = getOrCreateContact(resolved.session.id, resolved.chatId);
+      const assignedTo = parseAssignee(req.body?.assigned_to);
+      const created = template.items.map((item) => {
+        const due = item.due_days === null ? null : localYmd(new Date(Date.now() + item.due_days * 86_400_000));
+        const note = addNote(contact.id, req.user!.id, item.text, null, due, [], item.pinned, {
+          assignedTo,
+          dueTime: due ? item.due_time : null,
+        });
+        markFromTemplate(note.id, req.user!.id, template.name);
+        return note;
+      });
+      if (created.length) {
+        publishNoteChange(created[0].id, assignedTo && assignedTo !== req.user!.id ? 'assigned' : 'created', req.user!.id);
+      }
+      res.status(201).json({ created: created.length });
+    }),
+  );
+
+  // Pospone el recordatorio de una tarea (minutos desde ahora o «mañana»).
+  app.post(
+    '/inbox/notes/:id/snooze',
+    ...auth,
+    ah((req, res) => {
+      const note = accessibleNote(req, res);
+      if (!note) return;
+      const minutes = Math.min(Math.max(Number(req.body?.minutes) || 15, 5), 7 * 24 * 60);
+      const at = new Date(Date.now() + minutes * 60_000);
+      const p = (n: number) => String(n).padStart(2, '0');
+      snoozeNote(note.id, localYmd(at), `${p(at.getHours())}:${p(at.getMinutes())}`, req.user!.id);
+      publishNoteChange(note.id, 'edited', req.user!.id);
+      res.json(withPermissions(req.user!, noteDTO(note.id)!));
+    }),
+  );
+
+  // Personas a las que se puede asignar una tarea (de todas las líneas).
+  app.get(
+    '/notes/assignees',
+    ...auth,
+    ah((req, res) => {
+      res.json({ me: req.user!.id, users: noteAssignees() });
     }),
   );
 
@@ -491,11 +703,17 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
         updateNote(note.id, {
           noteText: text === undefined ? undefined : text || null,
           dueAt: req.body?.due_at !== undefined ? parseDue(req.body.due_at) : undefined,
+          dueTime: req.body?.due_time !== undefined ? parseTime(req.body.due_time) : undefined,
           tagIds: req.body?.tag_ids !== undefined ? parseTagIds(req.body.tag_ids) : undefined,
-        });
+          pinned: req.body?.pinned !== undefined ? parseFlag(req.body.pinned) : undefined,
+          assignedTo: req.body?.assigned_to !== undefined ? parseAssignee(req.body.assigned_to) : undefined,
+        }, req.user!.id);
       } catch (err) {
         return res.status(422).json({ error: (err as Error).message });
       }
+      const after = getNote(note.id);
+      const reassigned = !!after?.assigned_to && after.assigned_to !== note.assigned_to && after.assigned_to !== req.user!.id;
+      publishNoteChange(note.id, reassigned ? 'assigned' : 'edited', req.user!.id);
       res.json(withPermissions(req.user!, noteDTO(note.id)!));
     }),
   );
@@ -509,11 +727,27 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       if (!note) return;
       const done = req.body?.done !== false && String(req.body?.done) !== '0';
       setNoteDone(note.id, req.user!.id, done);
+      publishNoteChange(note.id, done ? 'done' : 'reopened', req.user!.id);
       res.json(withPermissions(req.user!, noteDTO(note.id)!));
     }),
   );
 
-  // Eliminar una nota (solo su autor o un admin).
+  // Marcar / desmarcar como importante (cualquiera del equipo con acceso:
+  // es un aviso para quien atienda a la persona desde cualquier línea).
+  app.patch(
+    '/inbox/notes/:id/pin',
+    ...auth,
+    ah((req, res) => {
+      const note = accessibleNote(req, res);
+      if (!note) return;
+      const pinned = parseFlag(req.body?.pinned);
+      setNotePinned(note.id, pinned, req.user!.id);
+      publishNoteChange(note.id, pinned ? 'pinned' : 'unpinned', req.user!.id);
+      res.json(withPermissions(req.user!, noteDTO(note.id)!));
+    }),
+  );
+
+  // Mandar una nota a la papelera (solo su autor o un admin). Se puede restaurar.
   app.delete(
     '/inbox/notes/:id',
     ...auth,
@@ -523,8 +757,36 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       if (!canEditNote(req.user!, note)) {
         return res.status(403).json({ error: 'Solo el autor de la nota puede eliminarla.' });
       }
-      deleteNote(note.id);
+      deleteNote(note.id, req.user!.id);
+      publishNoteChange(note.id, 'deleted', req.user!.id);
       res.json({ ok: true });
+    }),
+  );
+
+  // Restaurar una nota de la papelera (su autor o un admin).
+  app.post(
+    '/inbox/notes/:id/restore',
+    ...auth,
+    ah((req, res) => {
+      const note = accessibleNote(req, res, { allowDeleted: true });
+      if (!note) return;
+      if (!canEditNote(req.user!, note)) {
+        return res.status(403).json({ error: 'Solo el autor de la nota (o un admin) puede restaurarla.' });
+      }
+      restoreNote(note.id, req.user!.id);
+      publishNoteChange(note.id, 'restored', req.user!.id);
+      res.json(withPermissions(req.user!, noteDTO(note.id)!));
+    }),
+  );
+
+  // Historial de cambios de una nota (cualquiera del equipo con acceso).
+  app.get(
+    '/inbox/notes/:id/history',
+    ...auth,
+    ah((req, res) => {
+      const note = accessibleNote(req, res, { allowDeleted: true });
+      if (!note) return;
+      res.json(listNoteHistory(note.id));
     }),
   );
 
@@ -532,7 +794,7 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
     '/inbox/notes/:id/audio',
     ...auth,
     ah((req, res) => {
-      const note = accessibleNote(req, res);
+      const note = accessibleNote(req, res, { allowDeleted: true });
       if (!note) return;
       if (!note.audio_path || !fs.existsSync(note.audio_path)) return res.status(404).end();
       res.sendFile(path.resolve(note.audio_path), { headers: { 'Content-Type': 'audio/ogg' } });

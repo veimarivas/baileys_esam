@@ -117,6 +117,8 @@ export interface ContactRow {
   email: string | null;
   company: string | null;
   avatar_path: string | null;
+  /** Teléfono solo con dígitos (une a la persona entre líneas); lo mantiene un trigger. */
+  phone_key: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -132,6 +134,19 @@ export interface ContactNoteRow {
   /** Seguimiento completado (null = pendiente). */
   done_at: string | null;
   done_by: number | null;
+  /** 1 = importante: se fija arriba del chat en todas las líneas. */
+  pinned: number;
+  /** En la papelera desde (null = activa). */
+  deleted_at: string | null;
+  deleted_by: number | null;
+  /** Hora del recordatorio (HH:MM) del día `due_at`, o null. */
+  due_time: string | null;
+  /** Cuándo se avisó el recordatorio (null = pendiente de avisar). */
+  reminded_at: string | null;
+  /** Responsable de la tarea (null = sin asignar). */
+  assigned_to: number | null;
+  /** Mensaje del chat desde el que se registró (si se guardó desde una burbuja). */
+  source_message_id: number | null;
   updated_at: string | null;
   created_at: string;
 }

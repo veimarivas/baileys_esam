@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { config } from '../config.js';
+import { NOTES_MEDIA_DIR } from './media.js';
 import { logger } from '../logger.js';
 
 /**
@@ -137,6 +138,8 @@ export function runBackup(): Promise<BackupResult> {
       const dbTarget = path.join(tmp, 'baileys_esam.sqlite');
       await vacuumInto(path.resolve(config.dbPath), dbTarget);
       const authFiles = copyDir(path.resolve(config.authDir), path.join(tmp, 'baileys'));
+      // Notas de voz internas: no están en la base y no se pueden recuperar de WhatsApp.
+      copyDir(path.resolve(config.storageDir, NOTES_MEDIA_DIR), path.join(tmp, 'notes-media'));
       fs.rmSync(final, { recursive: true, force: true });
       fs.renameSync(tmp, final);
       prune();

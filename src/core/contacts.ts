@@ -1,4 +1,4 @@
-import { all, get, run } from '../db/index.js';
+import { all, foldText, get, run } from '../db/index.js';
 import { nowIso } from '../util/async.js';
 import { displayPhoneNumber } from './lid.js';
 import type { ContactNoteRow, ContactRow } from '../types.js';
@@ -112,14 +112,38 @@ export interface NoteTagLite {
 export interface ContactNoteWithAuthor extends ContactNoteRow {
   author_name: string | null;
   done_by_name: string | null;
+  assigned_name: string | null;
+  /** Línea (sesión) desde la que se registró la nota. */
+  session_id: string;
+  session_name: string | null;
+  session_phone: string | null;
   tags: NoteTagLite[];
 }
 
-/** Columnas comunes de una nota con su autor y quién la completó. */
-const NOTE_SELECT = `SELECT n.*, u.name AS author_name, d.name AS done_by_name
+/** Columnas comunes de una nota con su autor, quién la completó y su línea de origen. */
+const NOTE_SELECT = `SELECT n.*, u.name AS author_name, d.name AS done_by_name, a.name AS assigned_name,
+    ct.session_id AS session_id, s.name AS session_name, COALESCE(s.phone, s.expected_phone) AS session_phone
   FROM contact_notes n
+  JOIN contacts ct ON ct.id = n.contact_id
+  LEFT JOIN sessions s ON s.id = ct.session_id
   LEFT JOIN users u ON u.id = n.user_id
-  LEFT JOIN users d ON d.id = n.done_by`;
+  LEFT JOIN users d ON d.id = n.done_by
+  LEFT JOIN users a ON a.id = n.assigned_to`;
+
+/**
+ * Fichas de la misma persona en todas las líneas: la propia más las que
+ * comparten teléfono. Condición SQL sobre `alias.id` con un parámetro (el id).
+ */
+function samePersonClause(alias: string): string {
+  return `${alias}.id IN (
+    SELECT p.id FROM contacts me JOIN contacts p
+      ON p.id = me.id OR (me.phone_key IS NOT NULL AND p.phone_key = me.phone_key)
+     WHERE me.id = ?)`;
+}
+
+/** Orden de seguimiento: importantes pendientes, con fecha (la más próxima), sin fecha, resueltas. */
+const FOLLOWUP_ORDER = `(n.done_at IS NOT NULL), (n.pinned = 0), (n.due_at IS NULL), n.due_at ASC,
+  COALESCE(n.due_time, '99:99') ASC, COALESCE(n.done_at, n.created_at) DESC, n.id DESC`;
 
 /** Etiquetas de varias notas, agrupadas por id (una sola consulta). */
 function tagsByNote(noteIds: number[]): Map<number, NoteTagLite[]> {
@@ -161,16 +185,16 @@ export function noteDTO(id: number): ContactNoteWithAuthor | undefined {
 }
 
 /**
- * Notas de un contacto, en orden de seguimiento: primero las pendientes con
- * fecha (la más próxima arriba), luego las pendientes sin fecha y al final las
+ * Notas de una persona en todas las líneas (por teléfono), en orden de
+ * seguimiento: primero las importantes pendientes, luego las pendientes con
+ * fecha (la más próxima arriba), las pendientes sin fecha y al final las
  * completadas (la más reciente arriba).
  */
 export function listNotes(contactId: number, limit = 200): ContactNoteWithAuthor[] {
   const rows = all<ContactNoteWithAuthor>(
     `${NOTE_SELECT}
-      WHERE n.contact_id = ?
-      ORDER BY (n.done_at IS NOT NULL), (n.due_at IS NULL), n.due_at ASC,
-               COALESCE(n.done_at, n.created_at) DESC, n.id DESC
+      WHERE n.deleted_at IS NULL AND ${samePersonClause('ct')}
+      ORDER BY ${FOLLOWUP_ORDER}
       LIMIT ?`,
     contactId,
     limit,
@@ -178,17 +202,78 @@ export function listNotes(contactId: number, limit = 200): ContactNoteWithAuthor
   return withTags(rows);
 }
 
+export interface PersonNoteCounts {
+  /** Pendientes (sin completar). */
+  open: number;
+  /** Importantes pendientes. */
+  pinned: number;
+  /** Pendientes con fecha vencida. */
+  overdue: number;
+}
+
+/**
+ * Conteo de notas pendientes por ficha, sumando las de la misma persona en
+ * otras líneas (para el indicador de la lista de conversaciones).
+ */
+export function noteCountsFor(contactIds: number[]): Map<number, PersonNoteCounts> {
+  const map = new Map<number, PersonNoteCounts>();
+  const ids = [...new Set(contactIds.filter((id) => Number.isFinite(id) && id > 0))];
+  if (!ids.length) return map;
+  const rows = all<{ contact_id: number; open: number; pinned: number; overdue: number }>(
+    `SELECT me.id AS contact_id,
+            SUM(CASE WHEN n.done_at IS NULL THEN 1 ELSE 0 END) AS open,
+            SUM(CASE WHEN n.done_at IS NULL AND n.pinned = 1 THEN 1 ELSE 0 END) AS pinned,
+            SUM(CASE WHEN n.done_at IS NULL AND n.due_at < ${TODAY} THEN 1 ELSE 0 END) AS overdue
+       FROM contacts me
+       JOIN contacts p ON p.id = me.id OR (me.phone_key IS NOT NULL AND p.phone_key = me.phone_key)
+       JOIN contact_notes n ON n.contact_id = p.id AND n.deleted_at IS NULL
+      WHERE me.id IN (${ids.map(() => '?').join(',')})
+      GROUP BY me.id`,
+    ...ids,
+  );
+  for (const r of rows) {
+    map.set(r.contact_id, { open: Number(r.open ?? 0), pinned: Number(r.pinned ?? 0), overdue: Number(r.overdue ?? 0) });
+  }
+  return map;
+}
+
+/**
+ * Chats (línea + chat) de la persona dueña de una nota: la ficha de la nota y
+ * las de otras líneas con el mismo teléfono. Se usa para avisar en vivo.
+ */
+export function personChatsForNote(noteId: number): Array<{ session_id: string; chat_id: string }> {
+  return all<{ session_id: string; chat_id: string }>(
+    `SELECT p.session_id, p.chat_id
+       FROM contact_notes n
+       JOIN contacts me ON me.id = n.contact_id
+       JOIN contacts p ON p.id = me.id OR (me.phone_key IS NOT NULL AND p.phone_key = me.phone_key)
+      WHERE n.id = ?`,
+    noteId,
+  );
+}
+
 export function getNote(id: number): ContactNoteRow | undefined {
   return get<ContactNoteRow>('SELECT * FROM contact_notes WHERE id = ?', id);
 }
 
-/** Sesión a la que pertenece una nota (para validar el alcance del usuario). */
-export function noteSessionId(id: number): string | null {
-  return (
-    get<{ session_id: string }>(
-      'SELECT ct.session_id FROM contact_notes n JOIN contacts ct ON ct.id = n.contact_id WHERE n.id = ?',
-      id,
-    )?.session_id ?? null
+/**
+ * ¿La nota es visible dentro de estas sesiones? Lo es si se registró en una
+ * de ellas o si la persona tiene ficha en alguna (la misma persona atendida
+ * desde otra línea). `null` = sin restricción.
+ */
+export function noteVisibleIn(id: number, sessionIds: string[] | null, viewerId: number | null = null): boolean {
+  if (sessionIds === null) return !!getNote(id);
+  if (viewerId && getNote(id)?.assigned_to === viewerId) return true;
+  if (!sessionIds.length) return false;
+  const inList = sessionIds.map(() => '?').join(',');
+  return !!get(
+    `SELECT 1 FROM contact_notes n JOIN contacts ct ON ct.id = n.contact_id
+      WHERE n.id = ? AND (ct.session_id IN (${inList})
+         OR (ct.phone_key IS NOT NULL AND EXISTS (
+              SELECT 1 FROM contacts o WHERE o.phone_key = ct.phone_key AND o.session_id IN (${inList}))))`,
+    id,
+    ...sessionIds,
+    ...sessionIds,
   );
 }
 
@@ -199,50 +284,298 @@ export function addNote(
   audioPath: string | null,
   dueAt: string | null = null,
   tagIds: number[] = [],
+  pinned = false,
+  extra: { assignedTo?: number | null; sourceMessageId?: number | null; dueTime?: string | null } = {},
 ): ContactNoteWithAuthor {
   const created = run(
-    `INSERT INTO contact_notes (contact_id, user_id, note_text, audio_path, due_at, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO contact_notes (contact_id, user_id, note_text, audio_path, due_at, due_time, pinned, assigned_to, source_message_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     contactId,
     userId,
     noteText,
     audioPath,
     dueAt || null,
+    dueAt ? extra.dueTime || null : null,
+    pinned ? 1 : 0,
+    extra.assignedTo ?? null,
+    extra.sourceMessageId ?? null,
     nowIso(),
   );
   setNoteTags(created.lastInsertRowid, tagIds);
+  if (extra.assignedTo && extra.assignedTo !== userId) {
+    logNoteEvent(created.lastInsertRowid, userId, 'assigned', undefined, userName(extra.assignedTo));
+  }
   return noteDTO(created.lastInsertRowid)!;
 }
 
 export function updateNote(
   noteId: number,
-  patch: { noteText?: string | null; dueAt?: string | null; tagIds?: number[] },
+  patch: {
+    noteText?: string | null;
+    dueAt?: string | null;
+    dueTime?: string | null;
+    tagIds?: number[];
+    pinned?: boolean;
+    assignedTo?: number | null;
+  },
+  userId: number | null = null,
 ): void {
   const current = getNote(noteId);
   if (!current) throw new Error('Nota no encontrada.');
   const text = patch.noteText !== undefined ? patch.noteText : current.note_text;
   const due = patch.dueAt !== undefined ? patch.dueAt || null : current.due_at;
+  const pinned = patch.pinned !== undefined ? (patch.pinned ? 1 : 0) : current.pinned;
+  const dueTime = due ? (patch.dueTime !== undefined ? patch.dueTime || null : current.due_time) : null;
   if (!text && !current.audio_path) throw new Error('La nota no puede quedar vacía.');
-  run('UPDATE contact_notes SET note_text = ?, due_at = ?, updated_at = ? WHERE id = ?', text, due, nowIso(), noteId);
+  const prevTags = tagNames(noteId);
+  const tagsChanged = patch.tagIds !== undefined && !sameIds(patch.tagIds, tagIdsOf(noteId));
+  if (text !== current.note_text || due !== current.due_at || tagsChanged) {
+    logNoteEvent(noteId, userId, 'edited', { text: current.note_text, due: current.due_at, tags: prevTags });
+  }
+  if (pinned !== current.pinned) logNoteEvent(noteId, userId, pinned ? 'pinned' : 'unpinned');
+  const assignedTo = patch.assignedTo !== undefined ? patch.assignedTo : current.assigned_to;
+  if (assignedTo !== current.assigned_to) {
+    logNoteEvent(noteId, userId, 'assigned', undefined, assignedTo ? userName(assignedTo) : null);
+  }
+  run(
+    `UPDATE contact_notes SET note_text = ?, due_at = ?, due_time = ?, pinned = ?, assigned_to = ?, updated_at = ?,
+            reminded_at = CASE WHEN due_at IS ? AND due_time IS ? THEN reminded_at ELSE NULL END
+      WHERE id = ?`,
+    text,
+    due,
+    dueTime,
+    pinned,
+    assignedTo,
+    nowIso(),
+    due,
+    dueTime,
+    noteId,
+  );
   if (patch.tagIds) setNoteTags(noteId, patch.tagIds);
+}
+
+/** Pospone el recordatorio: nueva fecha y hora, y vuelve a avisar. */
+export function snoozeNote(noteId: number, dueAt: string, dueTime: string, userId: number | null = null): void {
+  const current = getNote(noteId);
+  if (!current) return;
+  logNoteEvent(noteId, userId, 'snoozed', undefined, `${dueAt} ${dueTime}`);
+  run('UPDATE contact_notes SET due_at = ?, due_time = ?, reminded_at = NULL WHERE id = ?', dueAt, dueTime, noteId);
+}
+
+/** Marca o desmarca una nota como importante (fijada en el chat). */
+export function setNotePinned(noteId: number, pinned: boolean, userId: number | null = null): void {
+  const changed = run('UPDATE contact_notes SET pinned = ? WHERE id = ? AND pinned <> ?', pinned ? 1 : 0, noteId, pinned ? 1 : 0);
+  if (changed.changes) logNoteEvent(noteId, userId, pinned ? 'pinned' : 'unpinned');
 }
 
 /** Marca el seguimiento de una nota como completado (o lo reabre). */
 export function setNoteDone(noteId: number, userId: number | null, done: boolean): void {
-  run(
-    'UPDATE contact_notes SET done_at = ?, done_by = ? WHERE id = ?',
+  const changed = run(
+    `UPDATE contact_notes SET done_at = ?, done_by = ?
+      WHERE id = ? AND (done_at IS NULL) = ?`,
     done ? nowIso() : null,
     done ? userId : null,
     noteId,
+    done ? 1 : 0,
+  );
+  if (changed.changes) logNoteEvent(noteId, userId, done ? 'done' : 'reopened');
+}
+
+/**
+ * Manda la nota a la papelera (no se borra: conserva texto, etiquetas e
+ * historial y se puede restaurar desde /notes).
+ */
+export function deleteNote(id: number, userId: number | null = null): void {
+  const changed = run(
+    'UPDATE contact_notes SET deleted_at = ?, deleted_by = ? WHERE id = ? AND deleted_at IS NULL',
+    nowIso(),
+    userId,
+    id,
+  );
+  if (changed.changes) logNoteEvent(id, userId, 'deleted');
+}
+
+/** Saca la nota de la papelera. */
+export function restoreNote(id: number, userId: number | null = null): void {
+  const changed = run(
+    'UPDATE contact_notes SET deleted_at = NULL, deleted_by = NULL WHERE id = ? AND deleted_at IS NOT NULL',
+    id,
+  );
+  if (changed.changes) logNoteEvent(id, userId, 'restored');
+}
+
+// ── Historial de cambios ─────────────────────────────────────────────────────
+
+export type NoteAction =
+  | 'edited'
+  | 'done'
+  | 'reopened'
+  | 'pinned'
+  | 'unpinned'
+  | 'deleted'
+  | 'restored'
+  | 'assigned'
+  | 'snoozed'
+  | 'template';
+
+export interface NoteHistoryEntry {
+  id: number;
+  action: NoteAction;
+  user_name: string | null;
+  /** Solo en `edited`: cómo estaba la nota antes del cambio. */
+  prev_text: string | null;
+  prev_due_at: string | null;
+  prev_tags: string[];
+  /** En `assigned`: nombre del nuevo responsable (null = quedó sin asignar). */
+  detail: string | null;
+  created_at: string;
+}
+
+function userName(id: number): string | null {
+  return get<{ name: string | null }>('SELECT name FROM users WHERE id = ?', id)?.name ?? null;
+}
+
+function tagIdsOf(noteId: number): number[] {
+  return all<{ tag_id: number }>('SELECT tag_id FROM contact_note_tags WHERE note_id = ?', noteId).map((r) => r.tag_id);
+}
+
+function tagNames(noteId: number): string[] {
+  return all<{ name: string }>(
+    `SELECT t.name FROM contact_note_tags nt JOIN note_tags t ON t.id = nt.tag_id
+      WHERE nt.note_id = ? ORDER BY t.name COLLATE NOCASE`,
+    noteId,
+  ).map((r) => r.name);
+}
+
+function sameIds(a: number[], b: number[]): boolean {
+  const x = [...new Set(a.map(Number))].sort();
+  const y = [...new Set(b.map(Number))].sort();
+  return x.length === y.length && x.every((v, i) => v === y[i]);
+}
+
+function logNoteEvent(
+  noteId: number,
+  userId: number | null,
+  action: NoteAction,
+  prev?: { text: string | null; due: string | null; tags: string[] },
+  detail: string | null = null,
+): void {
+  run(
+    `INSERT INTO contact_note_history (note_id, user_id, action, prev_text, prev_due_at, prev_tags, detail, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    noteId,
+    userId,
+    action,
+    prev?.text ?? null,
+    prev?.due ?? null,
+    prev ? JSON.stringify(prev.tags) : null,
+    detail,
+    nowIso(),
   );
 }
 
-export function deleteNote(id: number): void {
-  run('DELETE FROM contact_note_tags WHERE note_id = ?', id);
-  run('DELETE FROM contact_notes WHERE id = ?', id);
+/** Deja constancia de que la nota nació de una plantilla. */
+export function markFromTemplate(noteId: number, userId: number | null, templateName: string): void {
+  logNoteEvent(noteId, userId, 'template', undefined, templateName);
+}
+
+export interface PersonLine {
+  contact_id: number;
+  session_id: string;
+  session_name: string | null;
+  session_phone: string | null;
+  chat_id: string;
+  name: string | null;
+  email: string | null;
+  company: string | null;
+  programa: string | null;
+  status: string | null;
+  last_message_at: string | null;
+  last_direction: string | null;
+  unread_count: number | null;
+  first_at: string | null;
+}
+
+/**
+ * La persona en todas las líneas: una fila por ficha con el mismo teléfono,
+ * con la actividad de su conversación (sin el texto de los mensajes).
+ */
+export function personLines(contactId: number): PersonLine[] {
+  return all<PersonLine>(
+    `SELECT p.id AS contact_id, p.session_id, s.name AS session_name, COALESCE(s.phone, s.expected_phone) AS session_phone,
+            p.chat_id, p.name, p.email, p.company, c.programa, c.status, c.last_message_at, c.last_direction,
+            c.unread_count, c.created_at AS first_at
+       FROM contacts me
+       JOIN contacts p ON p.id = me.id OR (me.phone_key IS NOT NULL AND p.phone_key = me.phone_key)
+       LEFT JOIN conversations c ON c.session_id = p.session_id AND c.chat_id = p.chat_id
+       LEFT JOIN sessions s ON s.id = p.session_id
+      WHERE me.id = ?
+      ORDER BY COALESCE(c.last_message_at, '') DESC`,
+    contactId,
+  );
+}
+
+export interface MyDay {
+  overdue: number;
+  today: number;
+  /** Tareas de hoy, con hora primero (hasta 6). */
+  items: Array<{ id: number; note_text: string | null; due_at: string; due_time: string | null; contact: string; chat_id: string; session_id: string }>;
+}
+
+/** Resumen del día de un usuario: sus tareas (asignadas o propias sin responsable). */
+export function myDay(userId: number): MyDay {
+  const mine = '(n.assigned_to = ? OR (n.assigned_to IS NULL AND n.user_id = ?)) AND n.done_at IS NULL AND n.deleted_at IS NULL';
+  const counts = get<{ overdue: number | null; today: number | null }>(
+    `SELECT SUM(CASE WHEN n.due_at < ${TODAY} THEN 1 ELSE 0 END) AS overdue,
+            SUM(CASE WHEN n.due_at = ${TODAY} THEN 1 ELSE 0 END) AS today
+       FROM contact_notes n WHERE ${mine}`,
+    userId,
+    userId,
+  );
+  const items = all<MyDay['items'][number]>(
+    `SELECT n.id, n.note_text, n.due_at, n.due_time, COALESCE(ct.name, ct.phone, ct.chat_id) AS contact,
+            ct.chat_id, ct.session_id
+       FROM contact_notes n JOIN contacts ct ON ct.id = n.contact_id
+      WHERE ${mine} AND n.due_at <= ${TODAY}
+      ORDER BY n.due_at ASC, COALESCE(n.due_time, '99:99') ASC
+      LIMIT 6`,
+    userId,
+    userId,
+  );
+  return { overdue: Number(counts?.overdue ?? 0), today: Number(counts?.today ?? 0), items };
+}
+
+/** Personas a las que se puede asignar una tarea (de cualquier línea). */
+export function noteAssignees(): Array<{ id: number; name: string; area: string | null }> {
+  return all<{ id: number; name: string; area: string | null }>(
+    `SELECT id, COALESCE(NULLIF(name, ''), username, email) AS name, esam_area AS area
+       FROM users
+      WHERE esam_autorizado = 1 OR source = 'local'
+      ORDER BY name COLLATE NOCASE`,
+  );
+}
+
+/** Historial de una nota, del más antiguo al más reciente (la creación la da la propia nota). */
+export function listNoteHistory(noteId: number): NoteHistoryEntry[] {
+  return all<Omit<NoteHistoryEntry, 'prev_tags'> & { prev_tags: string | null }>(
+    `SELECT h.id, h.action, u.name AS user_name, h.prev_text, h.prev_due_at, h.prev_tags, h.detail, h.created_at
+       FROM contact_note_history h LEFT JOIN users u ON u.id = h.user_id
+      WHERE h.note_id = ?
+      ORDER BY h.created_at ASC, h.id ASC`,
+    noteId,
+  ).map((r) => {
+    let tags: string[] = [];
+    try {
+      tags = r.prev_tags ? (JSON.parse(r.prev_tags) as string[]) : [];
+    } catch {
+      tags = [];
+    }
+    return { ...r, prev_tags: tags };
+  });
 }
 
 export interface GlobalNote extends ContactNoteWithAuthor {
+  deleted_by_name: string | null;
   contact_name: string | null;
   contact_phone: string | null;
   chat_id: string;
@@ -252,9 +585,10 @@ export interface GlobalNote extends ContactNoteWithAuthor {
 /**
  * Estado de seguimiento para filtrar:
  * pending = sin completar · overdue = vencidas · today = vencen hoy ·
- * week = vencen en los próximos 7 días · done = completadas · all = todas.
+ * week = vencen en los próximos 7 días · pinned = importantes pendientes ·
+ * done = completadas · all = todas · trash = en la papelera.
  */
-export type NoteStatus = 'pending' | 'overdue' | 'today' | 'week' | 'done' | 'all';
+export type NoteStatus = 'pending' | 'overdue' | 'today' | 'week' | 'pinned' | 'done' | 'all' | 'trash';
 
 const TODAY = "date('now','localtime')";
 
@@ -268,6 +602,8 @@ function statusClause(status: NoteStatus): string | null {
       return `n.done_at IS NULL AND n.due_at = ${TODAY}`;
     case 'week':
       return `n.done_at IS NULL AND n.due_at > ${TODAY} AND n.due_at <= date('now','localtime','+7 day')`;
+    case 'pinned':
+      return 'n.done_at IS NULL AND n.pinned = 1';
     case 'done':
       return 'n.done_at IS NOT NULL';
     default:
@@ -275,12 +611,31 @@ function statusClause(status: NoteStatus): string | null {
   }
 }
 
-/** Condición de alcance: `null` = sin restricción; `[]` = no ve ninguna sesión. */
-function scopeClause(sessionIds: string[] | null | undefined, where: string[], params: unknown[]): boolean {
+/**
+ * Condición de alcance: `null` = sin restricción; `[]` = no ve ninguna sesión.
+ * Incluye las notas de otras líneas sobre personas que también tienen ficha en
+ * las sesiones del usuario (el detalle es de la persona, no del número).
+ */
+function scopeClause(
+  sessionIds: string[] | null | undefined,
+  where: string[],
+  params: unknown[],
+  viewerId: number | null = null,
+): boolean {
   if (sessionIds === null || sessionIds === undefined) return true;
-  if (!sessionIds.length) return false;
-  where.push(`ct.session_id IN (${sessionIds.map(() => '?').join(',')})`);
-  params.push(...sessionIds);
+  // Las tareas asignadas al usuario se ven siempre, sean de la línea que sean.
+  const mine = viewerId ? ' OR n.assigned_to = ?' : '';
+  if (!sessionIds.length) {
+    if (!viewerId) return false;
+    where.push('n.assigned_to = ?');
+    params.push(viewerId);
+    return true;
+  }
+  const inList = sessionIds.map(() => '?').join(',');
+  where.push(`(ct.session_id IN (${inList}) OR (ct.phone_key IS NOT NULL AND EXISTS (
+    SELECT 1 FROM contacts o WHERE o.phone_key = ct.phone_key AND o.session_id IN (${inList})))${mine})`);
+  params.push(...sessionIds, ...sessionIds);
+  if (viewerId) params.push(viewerId);
   return true;
 }
 
@@ -293,41 +648,63 @@ export function listAllNotes(opts: {
   authorId?: number | null;
   /** `null` = todas las sesiones (admin local); `[]` = ninguna. */
   sessionIds?: string[] | null;
+  /** Quién consulta: ve además las tareas que tiene asignadas. */
+  viewerId?: number | null;
+  /** Solo tareas asignadas a este usuario. */
+  assignedTo?: number | null;
   orderBy?: 'created' | 'due';
   limit?: number;
 } = {}): GlobalNote[] {
   const where: string[] = [];
   const params: unknown[] = [];
-  if (!scopeClause(opts.sessionIds, where, params)) return [];
+  if (!scopeClause(opts.sessionIds, where, params, opts.viewerId ?? null)) return [];
+  if (opts.assignedTo) {
+    where.push('n.assigned_to = ?');
+    params.push(opts.assignedTo);
+  }
   if (opts.tagId) {
     where.push('EXISTS (SELECT 1 FROM contact_note_tags nt WHERE nt.note_id = n.id AND nt.tag_id = ?)');
     params.push(opts.tagId);
   }
-  const st = statusClause(opts.status ?? 'all');
+  const status = opts.status ?? 'all';
+  where.push(status === 'trash' ? 'n.deleted_at IS NOT NULL' : 'n.deleted_at IS NULL');
+  const st = statusClause(status);
   if (st) where.push(st);
   if (opts.authorId) {
     where.push('n.user_id = ?');
     params.push(opts.authorId);
   }
   if (opts.q) {
-    where.push("(COALESCE(n.note_text,'') LIKE ? OR COALESCE(ct.name,'') LIKE ? OR COALESCE(ct.phone,'') LIKE ? OR ct.chat_id LIKE ?)");
-    const like = `%${opts.q}%`;
-    params.push(like, like, like, like);
+    // Sin acentos ni mayúsculas; también por responsable y etiqueta. `%` y `_`
+    // del texto buscado se toman literales.
+    const like = `%${foldText(opts.q).replace(/[!%_]/g, (c) => '!' + c)}%`;
+    const f = (col: string) => `fold(${col}) LIKE ? ESCAPE '!'`;
+    where.push(`(${f("COALESCE(n.note_text,'')")} OR ${f("COALESCE(ct.name,'')")} OR ${f("COALESCE(ct.phone,'')")}
+      OR ${f('ct.chat_id')} OR ${f("COALESCE(a.name,'')")}
+      OR EXISTS (SELECT 1 FROM contact_note_tags qt JOIN note_tags t ON t.id = qt.tag_id
+                  WHERE qt.note_id = n.id AND ${f('t.name')}))`);
+    params.push(like, like, like, like, like, like);
   }
 
   const limit = Math.min(Math.max(opts.limit ?? 500, 1), 1000);
   // Por fecha límite: pendientes con fecha (vencidas primero), luego sin fecha,
   // luego completadas. Por registro: la más nueva primero.
-  const order = opts.orderBy === 'due'
-    ? 'ORDER BY (n.done_at IS NOT NULL), (n.due_at IS NULL), n.due_at ASC, n.created_at DESC'
-    : 'ORDER BY n.created_at DESC, n.id DESC';
+  const order = status === 'trash'
+    ? 'ORDER BY n.deleted_at DESC, n.id DESC'
+    : opts.orderBy === 'due'
+      ? `ORDER BY ${FOLLOWUP_ORDER}`
+      : 'ORDER BY n.created_at DESC, n.id DESC';
   const rows = all<GlobalNote>(
-    `SELECT n.*, u.name AS author_name, d.name AS done_by_name,
-            ct.name AS contact_name, ct.phone AS contact_phone, ct.chat_id AS chat_id, ct.session_id AS session_id
+    `SELECT n.*, u.name AS author_name, d.name AS done_by_name, x.name AS deleted_by_name, a.name AS assigned_name,
+            ct.name AS contact_name, ct.phone AS contact_phone, ct.chat_id AS chat_id, ct.session_id AS session_id,
+            s.name AS session_name, COALESCE(s.phone, s.expected_phone) AS session_phone
        FROM contact_notes n
        LEFT JOIN users u ON u.id = n.user_id
        LEFT JOIN users d ON d.id = n.done_by
+       LEFT JOIN users x ON x.id = n.deleted_by
+       LEFT JOIN users a ON a.id = n.assigned_to
        JOIN contacts ct ON ct.id = n.contact_id
+       LEFT JOIN sessions s ON s.id = ct.session_id
       ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
       ${order}
       LIMIT ?`,
@@ -342,24 +719,37 @@ export interface NoteStats {
   overdue: number;
   today: number;
   week: number;
+  pinned: number;
   done: number;
   all: number;
+  trash: number;
 }
 
 /** Conteos por estado de seguimiento (para los indicadores de /notes). */
-export function noteStats(opts: { sessionIds?: string[] | null; authorId?: number | null } = {}): NoteStats {
+export function noteStats(opts: {
+  sessionIds?: string[] | null;
+  authorId?: number | null;
+  viewerId?: number | null;
+  assignedTo?: number | null;
+} = {}): NoteStats {
   const where: string[] = [];
   const params: unknown[] = [];
-  const empty: NoteStats = { pending: 0, overdue: 0, today: 0, week: 0, done: 0, all: 0 };
-  if (!scopeClause(opts.sessionIds, where, params)) return empty;
+  const empty: NoteStats = { pending: 0, overdue: 0, today: 0, week: 0, pinned: 0, done: 0, all: 0, trash: 0 };
+  if (!scopeClause(opts.sessionIds, where, params, opts.viewerId ?? null)) return empty;
+  if (opts.assignedTo) {
+    where.push('n.assigned_to = ?');
+    params.push(opts.assignedTo);
+  }
   if (opts.authorId) {
     where.push('n.user_id = ?');
     params.push(opts.authorId);
   }
-  const sum = (status: NoteStatus) => `SUM(CASE WHEN ${statusClause(status)} THEN 1 ELSE 0 END)`;
+  const sum = (status: NoteStatus) =>
+    `SUM(CASE WHEN n.deleted_at IS NULL${statusClause(status) ? ` AND ${statusClause(status)}` : ''} THEN 1 ELSE 0 END)`;
   const row = get<Record<keyof NoteStats, number | null>>(
     `SELECT ${sum('pending')} AS pending, ${sum('overdue')} AS overdue, ${sum('today')} AS today,
-            ${sum('week')} AS week, ${sum('done')} AS done, COUNT(*) AS "all"
+            ${sum('week')} AS week, ${sum('pinned')} AS pinned, ${sum('done')} AS done, ${sum('all')} AS "all",
+            SUM(CASE WHEN n.deleted_at IS NOT NULL THEN 1 ELSE 0 END) AS trash
        FROM contact_notes n JOIN contacts ct ON ct.id = n.contact_id
       ${where.length ? 'WHERE ' + where.join(' AND ') : ''}`,
     ...params,
@@ -369,7 +759,9 @@ export function noteStats(opts: { sessionIds?: string[] | null; authorId?: numbe
     overdue: Number(row?.overdue ?? 0),
     today: Number(row?.today ?? 0),
     week: Number(row?.week ?? 0),
+    pinned: Number(row?.pinned ?? 0),
     done: Number(row?.done ?? 0),
     all: Number(row?.all ?? 0),
+    trash: Number(row?.trash ?? 0),
   };
 }

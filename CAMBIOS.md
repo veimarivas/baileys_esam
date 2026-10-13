@@ -780,6 +780,302 @@ los seguimientos con fecha no se pierdan.
 
 ---
 
+## 18. Sesión "conectada pero sorda" tras apagar el equipo (2026-10-07)
+
+**Síntoma**: después de apagar y encender el equipo, la sesión figuraba conectada
+pero las conversaciones no se actualizaban; solo se arreglaba desvinculando y
+volviendo a vincular. En la base: ningún mensaje guardado entre el arranque y la
+re-vinculación, sin errores en el registro.
+
+**Causa (defectos de Baileys 6.7.24)**:
+
+- Cada mensaje entrante se procesa dentro de `processingMutex`, que **no tiene
+  tiempo máximo** (declara un `taskTimeout` que nunca usa). Si una tarea se cuelga
+  —p. ej. la descarga de un bloque de historial o la sincronización del estado de
+  la app al reconectar— **todos** los mensajes siguientes quedan esperando para
+  siempre: no se descifran, no se guardan y no hay error.
+- El búfer de eventos (`ev.buffer()`) solo se vacía cuando lo decide su máquina de
+  estados de sincronización inicial, también sin límite de tiempo.
+- Re-vincular "lo arreglaba" porque crea un socket nuevo con un mutex nuevo.
+
+**Corrección** (`src/baileys/session.ts`):
+
+- **Vigilante del procesamiento**: cada tarea del mutex tiene 90 s como máximo; si
+  se cuelga, la cola sigue y los mensajes siguientes se procesan. Dos bloqueos en
+  15 minutos ⇒ se reabre la conexión automáticamente, **sin desvincular**.
+- **Vigilante del búfer**: si queda retenido más de 60 s, se libera.
+- **Reconexión segura**: `connect()` no admite llamadas simultáneas y los eventos
+  de un socket viejo se ignoran; `stop()` suelta el socket antes de cerrarlo (antes
+  su evento de cierre disparaba la reconexión automática y podía abrir **dos
+  sockets** con las mismas credenciales).
+- Prueba con el mutex y el búfer reales de Baileys: sin vigilante la cola queda
+  bloqueada (reproduce el defecto); con vigilante el mensaje siguiente se procesa,
+  dos bloqueos reabren la conexión, el búfer retenido se libera y el cierre de un
+  socket viejo no abre otro.
+
+**Panel → Conexión**:
+
+- Botón **Reconectar**: reabre la conexión con las mismas credenciales (no pide
+  QR); es la primera acción ante "no se actualizan las conversaciones".
+- **Desvincular** abre un **modal de confirmación** que explica las consecuencias
+  (deja de recibir/enviar, hay que escanear el QR, el historial no se borra) y
+  sugiere Reconectar. Los botones se deshabilitan al enviar (evita doble envío).
+
+---
+
+## 19. No leídos sincronizados con el teléfono y nuevo Seguimiento/Reportes (2026-10-07)
+
+### 19.1 — No leídos
+
+- **Causa**: cada mensaje entrante del historial sumaba +1 a no leídos (aunque ya
+  estuviera leído en el teléfono): 621 conversaciones sumaban 45.888 no leídos falsos
+  y el panel enviaba tildes azules por mensajes viejos al abrirlos. Además se
+  ignoraban las lecturas hechas en el teléfono.
+- **`session.ts`**: recibos `read-self` (individuales en `messages.update`, grupos en
+  `message-receipt.update`) y contador de no leídos de WhatsApp (`chats.update`,
+  `chats.upsert` y los `chats` del historial) se emiten como `read-self` / `chat-unread`.
+- **`manager.ts`**: `onReadSelf` marca leído todo lo anterior al último mensaje leído
+  y recalcula el contador; `onChatUnread` aplica el valor del teléfono (0 = leído,
+  −1 = marcado como no leído, N = los N más recientes). El historial ya no suma no
+  leídos y sus entrantes se guardan como leídos. Todo pasa por la cola de entrada
+  (después de guardar los mensajes) y avisa al panel por SSE.
+- **Reparación única** (`unread_repair_v1`): se consideran leídos los mensajes llegados
+  por historial y los anteriores a la última respuesta. Resultado: 45.888 → 0.
+- En un mensaje propio del historial, el nombre de perfil (el del dueño) ya no
+  renombra el chat.
+
+### 19.2 — `/monitoring` → **Seguimiento** (operación del día)
+
+- Período con atajos (Hoy, Ayer, 7 días, 30 días, Este mes) o rango libre, y filtro
+  por número. Se actualiza solo cada minuto (si no se está escribiendo en un filtro).
+- Indicadores: esperando respuesta, mediana de 1.ª respuesta, % respondido en ≤ 1 h,
+  recibidos, chats atendidos y seguimientos de notas vencidos o para hoy.
+- **Esperando respuesta**: chats cuyo último mensaje es del contacto, ordenados por
+  espera, con tiempo coloreado (≤ 15 min, ≤ 1 h, más), último mensaje, no leídos y
+  notas abiertas; enlace directo al chat.
+- Seguimientos de notas vencidos y de hoy; mensajes por hora; respuestas por persona
+  (panel por usuario y "desde el teléfono"); envíos por usuario; estado de cada número
+  (conexión, salud, último entrante, recibidos/enviados hoy) y avisos de números caídos
+  o sin mensajes entrantes desde hace horas.
+
+### 19.3 — `/reports` (análisis del período)
+
+- Mismo selector de período y número, más los filtros de envíos (programa, usuario,
+  área, tipo). Exportación **CSV** (desempeño por usuario y serie diaria).
+- **Atención**: recibidos, chats atendidos, contactos nuevos (primer mensaje en el
+  período), mediana/promedio de 1.ª respuesta, % ≤ 1 h, turnos sin respuesta; gráficos
+  diarios; **desempeño por usuario** (respuestas, chats, tiempo, notas registradas,
+  resueltas y vencidas).
+- **Seguimiento con notas** y **envíos** (entregabilidad solo de lo enviado por el
+  sistema: lo escrito desde el teléfono no tiene acuse en el gateway), por origen y
+  por programa.
+- `src/core/followup.ts` (métricas, ~20–50 ms con 108 k mensajes) y
+  `src/panel/followup-views.ts` (vistas); gráficos en `public/app.js`
+  (`initFollowupCharts`) con la paleta categórica validada (azul/naranja) y modo oscuro.
+
+## 20. Notas y tareas compartidas entre todas las líneas (2026-10-10)
+
+Antes una nota quedaba atada a la ficha `(sesión, chat)`: si la persona escribía a otro
+número del sistema, quien la atendía no veía lo registrado. Ahora el detalle es de la
+**persona**, no del número.
+
+- **`contacts.phone_key`** (teléfono solo con dígitos, con índice): lo mantienen los
+  triggers `contacts_phone_key_ai/au` y se completa una vez al migrar
+  (`setupContactPhoneKey`, `src/db/index.ts`).
+- **`listNotes`** devuelve las notas de todas las fichas con el mismo teléfono, con la
+  línea de origen (`session_name`, `session_phone`). `noteVisibleIn` permite completar
+  o fijar una nota de otra línea si la persona también se atiende en una sesión del
+  usuario. `/notes` y sus indicadores aplican el mismo alcance.
+- **Importantes** (`contact_notes.pinned`): se marcan desde el compositor o con el
+  pin de la tarjeta (`PATCH /inbox/notes/:id/pin`, cualquiera del equipo). Van primero
+  en la ficha y tienen su indicador y su grupo en `/notes`.
+- **Aviso bajo la cabecera del chat**: muestra la nota importante (o la tarea vencida
+  o la de hoy) con su autor, cuántas más hay y un botón «Ver notas».
+- **Lista de conversaciones**: un indicador con las notas pendientes de la persona
+  (ámbar si hay importantes, rojo si hay vencidas). `ConversationDTO.notes`, calculado
+  en una sola consulta (`noteCountsFor`).
+- Textos de la interfaz: «Notas y tareas», la línea de origen en cada tarjeta, un aviso
+  cuando hay notas de otra línea y mensajes de confirmación más claros.
+- `followup.ts`: la columna «Notas» del seguimiento también suma las de otras líneas.
+- Límite: un chat `@lid` sin número conocido mantiene sus notas propias hasta que
+  WhatsApp comparta el número; desde ese momento se unen solas.
+
+## 21. Notas en vivo, papelera, historial, responsables y unificación LID por línea (2026-10-11)
+
+- **En vivo**: cada cambio de una nota publica el evento SSE `note` con las líneas y los
+  chats de la persona (sin el texto). El chat abierto recarga sus notas, la lista
+  actualiza sus indicadores y `/notes` se refresca solo. `/events` filtra por línea y
+  no revela chats de líneas ajenas.
+- **Papelera**: eliminar una nota la oculta (`contact_notes.deleted_at/deleted_by`) en
+  lugar de borrarla. Aparece la acción «Deshacer» en el aviso, el botón «Papelera» en
+  `/notes` y `POST /inbox/notes/:id/restore` (autor o admin). Las notas en la papelera
+  no cuentan en indicadores, etiquetas ni seguimiento.
+- **Historial** (`contact_note_history`): registra ediciones (con el texto, la fecha y
+  las etiquetas anteriores), completar/reabrir, fijar, asignar, eliminar y restaurar.
+  Se consulta desde el ícono de reloj de cada tarjeta (`GET /inbox/notes/:id/history`).
+- **Responsable** (`contact_notes.assigned_to`): se elige al registrar o editar, y
+  puede ser de otra línea. El responsable ve la tarea aunque la persona no esté en su
+  línea, recibe el aviso «Te asignaron una tarea» y tiene el filtro «Asignadas a mí»
+  en `/notes`. La tarjeta muestra «Para vos» o el nombre del responsable.
+- **Guardar un mensaje como nota**: la acción nueva en cada burbuja abre el compositor
+  con el mensaje citado y enlazado (`source_message_id`). La tarjeta trae «Ver mensaje»,
+  que lleva a esa burbuja.
+- **`migrateLidChat` por línea** (`src/core/lid.ts`): antes, al conocerse el número de
+  un `@lid`, las consultas ignoraban la sesión. Podía borrar la conversación de otra
+  línea, sumarle los no leídos ajenos y apuntar las conversaciones de todas las líneas
+  a una sola ficha. Ahora fusiona cada línea por separado dentro de un `SAVEPOINT`.
+
+## 22. Notas de voz permanentes, unión por número local y búsqueda sin acentos (2026-10-11)
+
+- **Las notas de voz ya no se borran a los 30 días.** Se guardaban en `data/media/in/`
+  junto con los adjuntos de los chats, y `cleanupMedia` las eliminaba con
+  `MEDIA_RETENTION_DAYS`. Ahora van a `data/media/notes/` (`storeNoteAudio`), una
+  carpeta excluida de la retención. La limpieza también respeta cualquier archivo que
+  use una nota, aunque esté en otra carpeta. No había notas de voz guardadas, así que
+  no se perdió nada.
+- **Respaldo diario**: incluye `data/media/notes/` (en `notes-media/`), porque esas
+  grabaciones no están en la base ni se pueden recuperar de WhatsApp.
+- **`phone_key` v2**: aplica la misma regla que `normalizePhone`. Un número local de 8
+  dígitos lleva `591` delante y se quita el prefijo `00`. Así «7654 3210» cargado a
+  mano une con `59176543210`. La regla tiene versión (`configs.phone_key_version`): al
+  cambiarla se recrean los triggers y se recalcula una vez.
+- **Búsqueda de notas sin acentos ni mayúsculas**: función SQL `fold()` registrada en
+  la conexión. Busca también por responsable y etiqueta, y toma `%` y `_` literales.
+  Se descartó FTS5 porque, con el volumen de notas, `LIKE` alcanza y evita triggers.
+- **Aviso al cerrar o reasignar con tareas abiertas (sugerencia 4): no se hizo.** El
+  panel no tiene acciones de cerrar ni reasignar conversaciones (`/inbox/bulk` solo
+  marca como leídas), y el aviso fijado del chat ya cubre ese momento.
+
+## 23. Ficha única de la persona, recordatorios con hora y plantillas de tareas (2026-10-11)
+
+- **Ficha única** (`GET /inbox/:session/:chat/person`, `personLines`): la ficha muestra
+  las otras líneas a las que escribió la persona. De cada una indica cuándo fue el
+  último mensaje y si fue del contacto o del equipo, el programa y la marca «Sin
+  responder» si el último mensaje es del contacto. No muestra el texto de los mensajes.
+  Si a esta ficha le falta el nombre, el email, la empresa o el programa y otra línea
+  los tiene, se muestran con «según <línea>». No se copian: no hay edición de fichas.
+- **Recordatorios con hora** (`contact_notes.due_time`, `reminded_at`):
+  - Se puede agregar una hora opcional a la fecha de seguimiento.
+  - `startNoteReminderWorker` (`src/core/note-reminders.ts`) revisa cada 30 s y avisa
+    una sola vez al responsable, o al autor si no hay responsable.
+  - El aviso es un evento SSE **privado** (`private: true`): solo lo recibe esa
+    persona, en cualquier página del panel.
+  - La tarjeta del recordatorio ofrece «Hecho», «Abrir chat» y posponer 15 min, 1 h o
+    hasta mañana a las 9:00 (`POST /inbox/notes/:id/snooze`). Si la pestaña está en
+    segundo plano y el usuario dio permiso, también llega una notificación del sistema.
+  - Los avisos atrasados más de 12 h (por ejemplo, si el servidor estuvo apagado) no
+    saltan: quedan en el resumen del día.
+  - Cambiar la fecha o la hora rearma el recordatorio.
+- **Resumen del día** (`GET /notes/my-day`): una vez por día y navegador muestra las
+  tareas para hoy y las vencidas del usuario (asignadas a él, o propias sin responsable).
+- **Plantillas de tareas** (`note_templates`, `src/core/note-templates.ts`):
+  - Se gestionan en la columna lateral de `/notes`: nombre, programa opcional y hasta
+    15 pasos, cada uno con días desde hoy, hora e «importante».
+  - En el chat, el botón junto a «Registrar una nota o tarea» muestra los pasos,
+    permite elegir un responsable y crea todas las tareas de una vez
+    (`POST /inbox/:session/:chat/notes/template`).
+  - Las plantillas del programa del chat se sugieren primero. El historial de cada
+    tarea registra de qué plantilla salió.
+- **Una sola conexión SSE por página** (`liveSource()`), compartida por el inbox,
+  `/notes` y los recordatorios.
+- Exportar notas a PDF (sugerencia 9): descartado.
+
+## 24. Anti-Baneo: rediseño, políticas nuevas y seguimiento (2026-10-11)
+
+**Diseño** (`src/panel/anti-ban.ts`, estilos `.ab-*` en `public/app.css`):
+- **Indicadores arriba:** líneas por estado, enviados en 24 h, entregabilidad, bloqueos
+  y bajas, y lotes en pausa.
+- **Cuatro pestañas** (`?tab=`): Monitoreo, Políticas, Lista negra y Bitácora. Antes
+  todo estaba en una sola página larga, con una tabla de 10 columnas.
+- **Monitoreo:** una tarjeta por línea, de mayor a menor riesgo. Cada una muestra el
+  uso del día, de la última hora y de los contactos nuevos contra sus límites; la
+  ventana horaria («abierta hasta las 20:00» o «abre en 3 h»); el día de calentamiento;
+  la tasa de respuesta a los lotes en 7 días; las cifras de 24 h; un gráfico de barras
+  de 7 días con marca de bloqueos; y las acciones. Debajo, los lotes en pausa con su
+  motivo y un enlace para revisarlos.
+- **Políticas:** el formulario va agrupado por tema, con atajos a cada sección y los
+  perfiles como tarjetas con sus cifras clave. La barra de guardar queda fija abajo y
+  la columna lateral, con las políticas por línea y las buenas prácticas, queda fija
+  arriba.
+- **Lista negra:** búsqueda, filtros por origen (bloqueo, baja o manual) y la columna
+  «Línea» nueva.
+- **Bitácora:** línea de tiempo de cuarentenas automáticas y manuales, pausas de
+  lotes, rotaciones, cambios de política y cambios en la lista negra.
+- **Página de cada línea:** formulario más tarjeta de estado, y la acción nueva
+  «Usar la política global» (`POST /anti-ban/session/:id/clear`).
+- Confirmación antes de las acciones delicadas (`data-confirm`, manejador global en
+  `app.js`). El aviso `?ok=` vuelve a mostrarse: antes nunca se pasaba al layout.
+- En celular: indicadores en dos columnas y sin desplazamiento horizontal.
+- `position: sticky` no funcionaba porque `body { overflow-x: hidden }` anula sticky.
+  En esta página se usa `overflow-x: clip`.
+
+**Políticas nuevas** (columnas en `anti_ban_policies`, con valores en los tres perfiles):
+- `recontact_cooldown_hours`: el lote omite a quien recibió un envío masivo hace menos
+  de N horas (72 / 24 / 12).
+- `max_unanswered`: el lote omite a quien ya tiene N mensajes nuestros sin responder
+  (2 / 3 / 4).
+- `block_rate_threshold`: si los bloqueos y bajas superan ese % de lo enviado en 24 h,
+  la línea pasa a «En riesgo» y el lote se pausa (2 % / 3 % / 5 %).
+- `optout_keywords`: palabras extra de baja (global), sin distinguir mayúsculas ni
+  acentos y comparadas como palabra completa.
+- Los rangos invertidos (espera o pausa mínima mayor que la máxima) se ordenan al
+  guardar.
+
+**Correcciones del motor:**
+- **El semáforo contaba los bloqueos de todas las líneas.** `optouts` ahora guarda
+  `session_id` (en bloqueos, fallos de entrega y pedidos de baja), y `recomputeHealth`
+  cuenta solo los de su línea, incluidas las bajas.
+- Las cuarentenas automáticas (por fallos seguidos) quedan en la auditoría y, por lo
+  tanto, en la bitácora. Antes solo se registraban las manuales.
+- Seguimiento en `src/core/anti-ban-monitor.ts`: `sessionUsage`, `trend7d`,
+  `replyRate7d`, `pausedBatches` y `antiBanEvents`.
+
+## 25. Seguimiento, Reportes, Auditoría, Usuarios y Plantillas: rediseño (2026-10-11)
+
+Mismo lenguaje visual que Anti-Baneo: indicadores compactos, pestañas (`?tab=`) y
+componentes `.ab-*`. `/audit`, `/users` y `/templates` pasan de `server.ts` al módulo
+nuevo `src/panel/admin-views.ts`.
+
+- **Seguimiento (`/monitoring`):** pestañas Pendientes, Actividad y Números. La tabla
+  «Esperando respuesta» pasa de 7 a 4 columnas, con botón «Responder»: antes se
+  cortaba y escondía los no leídos, las notas y el acceso al chat. Números se muestra
+  en tarjetas con salud, actividad y accesos a Anti-baneo y Conexión. Las pestañas
+  conservan el período y el número, y la página se sigue actualizando sola.
+- **Reportes (`/reports`):** pestañas Atención, Equipo, Notas y tareas, y Envíos.
+  - **Comparación con el período anterior** de la misma duración (`previousPeriod`):
+    ▲/▼ coloreado según si la variación es buena o mala.
+  - **Protección anti-baneo** en Envíos (`protectionStats`): destinatarios omitidos
+    por motivo (lista negra, campaña reciente, sin respuesta, sin WhatsApp), lotes
+    pausados, bloqueos y bajas del período.
+- **Auditoría (`/audit`):**
+  - Cada acción tiene su título en español y su detalle legible (línea, persona, lote
+    con enlace, motivo). El JSON queda en «Datos técnicos».
+  - Filtros por categoría con conteos (Conexiones, Lotes, Anti-baneo, Lista negra,
+    Cuentas, Contenido), búsqueda y rango de fechas.
+  - Las reconexiones automáticas (`session.ready`, más del 85 % de los registros)
+    quedan ocultas salvo que se pidan.
+  - Separación por día, repeticiones agrupadas («×5»), «Ver más antiguos» (páginas de
+    60) y `/audit/export.csv` con los mismos filtros.
+- **Usuarios (`/users`):** búsqueda y filtros (administradores, inactivos, sin línea
+  activa, sin autorizar). De cada persona muestra el estado de su línea (conectada,
+  esperando QR, desconectada, línea no creada), el último ingreso con aviso si pasaron
+  más de 30 días, y su actividad de 30 días (respuestas, chats y notas). Las cuentas
+  siguen siendo de solo lectura: se sincronizan desde cronogramas.
+- **Plantillas (`/templates`):**
+  - Antes solo se podía crear. Ahora se puede editar, duplicar (la copia nace
+    inactiva), activar o desactivar y eliminar.
+  - Tarjetas con vista previa al estilo WhatsApp: `*negrita*`, `_cursiva_`,
+    `~tachado~`, `{{ variables }}` y variantes `{a|b}` resaltadas. Se muestra el número
+    de cada plantilla (el `template_id` de las integraciones).
+  - Editor fijo a la derecha, con vista previa en vivo, variables detectadas,
+    contador de caracteres y aviso anti-baneo si el texto no tiene variantes.
+  - **Protección:** no se puede desactivar, eliminar ni cambiar de categoría la única
+    plantilla activa de una categoría, porque los envíos de cronogramas la eligen por
+    categoría (`resolveTemplate`) y fallarían. Cada acción queda en la auditoría
+    (`template.*`).
+
+---
+
 ## Notas de operación
 
 - En producción usar `start-baileys.bat` / pm2 / systemd (no `npm run dev`).

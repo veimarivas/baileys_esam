@@ -96,6 +96,40 @@ function initials(name: string | null | undefined): string {
     .join('');
 }
 
+/** Modal de confirmación para desvincular el número (acción que exige volver a escanear el QR). */
+function unlinkModal(session: SessionRow): string {
+  return `<div class="modal fade" id="unlink-modal" tabindex="-1" aria-labelledby="unlink-modal-title" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <form class="modal-content js-once" method="post" action="/settings/logout">
+        <div class="modal-header border-0 pb-0">
+          <h5 class="modal-title d-flex align-items-center gap-2" id="unlink-modal-title">
+            <span class="unlink-ico"><i class="ri-error-warning-line"></i></span>¿Desvincular este número?
+          </h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+        </div>
+        <div class="modal-body">
+          <div class="unlink-target">
+            <i class="ri-whatsapp-line"></i>
+            <span class="ff-monospace">${esc(session.phone ?? '—')}</span>
+            <span class="text-muted">· sesión ${esc(session.name)}</span>
+          </div>
+          <ul class="unlink-list">
+            <li>El panel deja de recibir y enviar mensajes de este número hasta que lo vuelvas a vincular.</li>
+            <li>Los lotes y envíos automáticos de este número no se podrán enviar mientras tanto.</li>
+            <li>Para volver a conectar hay que <b>escanear el QR</b> con el teléfono.</li>
+            <li>Las conversaciones y notas guardadas <b>no se borran</b>.</li>
+          </ul>
+          <p class="unlink-hint mb-0"><i class="ri-lightbulb-line me-1"></i>Si el problema es que las conversaciones no se actualizan, cancelá y usá <b>Reconectar</b>.</p>
+        </div>
+        <div class="modal-footer border-0 pt-0">
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal" autofocus>Cancelar</button>
+          <button type="submit" class="btn btn-danger"><i class="ri-logout-box-r-line me-1"></i>Sí, desvincular</button>
+        </div>
+      </form>
+    </div>
+  </div>`;
+}
+
 /** Tarjeta de conexión con QR/pairing (o creación de la primera sesión). */
 export function connectionCard(session: SessionRow | undefined, subtitle?: string): string {
   if (!session) {
@@ -135,10 +169,15 @@ export function connectionCard(session: SessionRow | undefined, subtitle?: strin
 
   const actions = connected
     ? `<div class="conn-actions">
-         <form method="post" action="/settings/logout" onsubmit="return confirm('¿Desvincular el número?')">
-           <button class="btn btn-soft-danger" type="submit"><i class="ri-logout-box-r-line me-1"></i>Desvincular</button>
+         <form method="post" action="/settings/reconnect" class="js-once">
+           <button class="btn btn-soft-primary" type="submit" title="Reabre la conexión con WhatsApp sin desvincular el número">
+             <i class="ri-refresh-line me-1"></i>Reconectar</button>
          </form>
-       </div>`
+         <button class="btn btn-soft-danger" type="button" data-bs-toggle="modal" data-bs-target="#unlink-modal">
+           <i class="ri-logout-box-r-line me-1"></i>Desvincular</button>
+       </div>
+       <p class="form-text mt-2 mb-0"><i class="ri-information-line me-1"></i>Si las conversaciones no se actualizan, probá primero <b>Reconectar</b>: no hace falta volver a escanear el QR.</p>
+       ${unlinkModal(session)}`
     : `<div class="conn-actions">
          <button class="btn btn-primary" id="btn-start" type="button"><i class="ri-qr-code-line me-1"></i>Mostrar QR</button>
          <form method="post" action="/settings/pairing" class="d-flex gap-2 flex-grow-1 flex-sm-grow-0">

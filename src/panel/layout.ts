@@ -65,14 +65,14 @@ export interface NavItem {
 /** Menú lateral (iconos Remix Icon de Velzon). */
 const NAV: NavItem[] = [
   { section: 'conversations', href: '/conversations', label: 'Conversaciones', icon: 'ri-chat-3-line' },
-  { section: 'conversations', href: '/notes', label: 'Notas', icon: 'ri-sticky-note-line' },
+  { section: 'conversations', href: '/notes', label: 'Notas y tareas', icon: 'ri-sticky-note-line' },
   { section: 'batches', href: '/batches', label: 'Lotes', icon: 'ri-send-plane-line' },
   { section: 'batches', href: '/import', label: 'Importar CSV', icon: 'ri-upload-2-line' },
   { section: 'templates', href: '/templates', label: 'Plantillas', icon: 'ri-file-text-line' },
   { section: 'templates', href: '/quick-replies', label: 'Plantillas rápidas', icon: 'ri-flashlight-line' },
   { section: 'autoreplies', href: '/autoreplies', label: 'Auto-respuestas', icon: 'ri-robot-2-line' },
   { section: 'stickers', href: '/stickers', label: 'Stickers', icon: 'ri-emotion-happy-line' },
-  { section: 'monitoring', href: '/monitoring', label: 'Monitoreo', icon: 'ri-radar-line' },
+  { section: 'monitoring', href: '/monitoring', label: 'Seguimiento', icon: 'ri-pulse-line' },
   { section: 'reports', href: '/reports', label: 'Reportes', icon: 'ri-bar-chart-box-line' },
   { section: 'optouts', href: '/optouts', label: 'No enviar', icon: 'ri-forbid-2-line' },
   { section: 'policies', href: '/anti-ban', label: 'Anti-Baneo', icon: 'ri-shield-star-line' },

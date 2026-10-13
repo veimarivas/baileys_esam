@@ -39,6 +39,14 @@ export interface AntiBanPolicy {
   max_consecutive_failures: number;
   /** Pausa el lote si la entregabilidad cae bajo el umbral. */
   auto_pause_low_delivery: boolean;
+  /** Horas sin repetir un envío masivo al mismo número (0 = sin control). */
+  recontact_cooldown_hours: number;
+  /** Mensajes nuestros seguidos sin respuesta a partir de los cuales se omite al contacto (0 = sin control). */
+  max_unanswered: number;
+  /** Bloqueos + bajas / enviados (24 h) que ponen la sesión en riesgo y pausan lotes. */
+  block_rate_threshold: number;
+  /** Palabras extra de baja, separadas por coma (se suman a BAJA, STOP, etc.). */
+  optout_keywords: string;
 }
 
 interface PolicyRow {
@@ -68,6 +76,10 @@ interface PolicyRow {
   new_contacts_daily_limit: number;
   max_consecutive_failures: number;
   auto_pause_low_delivery: number;
+  recontact_cooldown_hours: number | null;
+  max_unanswered: number | null;
+  block_rate_threshold: number | null;
+  optout_keywords: string | null;
 }
 
 /** Presets de riesgo (sección 3.1 de MEJORAS.md). */
@@ -96,6 +108,10 @@ export const RISK_PRESETS: Record<RiskProfile, Omit<PolicyFields, 'risk_profile'
     new_contacts_daily_limit: 15,
     max_consecutive_failures: 3,
     auto_pause_low_delivery: true,
+    recontact_cooldown_hours: 72,
+    max_unanswered: 2,
+    block_rate_threshold: 0.02,
+    optout_keywords: '',
   },
   medium: {
     daily_limit: 300,
@@ -121,6 +137,10 @@ export const RISK_PRESETS: Record<RiskProfile, Omit<PolicyFields, 'risk_profile'
     new_contacts_daily_limit: 40,
     max_consecutive_failures: 5,
     auto_pause_low_delivery: true,
+    recontact_cooldown_hours: 24,
+    max_unanswered: 3,
+    block_rate_threshold: 0.03,
+    optout_keywords: '',
   },
   high: {
     daily_limit: 800,
@@ -146,6 +166,10 @@ export const RISK_PRESETS: Record<RiskProfile, Omit<PolicyFields, 'risk_profile'
     new_contacts_daily_limit: 120,
     max_consecutive_failures: 8,
     auto_pause_low_delivery: true,
+    recontact_cooldown_hours: 12,
+    max_unanswered: 4,
+    block_rate_threshold: 0.05,
+    optout_keywords: '',
   },
 };
 
@@ -181,6 +205,14 @@ export interface PolicyFields {
   max_consecutive_failures: number;
   /** Pausa el lote si la entregabilidad cae bajo el umbral. */
   auto_pause_low_delivery: boolean;
+  /** Horas sin repetir un envío masivo al mismo número (0 = sin control). */
+  recontact_cooldown_hours: number;
+  /** Mensajes nuestros seguidos sin respuesta a partir de los cuales se omite al contacto (0 = sin control). */
+  max_unanswered: number;
+  /** Bloqueos + bajas / enviados (24 h) que ponen la sesión en riesgo y pausan lotes. */
+  block_rate_threshold: number;
+  /** Palabras extra de baja, separadas por coma (se suman a BAJA, STOP, etc.). */
+  optout_keywords: string;
 }
 
 export type PolicyPatch = Partial<PolicyFields>;
@@ -226,6 +258,10 @@ function rowToPolicy(row: PolicyRow): AntiBanPolicy {
     new_contacts_daily_limit: row.new_contacts_daily_limit ?? 40,
     max_consecutive_failures: row.max_consecutive_failures ?? 5,
     auto_pause_low_delivery: row.auto_pause_low_delivery == null ? true : !!row.auto_pause_low_delivery,
+    recontact_cooldown_hours: row.recontact_cooldown_hours ?? 24,
+    max_unanswered: row.max_unanswered ?? 3,
+    block_rate_threshold: row.block_rate_threshold ?? 0.03,
+    optout_keywords: row.optout_keywords ?? '',
   };
 }
 
@@ -290,6 +326,10 @@ export function upsertPolicy(sessionId: string | null, patch: PolicyPatch): Anti
     new_contacts_daily_limit: current.new_contacts_daily_limit,
     max_consecutive_failures: current.max_consecutive_failures,
     auto_pause_low_delivery: current.auto_pause_low_delivery,
+    recontact_cooldown_hours: current.recontact_cooldown_hours,
+    max_unanswered: current.max_unanswered,
+    block_rate_threshold: current.block_rate_threshold,
+    optout_keywords: current.optout_keywords,
   };
 
   const existing = sessionId ? getSessionPolicyRow(sessionId) : get<PolicyRow>('SELECT * FROM anti_ban_policies WHERE session_id IS NULL ORDER BY id LIMIT 1');
@@ -459,6 +499,38 @@ export function countNewContactsToday(sessionId: string): number {
     sessionId,
     since,
     since,
+  );
+  return row?.c ?? 0;
+}
+
+/** Horas desde el último envío masivo (lote) a ese chat en la sesión, o null si nunca. */
+export function hoursSinceLastBatchSend(sessionId: string, chatId: string): number | null {
+  const row = get<{ at: string | null }>(
+    `SELECT MAX(occurred_at) AS at FROM messages
+      WHERE session_id = ? AND chat_id = ? AND direction = 'out' AND origin = 'batch'`,
+    sessionId,
+    chatId,
+  );
+  if (!row?.at) return null;
+  const t = Date.parse(row.at);
+  return Number.isFinite(t) ? (Date.now() - t) / 3_600_000 : null;
+}
+
+/**
+ * Mensajes nuestros seguidos sin respuesta: salientes posteriores al último
+ * mensaje del contacto. Insistir a quien no contesta es la vía más rápida a
+ * un reporte.
+ */
+export function unansweredStreak(sessionId: string, chatId: string): number {
+  const row = get<{ c: number }>(
+    `SELECT COUNT(*) AS c FROM messages
+      WHERE session_id = ? AND chat_id = ? AND direction = 'out'
+        AND occurred_at > COALESCE((SELECT MAX(occurred_at) FROM messages
+                                     WHERE session_id = ? AND chat_id = ? AND direction = 'in'), '')`,
+    sessionId,
+    chatId,
+    sessionId,
+    chatId,
   );
   return row?.c ?? 0;
 }

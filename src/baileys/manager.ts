@@ -15,6 +15,7 @@ import { setReaction } from '../core/conversations.js';
 import { addOptout, isOptoutRequest, looksLikeBlock, markBlocked } from '../core/optout.js';
 import { recomputeHealth } from '../core/health.js';
 import { getPolicy, resetTrust } from '../core/anti-ban.js';
+import { tagPerson } from '../core/person.js';
 import { lidForPhone } from '../core/lid.js';
 import { panelBus } from '../panel/events.js';
 import type { OutboundSender, SessionRow } from '../types.js';
@@ -482,6 +483,8 @@ export class SessionManager implements OutboundSender {
     chatId: string,
     tag: { contactName?: string | null; programa?: string | null; programaId?: number | null },
   ): void {
+    // Por persona (número): así lo ven todas las líneas, no solo la que envió.
+    tagPerson(chatId, { fullName: tag.contactName, programa: tag.programa, programaId: tag.programaId, sessionId });
     const row = this.byId(sessionId);
     run(
       `INSERT INTO conversations (session_id, whatsapp_phone, chat_id, contact_name, programa, programa_id, last_message_at, last_direction, created_at, updated_at)
@@ -587,6 +590,7 @@ export class SessionManager implements OutboundSender {
       // Ya guardado (p. ej. por una versión anterior sin referencia de media):
       // se completa la referencia para poder descargar el archivo.
       this.backfillMediaRef(sessionId, msg);
+      this.backfillSender(sessionId, msg);
       return;
     }
 
@@ -1043,6 +1047,7 @@ export class SessionManager implements OutboundSender {
       // Ya guardado (p. ej. por una versión anterior sin referencia de media):
       // se completa la referencia para poder descargar el archivo.
       this.backfillMediaRef(sessionId, msg);
+      this.backfillSender(sessionId, msg);
       return;
     }
 
@@ -1082,6 +1087,22 @@ export class SessionManager implements OutboundSender {
     );
     if (msg.isGroup && convName) setContactGroup(sessionId, msg.chatId, convName);
     panelBus.publish('message', { sessionId, chatId: msg.chatId, direction: msg.fromMe ? 'out' : 'in', content_type: msg.type, occurred_at: new Date(msg.timestamp * 1000).toISOString() });
+  }
+
+  /**
+   * Mensaje de grupo guardado sin autor (versiones anteriores no lo tomaban del
+   * historial): al volver a recibirlo se completan su número y su nombre.
+   */
+  private backfillSender(sessionId: string, msg: InboundMessage): void {
+    if (!msg.isGroup || msg.fromMe || !msg.id || (!msg.senderJid && !msg.pushName)) return;
+    run(
+      `UPDATE messages SET sender_jid = COALESCE(sender_jid, ?), contact_name = COALESCE(contact_name, ?)
+        WHERE session_id = ? AND wa_message_id = ? AND (sender_jid IS NULL OR contact_name IS NULL)`,
+      msg.senderJid ?? null,
+      msg.pushName ?? null,
+      sessionId,
+      msg.id,
+    );
   }
 
   /** ¿Ya existe un mensaje con ese id de WhatsApp en la sesión? */

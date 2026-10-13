@@ -1612,7 +1612,9 @@
         var name = (c.contact && c.contact.name) || '';
         var phone = (c.contact && c.contact.phone) || '';
         var last = c.last_message_text || '';
-        return (name + ' ' + phone + ' ' + last).toLowerCase().indexOf(s) !== -1;
+        var person = c.person || {};
+        var extra = (person.full_name || '') + ' ' + (person.programas || []).join(' ');
+        return (name + ' ' + phone + ' ' + last + ' ' + extra).toLowerCase().indexOf(s) !== -1;
       });
     }
 
@@ -1649,6 +1651,7 @@
     }
 
     function convoName(c) {
+      if (c.person && c.person.full_name) return c.person.full_name;
       var name = c.contact && c.contact.name;
       if (name) return name;
       var phone = c.contact && c.contact.phone;
@@ -1669,6 +1672,7 @@
       el.innerHTML =
         '<span class="avatar-sm ' + avClass(name) + (isGroup ? ' is-group' : '') + '">' + escapeHtml(initials(name)) + '</span>' +
         '<div class="convo-body">' +
+          programaLine(c) +
           '<div class="convo-top"><span class="convo-name">' + nameHtml + '</span>' +
             '<span class="convo-time">' + timeAgo(c.last_message_at) + '</span></div>' +
           '<div class="convo-last">' + escapeHtml(c.last_message_text || '—') + '</div>' +
@@ -1691,6 +1695,14 @@
       if (n.overdue) parts.push(n.overdue + ' vencida' + (n.overdue > 1 ? 's' : ''));
       return '<span class="convo-notes ' + tone + '" title="Notas: ' + parts.join(' · ') + '">' +
         '<span class="' + icon + '" aria-hidden="true"></span>' + n.open + '</span>';
+    }
+
+    // Programa(s) de la persona según cronogramas: el más reciente y cuántos más.
+    function programaLine(c) {
+      var progs = (c.person && c.person.programas) || [];
+      if (!progs.length) return '';
+      return '<div class="convo-prog" title="' + escapeHtml(progs.join(' · ')) + '"><span class="ri-graduation-cap-line" aria-hidden="true"></span>' +
+        escapeHtml(progs[0]) + (progs.length > 1 ? ' <b>+' + (progs.length - 1) + '</b>' : '') + '</div>';
     }
 
     function emptyPane() {
@@ -1939,8 +1951,11 @@
       return '<div class="chat-header">' +
         '<button type="button" class="btn btn-icon btn-soft-secondary" id="toggle-list" title="Conversaciones"><span class="ri-menu-line"></span></button>' +
         avatarHtml(name, 'avatar-sm') +
-        '<div class="chat-id"><div class="name">' + (isGroup ? '<span class="ri-group-line group-ico" title="Grupo"></span>' : '') + escapeHtml(name) + '</div>' +
+        '<div class="chat-id"><div class="name">' + (isGroup ? '<span class="ri-group-line group-ico" title="Grupo"></span>' : '') + escapeHtml(name) +
+            ((c.person && c.person.programas || []).map(function (p) { return '<span class="chat-programa" title="Programa según cronogramas">' + escapeHtml(p) + '</span>'; }).join('')) + '</div>' +
           '<div class="sub"><span class="font-monospace">' + escapeHtml(phone) + '</span>' +
+            (c.person && c.person.full_name && c.contact && c.contact.name && c.contact.name !== c.person.full_name
+              ? '<span class="chat-waname" title="Nombre en WhatsApp"> · ' + escapeHtml(c.contact.name) + '</span>' : '') +
             '<span id="typing-hint" class="typing-hint"></span></div></div>' +
         '<div class="chat-actions">' +
           '<button type="button" class="btn btn-soft-primary btn-sm" id="sync-history" title="Sincronizar historial"><span class="ri-refresh-line"></span><span class="d-none d-md-inline ms-1">Sincronizar</span></button>' +
@@ -2402,8 +2417,10 @@
         return item ? '<div class="pf-row"><span class="pf-label">' + label + '</span><span class="pf-value">' + escapeHtml(item.value) +
           '</span><span class="pf-src" title="Dato registrado en otra línea">según ' + escapeHtml(item.line) + '</span></div>' : '';
       };
-      var programa = p.programa
-        ? '<div class="pf-row"><span class="pf-label">Programa</span><span class="pf-value">' + escapeHtml(p.programa) + '</span></div>'
+      var progs = p.programas && p.programas.length ? p.programas : (p.programa ? [p.programa] : []);
+      var programa = progs.length
+        ? '<div class="pf-row pf-progs"><span class="pf-label">' + (progs.length > 1 ? 'Programas' : 'Programa') + '</span><span class="pf-value">' +
+            progs.map(function (x) { return '<span class="pf-prog">' + escapeHtml(x) + '</span>'; }).join('') + '</span></div>'
         : fillRow('Programa', f.programa);
       fillBox.innerHTML = fillRow('Nombre', f.name) + fillRow('Email', f.email) + fillRow('Empresa', f.company) + programa;
       var lines = p.lines || [];
@@ -2544,7 +2561,8 @@
 
       els.contact.innerHTML =
         '<div class="contact-head">' + avatarHtml(name, 'avatar-xl') +
-          '<div class="contact-name">' + escapeHtml(ct.name || 'Sin nombre') + '</div>' +
+          '<div class="contact-name">' + escapeHtml((c.person && c.person.full_name) || ct.name || 'Sin nombre') + '</div>' +
+          (c.person && c.person.full_name && ct.name && ct.name !== c.person.full_name ? '<div class="contact-waname">WhatsApp: ' + escapeHtml(ct.name) + '</div>' : '') +
           '<div class="contact-phone">' + escapeHtml(ct.phone || '') + '</div>' +
           (ct.email ? '<div class="contact-email">' + escapeHtml(ct.email) + '</div>' : '') +
         '</div>' +

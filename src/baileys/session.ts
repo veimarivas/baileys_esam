@@ -675,13 +675,16 @@ export class WaSession extends EventEmitter {
     // Autor del mensaje dentro de un grupo: se guarda el JID de teléfono (PN) si
     // WhatsApp lo comparte (`participantPn`/`senderPn`); si no, el `participant`.
     // Así el panel muestra el número real y no el identificador anónimo (@lid).
+    // En el historial (messaging-history.set) WhatsApp suele dejar el autor en
+    // `participant` del propio mensaje y no en la key: se miran ambos.
     let senderJid: string | null = null;
     if (isGroup) {
-      const pn = key?.participantPn ?? key?.senderPn ?? null;
+      const pn = key?.participantPn ?? key?.senderPn ?? (raw as any)?.participantPn ?? null;
+      const participant = key?.participant || (raw as any)?.participant || null;
       if (pn) {
         senderJid = resolveChatId(pn);
-      } else if (key?.participant) {
-        senderJid = String(key.participant);
+      } else if (participant) {
+        senderJid = String(participant);
       }
     }
 

@@ -1123,6 +1123,35 @@ nuevo `src/panel/admin-views.ts`.
 - **El Super Admin supervisa todas las notas** (`noteScope`), aunque tenga número
   propio. Las conversaciones siguen siendo solo las de su número.
 
+## 28. Programa y nombre completo en todas las líneas, reconexión y autores en grupos (2026-10-12)
+
+- **Programa y nombre completo por persona** (`person_programs`, `src/core/person.ts`):
+  - Se guardan por número (`phone_key`), no por línea, así que los ve cualquier
+    usuario que atienda a esa persona desde cualquier número. Admite varios
+    programas por persona.
+  - Se cargan en cada envío desde cronogramas (`tagConversation`). La primera vez,
+    se recuperan de los lotes ya enviados (`batches.meta.programa` +
+    `batch_items.contact_name`).
+  - Antes el programa quedaba solo en la conversación de la línea que envió, y el
+    nombre de WhatsApp pisaba al completo.
+- **En el chat:** la lista muestra el programa arriba del nombre, y el nombre completo
+  pasa a ser el principal. La cabecera lleva el o los programas como etiqueta y el
+  nombre de WhatsApp si difiere. La ficha muestra el nombre completo y todos los
+  programas. La búsqueda también encuentra por nombre completo y por programa.
+- **Reconexión al arrancar:** `AUTO_START_SESSIONS` pasa a `true` por defecto (código
+  y `.env.example`). Con `false`, tras cada reinicio del servicio las líneas no se
+  reconectaban hasta que alguien entraba al panel, y se perdía lo recibido mientras
+  tanto. **En un `.env` existente hay que cambiarlo a mano.**
+- **Autor de los mensajes de grupo:**
+  - El historial de WhatsApp trae el autor en `participant` del mensaje, no en la
+    key. Antes se descartaba: 76 mil mensajes de grupo quedaron sin autor. Ahora se
+    toma de ambos lugares.
+  - Al volver a recibir un mensaje ya guardado sin autor (por la sincronización de
+    ese chat), se completan su número y su nombre (`backfillSender`).
+  - Si el historial no trae el nombre, se usa el último nombre que esa persona usó
+    en otro mensaje, su nombre completo de cronogramas o el de su ficha
+    (`fillGroupSenderNames`).
+
 ---
 
 ## Notas de operación

@@ -152,6 +152,7 @@ export function migrate(): void {
     read_at    TEXT
   )`);
   db.exec('CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, read_at, id)');
+  setupPersonPrograms();
   // Plantillas de tareas (pasos que se repiten, p. ej. una inscripción).
   db.exec(`CREATE TABLE IF NOT EXISTS note_templates (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -214,6 +215,44 @@ function setupContactPhoneKey(): void {
   END`);
   db.exec(`UPDATE contacts SET phone_key = ${keyExpr('phone')}`);
   setConfigFlag('phone_key_version', PHONE_KEY_VERSION);
+}
+
+/**
+ * `person_programs`: nombre completo y programas de cada persona (por número),
+ * tal como los manda cronogramas en los envíos. La primera vez se recupera de
+ * los lotes ya enviados (`batches.meta.programa` + `batch_items.contact_name`).
+ */
+function setupPersonPrograms(): void {
+  db.exec(`CREATE TABLE IF NOT EXISTS person_programs (
+    phone_key   TEXT NOT NULL,
+    programa    TEXT NOT NULL,
+    programa_id INTEGER,
+    full_name   TEXT,
+    session_id  TEXT,
+    last_at     TEXT NOT NULL,
+    PRIMARY KEY (phone_key, programa)
+  )`);
+  const done = (db.prepare("SELECT value FROM configs WHERE key = 'person_programs_v1'").get() as { value?: string } | undefined)?.value;
+  if (done) return;
+  const digits = "REPLACE(REPLACE(REPLACE(SUBSTR(bi.chat_id, 1, INSTR(bi.chat_id || '@', '@') - 1), '+', ''), ' ', ''), '-', '')";
+  const key = `CASE WHEN LENGTH(${digits}) = 8 THEN '591' || ${digits} WHEN ${digits} LIKE '00%' THEN SUBSTR(${digits}, 3) ELSE ${digits} END`;
+  try {
+    db.exec(`INSERT INTO person_programs (phone_key, programa, programa_id, full_name, session_id, last_at)
+      SELECT ${key}, json_extract(b.meta, '$.programa'), json_extract(b.meta, '$.programa_id'),
+             NULLIF(TRIM(bi.contact_name), ''), b.session_id, COALESCE(bi.updated_at, bi.created_at)
+        FROM batch_items bi JOIN batches b ON b.id = bi.batch_id
+       WHERE bi.chat_id NOT LIKE '%@g.us' AND json_valid(b.meta)
+         AND NULLIF(TRIM(json_extract(b.meta, '$.programa')), '') IS NOT NULL
+       ORDER BY COALESCE(bi.updated_at, bi.created_at)
+      ON CONFLICT(phone_key, programa) DO UPDATE SET
+        full_name = COALESCE(excluded.full_name, person_programs.full_name),
+        programa_id = COALESCE(excluded.programa_id, person_programs.programa_id),
+        last_at = MAX(person_programs.last_at, excluded.last_at)`);
+    logger.info('Programas de cada persona recuperados de los lotes enviados');
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, 'No se pudieron recuperar los programas de los lotes');
+  }
+  setConfigFlag('person_programs_v1', '1');
 }
 
 /** Marca en `configs` si la busqueda full-text (FTS5) quedo disponible. */

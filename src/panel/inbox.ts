@@ -32,6 +32,7 @@ import {
   type NoteStatus,
 } from '../core/contacts.js';
 import * as noteTags from '../core/note-tags.js';
+import { personTagsByKeys, phoneKeyOf } from '../core/person.js';
 import { listNotifications, markNoteRead, markRead, notify, supervisorIds, unreadCount, type NotificationKind } from '../core/notifications.js';
 import * as noteTemplates from '../core/note-templates.js';
 import * as quickReplies from '../core/quick-replies.js';
@@ -355,8 +356,12 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
         const from = others.find((l) => l[key]);
         return from ? { value: from[key], line: from.session_name || from.session_phone || 'otra línea' } : null;
       };
+      const key = contact.phone_key ?? (resolved.chatId.endsWith('@g.us') || resolved.chatId.endsWith('@lid') ? null : phoneKeyOf(resolved.chatId));
+      const tags = key ? personTagsByKeys([key]).get(key) : undefined;
       res.json({
-        programa: current?.programa ?? null,
+        programa: current?.programa ?? tags?.programas[0] ?? null,
+        full_name: tags?.full_name ?? null,
+        programas: tags?.programas ?? [],
         lines: others,
         fill: { name: pick('name'), email: pick('email'), company: pick('company'), programa: pick('programa') },
       });

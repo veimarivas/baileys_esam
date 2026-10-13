@@ -5,6 +5,7 @@ import { sessionScopeFor, type UserRow } from '../auth/users.js';
 import { phoneFromChatId } from './phone.js';
 import { resolveChatId } from './lid.js';
 import { noteCountsFor, type PersonNoteCounts } from './contacts.js';
+import { personTagsByKeys, phoneKeyOf, type PersonTags } from './person.js';
 import type { ConversationRow, MessageRow } from '../types.js';
 
 /**
@@ -40,6 +41,8 @@ export interface ConversationDTO {
   assigned_agent: { id: number; name: string | null } | null;
   /** Notas pendientes de la persona (sumando todas las líneas). */
   notes: PersonNoteCounts;
+  /** Nombre completo y programas según cronogramas (de cualquier línea). */
+  person: PersonTags;
 }
 
 export interface MessageDTO {
@@ -132,13 +135,22 @@ interface ConvJoinRow {
   ct_email: string | null;
   ct_company: string | null;
   ct_avatar: string | null;
+  ct_phone_key: string | null;
   agent_id: number | null;
   agent_name: string | null;
 }
 
 const NO_NOTES: PersonNoteCounts = { open: 0, pinned: 0, overdue: 0 };
 
-function mapConversation(row: ConvJoinRow, notes?: Map<number, PersonNoteCounts>): ConversationDTO {
+const NO_PERSON: PersonTags = { full_name: null, programas: [] };
+
+/** Clave de la persona: la de su ficha o, si falta, la del número del chat. */
+function personKey(row: { ct_phone_key: string | null; chat_id: string }): string | null {
+  if (row.chat_id.endsWith('@g.us')) return null;
+  return row.ct_phone_key ?? (row.chat_id.endsWith('@lid') ? null : phoneKeyOf(row.chat_id));
+}
+
+function mapConversation(row: ConvJoinRow, notes?: Map<number, PersonNoteCounts>, people?: Map<string, PersonTags>): ConversationDTO {
   return {
     id: row.id,
     session_id: row.session_id,
@@ -158,18 +170,20 @@ function mapConversation(row: ConvJoinRow, notes?: Map<number, PersonNoteCounts>
     },
     assigned_agent: row.agent_id ? { id: row.agent_id, name: row.agent_name } : null,
     notes: (row.contact_id && notes?.get(row.contact_id)) || NO_NOTES,
+    person: people?.get(personKey(row) ?? '') ?? NO_PERSON,
   };
 }
 
 function mapConversations(rows: ConvJoinRow[]): ConversationDTO[] {
   const notes = noteCountsFor(rows.map((r) => r.contact_id ?? 0));
-  return rows.map((r) => mapConversation(r, notes));
+  const people = personTagsByKeys(rows.map(personKey));
+  return rows.map((r) => mapConversation(r, notes, people));
 }
 
 const CONV_SELECT = `SELECT c.id, c.session_id, c.chat_id, c.status, c.unread_count, c.last_message_text,
     c.last_message_at, c.last_direction, c.contact_id,
     ct.name AS ct_name, ct.phone AS ct_phone, ct.email AS ct_email, ct.company AS ct_company,
-    ct.avatar_path AS ct_avatar,
+    ct.avatar_path AS ct_avatar, ct.phone_key AS ct_phone_key,
     u.id AS agent_id, u.name AS agent_name
   FROM conversations c
   LEFT JOIN contacts ct ON ct.id = c.contact_id
@@ -362,8 +376,45 @@ export function listMessages(sessionId: string, chatId: string, query: MessageQu
     rows = rows.slice(0, limit).reverse();
   }
 
+  fillGroupSenderNames(rows);
   const reactions = messageReactions(rows.map((r) => r.id));
   return { messages: rows.map((r) => mapMessage(r, reactions.get(r.id) ?? [])), hasMore };
+}
+
+/**
+ * Mensajes de grupo con autor pero sin nombre (el historial no trae el
+ * «pushName»): se toma el último nombre que esa persona usó en cualquier
+ * mensaje, su nombre completo de cronogramas o el de su ficha de contacto.
+ */
+function fillGroupSenderNames(rows: MessageJoinRow[]): void {
+  const missing = rows.filter((r) => r.direction === 'in' && !r.contact_name && r.sender_jid && String(r.chat_id).endsWith('@g.us'));
+  if (!missing.length) return;
+  const jids = [...new Set(missing.map((r) => String(r.sender_jid)))];
+  const ph = jids.map(() => '?').join(',');
+  const known = new Map(
+    all<{ sender_jid: string; contact_name: string }>(
+      `SELECT sender_jid, contact_name FROM messages
+        WHERE sender_jid IN (${ph}) AND contact_name IS NOT NULL AND contact_name <> ''
+        GROUP BY sender_jid`,
+      ...jids,
+    ).map((r) => [r.sender_jid, r.contact_name]),
+  );
+  const keys = [...new Set(jids.map((j) => phoneKeyOf(resolveChatId(j))).filter((k): k is string => !!k))];
+  const people = personTagsByKeys(keys);
+  const contactNames = new Map(
+    keys.length
+      ? all<{ phone_key: string; name: string }>(
+          `SELECT phone_key, name FROM contacts WHERE phone_key IN (${keys.map(() => '?').join(',')})
+            AND name IS NOT NULL AND name <> '' AND chat_id NOT LIKE '%@g.us' GROUP BY phone_key`,
+          ...keys,
+        ).map((r) => [r.phone_key, r.name])
+      : [],
+  );
+  for (const r of missing) {
+    const jid = String(r.sender_jid);
+    const key = phoneKeyOf(resolveChatId(jid)) ?? '';
+    r.contact_name = known.get(jid) ?? people.get(key)?.full_name ?? contactNames.get(key) ?? null;
+  }
 }
 
 export function getMessageById(id: number): MessageRow | undefined {

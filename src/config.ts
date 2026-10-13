@@ -39,7 +39,9 @@ export const config = {
   storageDir: process.env.STORAGE_DIR ?? './data/media',
   logLevel: process.env.LOG_LEVEL ?? 'info',
 
-  autoStartSessions: bool(process.env.AUTO_START_SESSIONS, false),
+  // Reconecta al arrancar las líneas ya vinculadas. Apagado, tras un reinicio
+  // no se recibe nada hasta que alguien entra al panel.
+  autoStartSessions: bool(process.env.AUTO_START_SESSIONS, true),
   maxConcurrentSessions: int(process.env.MAX_CONCURRENT_SESSIONS, 0),
   browserName: process.env.BAILEYS_BROWSER_NAME ?? 'Seguimiento ESAM',
   waVersion: process.env.BAILEYS_WA_VERSION ?? '',

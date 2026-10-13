@@ -127,7 +127,14 @@ function scripts(): string {
 }
 
 function navList(user: UserRow, active: string, restrictToSettings = false, badges: Record<string, number> = {}, activeHref = ''): string {
-  return NAV.filter((n) => esamPuede(user, n.section) && (!restrictToSettings || n.section === 'settings'))
+  const admin = esamEsAdmin(user);
+  return NAV.filter((n) => {
+    if (!esamPuede(user, n.section)) return false;
+    if (restrictToSettings) return n.section === 'settings';
+    // Quien no es Super Admin ve solo Conversaciones y Notas y tareas; su
+    // Conexión (QR) queda en el menú de usuario.
+    return admin || n.section !== 'settings';
+  })
     .map((n) => {
       const count = badges[n.href] ?? 0;
       const badge = count > 0 ? ` <span class="badge rounded-pill bg-danger ms-auto">${count}</span>` : '';
@@ -149,7 +156,7 @@ export function renderLayout(
   body: string,
   opts: { flash?: string; error?: string; subtitle?: string; restrictToSettings?: boolean; badges?: Record<string, number>; activeHref?: string; actions?: string } = {},
 ): string {
-  const role = esamEsAdmin(user) ? 'Administrador' : esamAreaLabel(user);
+  const role = esamAreaLabel(user);
   const initials = (user.name ?? user.username ?? 'U')
     .split(/\s+/)
     .slice(0, 2)
@@ -210,6 +217,7 @@ export function renderLayout(
               <h6 class="dropdown-header">Hola, ${esc((user.name ?? user.username ?? '').split(' ')[0])}!</h6>
               <span class="dropdown-item-text text-muted fs-12">${esc(user.email ?? '')}</span>
               <div class="dropdown-divider"></div>
+              <a class="dropdown-item" href="/settings"><i class="ri-plug-line text-muted fs-16 align-middle me-1"></i> Mi conexión de WhatsApp</a>
               <form method="post" action="/logout">
                 <button type="submit" class="dropdown-item"><i class="ri-logout-box-r-line text-muted fs-16 align-middle me-1"></i> Cerrar sesión</button>
               </form>

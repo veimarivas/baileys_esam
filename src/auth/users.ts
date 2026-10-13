@@ -24,7 +24,11 @@ export interface UserRow {
 
 // ── Roles / control de acceso (espejo de config/esam.php) ─────────────────────
 
-export const ESAM_ADMINS = ['Super Admin', 'Administrador'];
+/**
+ * Único rol de cronogramas con acceso completo al panel. El resto (incluido
+ * «Administrador») solo usa Conversaciones y Notas y tareas de su propio número.
+ */
+export const ESAM_ADMINS = ['Super Admin'];
 
 export const ROLE_AREAS: Record<string, string> = {
   'Super Admin': 'admin',
@@ -38,6 +42,7 @@ export const ROLE_AREAS: Record<string, string> = {
   'Supervisor de Marketing': 'marketing',
 };
 
+/** Secciones de quien no es Super Admin: su bandeja, notas y tareas, y su conexión (QR). */
 export const NON_ADMIN_SECTIONS = ['conversations', 'settings'];
 
 export const SECTION_AREAS: Record<string, string[]> = {
@@ -80,9 +85,9 @@ export function esamEsAdmin(user: UserRow): boolean {
 
 export function esamPuede(user: UserRow, seccion: string): boolean {
   if (esamEsAdmin(user)) return true;
-  if (NON_ADMIN_SECTIONS.includes(seccion)) return true;
-  const allowed = SECTION_AREAS[seccion] ?? [];
-  return esamAreas(user).some((a) => allowed.includes(a));
+  // Las áreas de cronogramas ya no habilitan secciones administrativas: solo
+  // el Super Admin las ve (SECTION_AREAS queda como referencia del espejo).
+  return NON_ADMIN_SECTIONS.includes(seccion);
 }
 
 export function esamHome(user: UserRow): string {
@@ -92,7 +97,8 @@ export function esamHome(user: UserRow): string {
 }
 
 export function esamAreaLabel(user: UserRow): string {
-  if (esamEsAdmin(user)) return 'Administrador';
+  if (user.source !== 'cronogramas') return 'Administrador local';
+  if (esamEsAdmin(user)) return 'Super Admin';
   const areas = esamAreas(user);
   const nombres: Record<string, string> = {
     contabilidad: 'Contabilidad',

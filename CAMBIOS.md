@@ -1074,6 +1074,25 @@ nuevo `src/panel/admin-views.ts`.
     categoría (`resolveTemplate`) y fallarían. Cada acción queda en la auditoría
     (`template.*`).
 
+## 26. Acceso por rol: solo el Super Admin administra (2026-10-12)
+
+- **`ESAM_ADMINS = ['Super Admin']`** (`src/auth/users.ts`). Acceso completo: el Super
+  Admin de cronogramas y la cuenta local. El resto, incluido el rol «Administrador»,
+  solo usa Conversaciones y Notas y tareas. `esamPuede` ya no habilita secciones
+  administrativas por área de cronogramas.
+- **Menú lateral:** quien no es Super Admin ve solo «Conversaciones» y «Notas y
+  tareas». Su conexión (QR) pasa al menú de usuario como «Mi conexión de WhatsApp»,
+  y mientras su número no esté conectado se lo sigue llevando a Conexión.
+- La etiqueta de rol en la barra superior muestra «Super Admin», el área de
+  cronogramas o «Administrador local».
+- Sin cambios, ya era así: cada usuario ve solo las conversaciones de su número, y
+  las notas y tareas se comparten entre líneas cuando el contacto tiene el mismo
+  número, con autor y línea de origen.
+- **Cronogramas** (otro repositorio): la contraseña ahora se sincroniza también
+  desde el cambio en el perfil estándar (`PasswordController`) y desde la
+  recuperación por correo (`NewPasswordController`), con
+  `SeguimientoEsamClient::syncPassword`.
+
 ---
 
 ## Notas de operación

@@ -1675,6 +1675,7 @@
           programaLine(c) +
           '<div class="convo-top"><span class="convo-name">' + nameHtml + '</span>' +
             '<span class="convo-time">' + timeAgo(c.last_message_at) + '</span></div>' +
+          (!isGroup && phone ? '<div class="convo-number"><span class="ri-whatsapp-line" aria-hidden="true"></span>' + escapeHtml(fmtPhone(phone)) + '</div>' : '') +
           '<div class="convo-last">' + escapeHtml(c.last_message_text || '—') + '</div>' +
         '</div>' +
         convoNotesHtml(c) +
@@ -1695,6 +1696,13 @@
       if (n.overdue) parts.push(n.overdue + ' vencida' + (n.overdue > 1 ? 's' : ''));
       return '<span class="convo-notes ' + tone + '" title="Notas: ' + parts.join(' · ') + '">' +
         '<span class="' + icon + '" aria-hidden="true"></span>' + n.open + '</span>';
+    }
+
+    // Número legible: +591 7XXX XXXX (o los dígitos tal cual si no es boliviano).
+    function fmtPhone(phone) {
+      var d = String(phone || '').replace(/\D+/g, '');
+      if (/^591\d{8}$/.test(d)) return '+591 ' + d.slice(3, 7) + ' ' + d.slice(7);
+      return d ? '+' + d : '';
     }
 
     // Programa(s) de la persona según cronogramas: el más reciente y cuántos más.
@@ -1951,9 +1959,12 @@
       return '<div class="chat-header">' +
         '<button type="button" class="btn btn-icon btn-soft-secondary" id="toggle-list" title="Conversaciones"><span class="ri-menu-line"></span></button>' +
         avatarHtml(name, 'avatar-sm') +
-        '<div class="chat-id"><div class="name">' + (isGroup ? '<span class="ri-group-line group-ico" title="Grupo"></span>' : '') + escapeHtml(name) +
-            ((c.person && c.person.programas || []).map(function (p) { return '<span class="chat-programa" title="Programa según cronogramas">' + escapeHtml(p) + '</span>'; }).join('')) + '</div>' +
-          '<div class="sub"><span class="font-monospace">' + escapeHtml(phone) + '</span>' +
+        '<div class="chat-id">' +
+          ((c.person && c.person.programas || []).length
+            ? '<div class="chat-progs">' + c.person.programas.map(function (p) { return '<span class="chat-programa" title="Programa según cronogramas">' + escapeHtml(p) + '</span>'; }).join('') + '</div>'
+            : '') +
+          '<div class="name">' + (isGroup ? '<span class="ri-group-line group-ico" title="Grupo"></span>' : '') + escapeHtml(name) + '</div>' +
+          '<div class="sub"><span class="font-monospace">' + escapeHtml(isGroup ? phone : fmtPhone(phone)) + '</span>' +
             (c.person && c.person.full_name && c.contact && c.contact.name && c.contact.name !== c.person.full_name
               ? '<span class="chat-waname" title="Nombre en WhatsApp"> · ' + escapeHtml(c.contact.name) + '</span>' : '') +
             '<span id="typing-hint" class="typing-hint"></span></div></div>' +
@@ -2417,11 +2428,14 @@
         return item ? '<div class="pf-row"><span class="pf-label">' + label + '</span><span class="pf-value">' + escapeHtml(item.value) +
           '</span><span class="pf-src" title="Dato registrado en otra línea">según ' + escapeHtml(item.line) + '</span></div>' : '';
       };
-      var progs = p.programas && p.programas.length ? p.programas : (p.programa ? [p.programa] : []);
+      // Si la cabecera de la ficha ya muestra los programas, no se repiten aquí.
+      var conv = selectedConversation();
+      var inHead = !!(conv && conv.person && conv.person.programas && conv.person.programas.length);
+      var progs = inHead ? [] : (p.programas && p.programas.length ? p.programas : (p.programa ? [p.programa] : []));
       var programa = progs.length
         ? '<div class="pf-row pf-progs"><span class="pf-label">' + (progs.length > 1 ? 'Programas' : 'Programa') + '</span><span class="pf-value">' +
             progs.map(function (x) { return '<span class="pf-prog">' + escapeHtml(x) + '</span>'; }).join('') + '</span></div>'
-        : fillRow('Programa', f.programa);
+        : inHead ? '' : fillRow('Programa', f.programa);
       fillBox.innerHTML = fillRow('Nombre', f.name) + fillRow('Email', f.email) + fillRow('Empresa', f.company) + programa;
       var lines = p.lines || [];
       if (!lines.length) { linesBox.innerHTML = ''; linesBox.hidden = true; return; }
@@ -2561,9 +2575,12 @@
 
       els.contact.innerHTML =
         '<div class="contact-head">' + avatarHtml(name, 'avatar-xl') +
+          ((c.person && c.person.programas || []).length
+            ? '<div class="contact-progs">' + c.person.programas.map(function (p) { return '<span class="pf-prog">' + escapeHtml(p) + '</span>'; }).join('') + '</div>'
+            : '') +
           '<div class="contact-name">' + escapeHtml((c.person && c.person.full_name) || ct.name || 'Sin nombre') + '</div>' +
           (c.person && c.person.full_name && ct.name && ct.name !== c.person.full_name ? '<div class="contact-waname">WhatsApp: ' + escapeHtml(ct.name) + '</div>' : '') +
-          '<div class="contact-phone">' + escapeHtml(ct.phone || '') + '</div>' +
+          '<div class="contact-phone">' + escapeHtml(fmtPhone(ct.phone) || '') + '</div>' +
           (ct.email ? '<div class="contact-email">' + escapeHtml(ct.email) + '</div>' : '') +
         '</div>' +
         '<div class="person-fill" id="person-fill"></div>' +

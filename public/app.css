@@ -3657,3 +3657,15 @@ html[data-bs-theme="dark"] .tpl-phone { background: #0b141a; }
   color: var(--ib-brand, #045474); background: color-mix(in srgb, var(--ib-brand, #045474) 10%, transparent);
 }
 @media (max-width: 767.98px) { .chat-header .chat-programa { display: none; } }
+
+/* Orden: programa · nombre completo · número de WhatsApp */
+.convo .convo-number {
+  display: flex; align-items: center; gap: 0.2rem; margin-top: 1px;
+  font-size: 0.7rem; color: var(--ib-ink-soft, #475467); font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.convo .convo-number [class^="ri-"] { color: #25a35a; font-size: 0.75rem; }
+.chat-header .chat-progs { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-bottom: 0.1rem; min-width: 0; }
+.chat-header .chat-progs .chat-programa { margin-left: 0; }
+.chat-header .chat-id .sub .font-monospace { font-variant-numeric: tabular-nums; }
+.contact-panel .contact-progs { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.25rem; margin: 0.5rem 0 0.15rem; }
+@media (max-width: 767.98px) { .chat-header .chat-progs .chat-programa { display: inline-block; max-width: 60vw; } }

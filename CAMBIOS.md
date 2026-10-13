@@ -1151,6 +1151,16 @@ nuevo `src/panel/admin-views.ts`.
   - Si el historial no trae el nombre, se usa el último nombre que esa persona usó
     en otro mensaje, su nombre completo de cronogramas o el de su ficha
     (`fillGroupSenderNames`).
+- **Orden en pantalla** (lista, cabecera del chat y ficha): primero el o los
+  programas, debajo el nombre completo («Apellidos, Nombres», como lo manda
+  cronogramas) y debajo el número de WhatsApp con formato (`+591 7XXX XXXX`). En la
+  ficha los programas no se repiten.
+- Verificado en cronogramas: `/admin/programas/{id}/show` (WhatsApp masivo por
+  módulo, `enviarAcademico`), `/admin/programas/{id}/whatsapp` (participantes) y
+  `/admin/contable/cuotas-vencidas` y `cuotas-proximas` (`enviarContable` y el
+  recordatorio de cobranza) envían el nombre como «Apellidos, Nombres» y el
+  programa. Los enlaces «Abrir WhatsApp» (`wa.me`) no pasan por baileys y no lo
+  registran.
 
 ---
 

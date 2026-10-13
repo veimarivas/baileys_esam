@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { UserRow } from '../auth/users.js';
 import { esamAreaLabel, esamEsAdmin, esamPuede } from '../auth/users.js';
+import { unreadCount } from '../core/notifications.js';
 import { runtimeInfo } from '../core/runtime.js';
 import { lastBackup } from '../core/backup.js';
 
@@ -148,6 +149,28 @@ function navList(user: UserRow, active: string, restrictToSettings = false, badg
     .join('');
 }
 
+/** Campana de notificaciones (la lista la carga `initNotifications` en app.js). */
+function notificationsBell(user: UserRow): string {
+  let unread = 0;
+  try {
+    unread = unreadCount(user.id);
+  } catch {
+    // tabla aún no migrada (primer arranque): sin contador
+  }
+  return `<div class="dropdown header-item notif-wrap">
+    <button type="button" class="btn btn-icon btn-topbar material-shadow-none btn-ghost-secondary rounded-circle" id="notif-btn"
+            data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-haspopup="true" aria-expanded="false"
+            aria-label="${unread ? `Notificaciones: ${unread} sin leer` : 'Notificaciones'}">
+      <i class="ri-notification-3-line fs-22"></i>
+      <span class="notif-badge" id="notif-badge" ${unread ? '' : 'hidden'}>${unread > 99 ? '99+' : unread}</span>
+    </button>
+    <div class="dropdown-menu dropdown-menu-end notif-menu p-0" aria-labelledby="notif-btn">
+      <div class="notif-head"><b>Notificaciones</b><button type="button" class="notif-readall" id="notif-readall">Marcar todas como leídas</button></div>
+      <div class="notif-list" id="notif-list"><div class="notif-empty">Cargando…</div></div>
+    </div>
+  </div>`;
+}
+
 /** Layout principal con la plantilla Velzon. */
 export function renderLayout(
   title: string,
@@ -198,6 +221,7 @@ export function renderLayout(
           </div>
         </div>
         <div class="d-flex align-items-center">
+          ${notificationsBell(user)}
           <div class="ms-1 header-item d-none d-sm-flex">
             <button type="button" class="btn btn-icon btn-topbar material-shadow-none btn-ghost-secondary rounded-circle light-dark-mode">
               <i class="ri-moon-line fs-22"></i>

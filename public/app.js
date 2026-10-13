@@ -905,11 +905,12 @@
 
     function assigneeOptions(selected) {
       var me = assigneesData.me;
-      var opts = '<option value="">Sin responsable</option>';
+      var opts = '<option value="">Sin derivar</option>';
       if (me) opts += '<option value="' + me + '"' + (selected === me ? ' selected' : '') + '>Yo</option>';
       assigneesData.users.forEach(function (u) {
         if (u.id === me) return;
-        opts += '<option value="' + u.id + '"' + (selected === u.id ? ' selected' : '') + '>' + escapeHtml(u.name || ('Usuario ' + u.id)) + '</option>';
+        var area = u.area ? ' · ' + u.area.charAt(0).toUpperCase() + u.area.slice(1) : '';
+        opts += '<option value="' + u.id + '"' + (selected === u.id ? ' selected' : '') + '>' + escapeHtml((u.name || ('Usuario ' + u.id)) + area) + '</option>';
       });
       return opts;
     }
@@ -987,6 +988,7 @@
               ((n.tags && n.tags.length) || due || pinBadge ? '<div class="nk-badges">' + pinBadge + due + tagsHtml(n) + '</div>' : '') +
               '<div class="nk-meta">' + meta + '</div>' +
             '</div>' +
+            derivationHtml(n) +
             '<div class="nk-editor" hidden></div>' +
             '<div class="nk-history" hidden></div>' +
           '</div>' +
@@ -1032,12 +1034,15 @@
       assigned: 'Cambió el responsable',
       snoozed: 'Pospuso el recordatorio',
       template: 'La creó desde una plantilla',
+      seen: 'Vio la derivación',
+      contacted: 'Confirmó que se comunicó con el contacto',
     };
     var HISTORY_ICONS = {
       edited: 'ri-pencil-line', done: 'ri-check-double-line', reopened: 'ri-restart-line',
       pinned: 'ri-pushpin-2-fill', unpinned: 'ri-unpin-line', deleted: 'ri-delete-bin-6-line', restored: 'ri-arrow-go-back-line',
       assigned: 'ri-user-received-2-line',
       snoozed: 'ri-alarm-snooze-line', template: 'ri-file-list-3-line',
+      seen: 'ri-eye-line', contacted: 'ri-phone-line',
     };
 
     // Línea de tiempo: la creación sale de la propia nota; el resto, del historial.
@@ -1062,9 +1067,51 @@
         if (e.action === 'assigned') what = e.detail ? 'Asignó la tarea a ' + e.detail : 'Quitó el responsable';
         if (e.action === 'snoozed' && e.detail) what = 'Pospuso el recordatorio para ' + e.detail;
         if (e.action === 'template' && e.detail) what = 'La creó desde la plantilla «' + e.detail + '»';
+        if (e.action === 'contacted' && e.detail) extra = '<div class="nk-h-before"><span class="nk-h-label">Resultado</span><span>' + escapeHtml(e.detail) + '</span></div>';
         rows.push(item(HISTORY_ICONS[e.action] || 'ri-record-circle-line', e.user_name, what, e.created_at, extra));
       });
       return '<div class="nk-h-head">Historial</div><ol class="nk-h-list">' + rows.join('') + '</ol>';
+    }
+
+    // Derivación: quién derivó a quién y en qué quedó (vista, contacto, resuelta).
+    function derivationHtml(n) {
+      if (!n.assigned_to || n.deleted_at) return '';
+      var area = n.assigned_area ? ' · ' + n.assigned_area.charAt(0).toUpperCase() + n.assigned_area.slice(1) : '';
+      var step = function (state, icon, label, detail) {
+        return '<li class="nk-step is-' + state + '"><span class="' + icon + '" aria-hidden="true"></span><div><b>' + label + '</b>' +
+          (detail ? '<span>' + detail + '</span>' : '') + '</div></li>';
+      };
+      var seen = n.seen_at
+        ? step('ok', 'ri-eye-line', 'Vista', escapeHtml(relTime(n.seen_at)))
+        : step(n.contacted_at ? 'ok' : 'wait', 'ri-eye-off-line', 'Sin ver', 'todavía no abrió la derivación');
+      var contacted = n.contacted_at
+        ? step('ok', 'ri-phone-line', 'Se comunicó', escapeHtml((n.contacted_by_name || n.assigned_name || '') + ' · ' + relTime(n.contacted_at)) +
+            (n.contact_result ? '<q>' + escapeHtml(n.contact_result) + '</q>' : ''))
+        : step('wait', 'ri-phone-line', 'Sin confirmar contacto', '');
+      var done = n.done_at ? step('ok', 'ri-check-double-line', 'Resuelta', escapeHtml((n.done_by_name || '') + ' · ' + relTime(n.done_at))) : '';
+      var digits = String(n.contact_phone || '').replace(/\D+/g, '');
+      var mine = n.assigned_to_me && !n.contacted_at && !n.done_at;
+      var actions = mine
+        ? '<div class="nk-deriv-actions">' +
+            (digits ? '<a class="btn btn-sm btn-primary" href="/conversations/' + digits + '%40c.us"><span class="ri-whatsapp-line me-1"></span>Escribirle desde mi línea</a>' +
+              '<a class="btn btn-sm btn-light" href="tel:+' + digits + '"><span class="ri-phone-line me-1"></span>Llamar</a>' : '') +
+            '<button type="button" class="btn btn-sm btn-soft-success nk-contacted-btn"><span class="ri-check-line me-1"></span>Ya me comuniqué</button>' +
+          '</div>' +
+          '<div class="nk-contact-form" hidden>' +
+            '<label class="nk-field-label">¿Cómo fue la comunicación?</label>' +
+            '<textarea class="form-control nk-textarea nk-contact-result" rows="2" maxlength="1000" placeholder="Ej.: Lo llamé, confirmó que paga el viernes por transferencia."></textarea>' +
+            '<div class="nk-editor-foot"><span class="nk-hint">Le avisa a quien derivó y al Super Admin.</span>' +
+              '<button type="button" class="btn btn-sm btn-light nk-contact-cancel">Cancelar</button>' +
+              '<button type="button" class="btn btn-sm btn-success nk-contact-save">Confirmar contacto</button></div>' +
+          '</div>'
+        : '';
+      return '<div class="nk-deriv' + (mine ? ' is-mine' : '') + '">' +
+        '<div class="nk-deriv-head"><span class="ri-share-forward-line" aria-hidden="true"></span>' +
+          '<span><b>' + escapeHtml(n.assigned_by_name || n.author_name || 'Alguien') + '</b> derivó a <b>' +
+          (n.assigned_to_me ? 'vos' : escapeHtml(n.assigned_name || 'otra persona')) + '</b>' + escapeHtml(n.assigned_to_me ? '' : area) +
+          ' · ' + escapeHtml(relTime(n.assigned_at || n.created_at)) + '</span></div>' +
+        '<ol class="nk-steps">' + seen + contacted + done + '</ol>' + actions +
+      '</div>';
     }
 
     function editorHtml(n) {
@@ -1108,6 +1155,23 @@
             .then(function (entries) { histBox.innerHTML = historyHtml(note, entries || []); })
             .catch(function (e) { histBox.innerHTML = '<div class="nk-hint">' + escapeHtml(e.message) + '</div>'; });
         });
+
+        var contactedBtn = card.querySelector('.nk-contacted-btn');
+        if (contactedBtn) {
+          var cform = card.querySelector('.nk-contact-form');
+          var cresult = cform.querySelector('.nk-contact-result');
+          contactedBtn.addEventListener('click', function () { cform.hidden = false; contactedBtn.disabled = true; cresult.focus(); });
+          cform.querySelector('.nk-contact-cancel').addEventListener('click', function () { cform.hidden = true; contactedBtn.disabled = false; });
+          cform.querySelector('.nk-contact-save').addEventListener('click', function (ev) {
+            var text = cresult.value.trim();
+            if (text.length < 3) { toast('Contá brevemente cómo fue la comunicación', true); cresult.focus(); return; }
+            var b = ev.currentTarget;
+            b.disabled = true;
+            jsonApi('/inbox/notes/' + id + '/contacted', 'POST', { result: text })
+              .then(function (updated) { toast('Contacto confirmado: ya les avisamos'); opts.onChanged(updated, id); })
+              .catch(function (e) { b.disabled = false; toast(e.message, true); });
+          });
+        }
 
         var gotoBtn = card.querySelector('.nk-goto');
         if (gotoBtn) gotoBtn.addEventListener('click', function () { opts.onGotoMessage(note.source_message_id); });
@@ -1219,6 +1283,62 @@
       tagStyle: tagStyle,
     };
   })();
+
+  /* ── Notificaciones (campana de la barra superior) ── */
+  function initNotifications() {
+    var btn = document.getElementById('notif-btn');
+    if (!btn) return;
+    var badge = document.getElementById('notif-badge');
+    var list = document.getElementById('notif-list');
+    var ICONS = {
+      note_created: 'ri-sticky-note-line', derived_to_you: 'ri-share-forward-line', derived: 'ri-share-forward-line',
+      contacted: 'ri-phone-line', resolved: 'ri-check-double-line',
+    };
+    function setBadge(n) {
+      n = Number(n) || 0;
+      badge.hidden = !n;
+      badge.textContent = n > 99 ? '99+' : String(n);
+      btn.setAttribute('aria-label', n ? 'Notificaciones: ' + n + ' sin leer' : 'Notificaciones');
+    }
+    window.__setNotifBadge = setBadge;
+    function go(item) {
+      var done = function () { if (item.link) location.href = item.link; };
+      if (item.read_at) { done(); return; }
+      jsonApi('/notifications/read', 'POST', { ids: [item.id] }).then(function (r) { setBadge(r.unread); done(); }).catch(done);
+    }
+    function render(items) {
+      if (!items.length) { list.innerHTML = '<div class="notif-empty"><span class="ri-notification-off-line"></span>No tenés notificaciones.</div>'; return; }
+      list.innerHTML = items.map(function (it, i) {
+        return '<button type="button" class="notif-item' + (it.read_at ? '' : ' unread') + ' k-' + it.kind + '" data-i="' + i + '">' +
+          '<span class="notif-ic ' + (ICONS[it.kind] || 'ri-notification-3-line') + '" aria-hidden="true"></span>' +
+          '<span class="notif-body"><span class="notif-title">' + escapeHtml(it.title) + '</span>' +
+            (it.body ? '<span class="notif-text">' + escapeHtml(it.body) + '</span>' : '') +
+            '<span class="notif-time">' + escapeHtml(NoteKit.relTime(it.created_at)) + '</span></span>' +
+        '</button>';
+      }).join('');
+      Array.prototype.forEach.call(list.querySelectorAll('.notif-item'), function (el) {
+        el.addEventListener('click', function () { go(items[Number(el.getAttribute('data-i'))]); });
+      });
+    }
+    function load() {
+      return api('/notifications').then(function (d) { setBadge(d.unread); render(d.items || []); }).catch(function () {});
+    }
+    btn.parentElement.addEventListener('show.bs.dropdown', load);
+    var readAll = document.getElementById('notif-readall');
+    if (readAll) readAll.addEventListener('click', function () {
+      jsonApi('/notifications/read', 'POST', { all: true }).then(function (r) { setBadge(r.unread); load(); }).catch(function () {});
+    });
+    var es = liveSource();
+    if (es) es.addEventListener('notification', function (e) {
+      var d; try { d = JSON.parse(e.data); } catch (_) { return; }
+      setBadge(d.unread);
+      toast(d.title, false, d.link ? { label: 'Ver', run: function () { go({ id: d.id, link: d.link }); } } : null);
+      if (btn.getAttribute('aria-expanded') === 'true') load();
+      if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+        try { new Notification(d.title, { body: d.body || '', tag: 'notif-' + d.id }); } catch (_) {}
+      }
+    });
+  }
 
   /* ── Recordatorios y resumen del día (en cualquier página del panel) ── */
   function initReminders() {
@@ -2112,7 +2232,7 @@
             '<small>Se muestra fijada arriba del chat para quien atienda a esta persona.</small></span>' +
         '</label>' +
         '<div class="nk-field-label">¿Es una tarea? Fecha de seguimiento</div><div class="nk-due-wrap"></div>' +
-        '<div class="nk-field-label">Responsable <span class="nk-field-hint">· puede ser de otra línea</span></div>' +
+        '<div class="nk-field-label">Derivar a <span class="nk-field-hint">· otra persona o área; le llega una notificación con el detalle</span></div>' +
         '<select class="form-select form-select-sm nk-assignee-select" aria-label="Responsable de la tarea"></select>' +
         '<div class="nk-field-label">Etiquetas</div><div class="nk-tag-picker"></div>' +
         '<div class="nk-composer-foot">' +
@@ -2630,6 +2750,7 @@
       { key: 'week', label: 'Próximos 7 días', icon: 'ri-calendar-event-line', tone: 'info' },
       { key: 'pinned', label: 'Importantes', icon: 'ri-pushpin-2-line', tone: 'pin' },
       { key: 'pending', label: 'Pendientes', icon: 'ri-time-line', tone: 'brand' },
+      { key: 'derived', label: 'Derivaciones', icon: 'ri-share-forward-line', tone: 'info' },
       { key: 'done', label: 'Resueltas', icon: 'ri-check-double-line', tone: 'ok' },
       { key: 'all', label: 'Todas', icon: 'ri-stack-line', tone: 'mute' },
     ];
@@ -2637,8 +2758,11 @@
       pinned: 'Importantes', overdue: 'Vencidas', today: 'Para hoy', soon: 'Próximos 7 días',
       later: 'Más adelante', none: 'Sin fecha de seguimiento', done: 'Resueltas',
       trash: 'En la papelera',
+      d_unseen: 'Sin ver por el responsable', d_nocontact: 'Vistas, sin confirmar contacto', d_contacted: 'Con contacto confirmado',
     };
-    var GROUP_ORDER = ['pinned', 'overdue', 'today', 'soon', 'later', 'none', 'done', 'trash'];
+    var GROUP_ORDER = ['d_unseen', 'd_nocontact', 'd_contacted', 'pinned', 'overdue', 'today', 'soon', 'later', 'none', 'done', 'trash'];
+    // Nota abierta desde una notificación (?nota=ID).
+    var focusId = Number(new URLSearchParams(location.search).get('nota')) || 0;
 
     var els = {
       stats: root.querySelector('#np-stats'),
@@ -2671,6 +2795,7 @@
 
     function loadNotes() {
       var p = ['status=' + st.status, 'order=' + (els.order.value || 'due')];
+      if (focusId) p.push('ids=' + focusId);
       if (els.search.value.trim()) p.push('q=' + encodeURIComponent(els.search.value.trim()));
       if (st.tag) p.push('tag=' + st.tag);
       if (els.mine.checked) p.push('mine=1');
@@ -2681,11 +2806,24 @@
         st.stats = d && d.stats;
         renderStats();
         renderNotes();
+        markSeen();
       }).catch(function (e) { toast(e.message, true); })
         .then(function () { els.list.classList.remove('loading'); });
     }
 
     function refresh() { return loadNotes().then(loadTags); }
+
+    // Lo que tengo derivado y estoy viendo en la lista queda «visto»; la nota de
+    // una notificación, además, deja sus avisos leídos.
+    function markSeen() {
+      st.notes.forEach(function (n) {
+        if ((n.assigned_to_me && !n.seen_at && !n.contacted_at) || n.id === focusId) {
+          jsonApi('/inbox/notes/' + n.id + '/seen', 'POST')
+            .then(function (r) { n.seen_at = r.seen_at; if (window.__setNotifBadge) window.__setNotifBadge(r.unread); })
+            .catch(function () {});
+        }
+      });
+    }
 
     function renderStats() {
       var s = st.stats || {};
@@ -2727,6 +2865,7 @@
         var days = Math.floor((Date.now() - new Date(n.created_at).getTime()) / 86400000);
         return days < 1 ? 'Registradas hoy' : days < 2 ? 'Ayer' : days < 7 ? 'Esta semana' : days < 31 ? 'Este mes' : 'Anteriores';
       }
+      if (st.status === 'derived') return n.contacted_at ? 'd_contacted' : n.seen_at ? 'd_nocontact' : 'd_unseen';
       return NoteKit.isPinned(n) ? 'pinned' : NoteKit.dueState(n);
     }
 
@@ -2739,6 +2878,7 @@
           week: 'No hay seguimientos en los próximos 7 días.',
           pinned: 'No hay notas marcadas como importantes.',
           trash: 'La papelera está vacía.',
+          derived: 'No hay derivaciones abiertas.',
           pending: 'No hay notas pendientes de seguimiento.',
           done: 'Todavía no se marcó ninguna nota como resuelta.',
           all: 'Todavía no hay notas.',
@@ -2749,7 +2889,7 @@
           '<span class="np-empty-sub">Las notas se registran desde la ficha del contacto, dentro de cada conversación.</span></div>';
         return;
       }
-      var byDue = (els.order.value || 'due') === 'due' || st.status === 'trash';
+      var byDue = (els.order.value || 'due') === 'due' || st.status === 'trash' || st.status === 'derived';
       var groups = {};
       var order = [];
       notes.forEach(function (n) {
@@ -2758,13 +2898,29 @@
         groups[k].push(n);
       });
       if (byDue) order.sort(function (a, b) { return GROUP_ORDER.indexOf(a) - GROUP_ORDER.indexOf(b); });
-      els.list.innerHTML = order.map(function (k) {
+      var s = st.stats || {};
+      var head = focusId
+        ? '<div class="np-focus"><span class="ri-notification-3-line" aria-hidden="true"></span>Mostrando la nota del aviso.<button type="button" class="np-clear" id="np-focus-clear">Ver todas</button></div>'
+        : st.status === 'derived'
+          ? '<div class="np-deriv-sum">' +
+              '<span class="is-wait"><b>' + (s.derived_unseen || 0) + '</b>sin ver</span>' +
+              '<span class="is-warn"><b>' + (s.derived_no_contact || 0) + '</b>vistas sin contacto</span>' +
+              '<span class="is-ok"><b>' + (s.derived_contacted || 0) + '</b>con contacto confirmado</span>' +
+            '</div>'
+          : '';
+      els.list.innerHTML = head + order.map(function (k) {
         var label = byDue ? GROUP_LABELS[k] : k;
         return '<section class="np-group np-group-' + (byDue ? k : 'time') + '">' +
           '<h6 class="np-group-title">' + escapeHtml(label) + ' <span>' + groups[k].length + '</span></h6>' +
           '<div class="np-cards">' + groups[k].map(function (n) { return NoteKit.cardHtml(n, { showContact: true }); }).join('') + '</div>' +
         '</section>';
       }).join('');
+      var clearFocus = els.list.querySelector('#np-focus-clear');
+      if (clearFocus) clearFocus.addEventListener('click', function () {
+        focusId = 0;
+        history.replaceState(null, '', '/notes');
+        loadNotes();
+      });
       NoteKit.bindCards(els.list, {
         find: function (id) { return st.notes.filter(function (n) { return n.id === id; })[0]; },
         tags: function () { return st.tags; },
@@ -3136,6 +3292,7 @@
   initInbox();
   initNotes();
   initReminders();
+  initNotifications();
   initTemplatesManager();
   initActivity();
   initOnceForms();

@@ -1093,6 +1093,36 @@ nuevo `src/panel/admin-views.ts`.
   recuperación por correo (`NewPasswordController`), con
   `SeguimientoEsamClient::syncPassword`.
 
+## 27. Notificaciones y derivaciones con seguimiento (2026-10-12)
+
+- **Notificaciones** (`notifications`, `src/core/notifications.ts`): campana en la
+  barra superior para todos los usuarios, con contador, lista y «Marcar todas como
+  leídas». Se guardan en la base y llegan en vivo por SSE privado (`notification`),
+  con un aviso con «Ver» y, si la pestaña está en segundo plano, una notificación
+  del sistema. Al abrir la nota, sus avisos quedan leídos.
+- **Quién recibe qué** (`announce` en `src/panel/inbox.ts`):
+  - **Super Admin:** cada nota o tarea que registra otra persona, cada derivación,
+    cada contacto confirmado y cada derivación resuelta.
+  - **Responsable:** «X te derivó a <contacto>», con el número y el detalle.
+  - **Quien derivó** (y el autor de la nota): cuando el responsable se comunica y
+    cuando se resuelve.
+- **Derivación** (antes «Responsable», ahora «Derivar a», con el área de cada
+  persona). En `contact_notes` se guarda quién derivó y cuándo (`assigned_by`,
+  `assigned_at`), cuándo la vio el responsable (`seen_at`) y la confirmación de
+  contacto con su resultado (`contacted_at`, `contacted_by`, `contact_result`).
+  Reasignar reinicia la vista y el contacto. Todo queda en el historial
+  (`seen`, `contacted`).
+- **Tarjeta de la nota:** bloque «X derivó a Y · Área», con los pasos «Vista»,
+  «Se comunicó» (con el resultado) y «Resuelta». El responsable tiene «Escribirle
+  desde mi línea» (abre el chat con ese número en su propia línea), «Llamar» y
+  «Ya me comuniqué», que exige contar el resultado.
+- **Notas y tareas:** pestaña «Derivaciones» agrupada en «Sin ver», «Vistas, sin
+  confirmar contacto» y «Con contacto confirmado», con un resumen de los tres
+  conteos. `?nota=ID` abre la nota de una notificación. Lo derivado que el
+  responsable ve en su lista queda marcado como visto.
+- **El Super Admin supervisa todas las notas** (`noteScope`), aunque tenga número
+  propio. Las conversaciones siguen siendo solo las de su número.
+
 ---
 
 ## Notas de operación

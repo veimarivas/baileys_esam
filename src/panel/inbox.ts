@@ -14,6 +14,8 @@ import {
   listAllNotes,
   listNoteHistory,
   listNotes,
+  markAssignmentSeen,
+  markContacted,
   markFromTemplate,
   myDay,
   noteAssignees,
@@ -30,6 +32,7 @@ import {
   type NoteStatus,
 } from '../core/contacts.js';
 import * as noteTags from '../core/note-tags.js';
+import { listNotifications, markNoteRead, markRead, notify, supervisorIds, unreadCount, type NotificationKind } from '../core/notifications.js';
 import * as noteTemplates from '../core/note-templates.js';
 import * as quickReplies from '../core/quick-replies.js';
 import { getSticker } from '../core/stickers.js';
@@ -107,7 +110,12 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
     user: UserRow,
     note: T,
   ): T & { can_edit: boolean; assigned_to_me: boolean } {
-    return { ...note, can_edit: canEditNote(user, note), assigned_to_me: !!note.assigned_to && note.assigned_to === user.id };
+    return {
+      ...note,
+      can_edit: canEditNote(user, note),
+      assigned_to_me: !!note.assigned_to && note.assigned_to === user.id,
+      supervisor: esamEsAdmin(user),
+    };
   }
 
   /** Responsable válido (usuario habilitado) o null. */
@@ -136,7 +144,7 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       res.status(409).json({ error: 'La nota está en la papelera. Restaurala para modificarla.' });
       return null;
     }
-    const scope = sessionScopeFor(req.user!);
+    const scope = noteScope(req.user!);
     if (!noteVisibleIn(note.id, scope, req.user!.id)) {
       res.status(403).json({ error: 'No tenés acceso a esta nota.' });
       return null;
@@ -162,6 +170,51 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       sessionIds: [...new Set(chats.map((c) => c.session_id))],
       chats: chats.map((c) => ({ sessionId: c.session_id, chatId: c.chat_id })),
     });
+  }
+
+  /**
+   * Alcance de las notas: el Super Admin supervisa las de todas las líneas;
+   * el resto, las de sus números (y las de personas en común).
+   */
+  function noteScope(user: UserRow): string[] | null {
+    return esamEsAdmin(user) ? null : sessionScopeFor(user);
+  }
+
+  /**
+   * Avisa (campana) los hechos de una nota: al Super Admin, todo lo que registra
+   * el equipo; al responsable, lo que le derivan; a quien derivó, el contacto y
+   * la resolución. El enlace abre la nota en Notas y tareas.
+   */
+  function announce(
+    noteId: number,
+    event: 'created' | 'reassigned' | 'contacted' | 'resolved',
+    actor: UserRow,
+    extra: { templateName?: string; count?: number } = {},
+  ): void {
+    const n = listAllNotes({ ids: [noteId], sessionIds: null, status: 'all', limit: 1 })[0];
+    if (!n) return;
+    const who = actor.name ?? actor.username ?? 'Alguien';
+    const contact = n.contact_name || (n.contact_phone ? `+${n.contact_phone}` : n.chat_id.split('@')[0]);
+    const phone = n.contact_phone ? `+${n.contact_phone}` : '';
+    const text = (n.note_text ?? 'Nota de voz').replace(/\s+/g, ' ').slice(0, 160);
+    const link = `/notes?nota=${noteId}`;
+    const kindLabel = extra.templateName ? `aplicó la plantilla «${extra.templateName}» (${extra.count} tareas)` : n.due_at ? 'registró una tarea' : 'registró una nota';
+    const supervisors = supervisorIds();
+    const send = (ids: Array<number | null>, kind: NotificationKind, title: string, body: string) =>
+      notify(ids, { kind, noteId, actorId: actor.id, title, body, link });
+
+    if (event === 'created' || event === 'reassigned') {
+      if (n.assigned_to && n.assigned_to !== actor.id) {
+        send([n.assigned_to], 'derived_to_you', `${who} te derivó a ${contact}`, `${phone ? `${phone} · ` : ''}${text}`);
+        send(supervisors.filter((id) => id !== n.assigned_to), 'derived', `${who} derivó a ${contact} con ${n.assigned_name ?? 'otra persona'}`, text);
+      } else if (event === 'created') {
+        send(supervisors, 'note_created', `${who} ${kindLabel} · ${contact}`, text);
+      }
+    } else if (event === 'contacted') {
+      send([n.assigned_by, n.user_id, ...supervisors], 'contacted', `${who} se comunicó con ${contact}`, n.contact_result ?? 'Contacto confirmado.');
+    } else if (event === 'resolved') {
+      send([n.assigned_by, n.user_id, ...supervisors], 'resolved', `${who} resolvió la tarea de ${contact}`, text);
+    }
   }
 
   /** `tag_ids` puede llegar como arreglo (JSON) o como texto JSON (multipart). */
@@ -509,6 +562,7 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
         },
       );
       publishNoteChange(note.id, note.assigned_to && note.assigned_to !== req.user!.id ? 'assigned' : 'created', req.user!.id);
+      announce(note.id, 'created', req.user!);
       res.status(201).json(withPermissions(req.user!, note));
     }),
   );
@@ -519,7 +573,7 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
     '/notes/tags',
     ...auth,
     ah((req, res) => {
-      res.json({ tags: noteTags.listTagsWithUsage(sessionScopeFor(req.user!)), colors: noteTags.NOTE_TAG_COLORS });
+      res.json({ tags: noteTags.listTagsWithUsage(noteScope(req.user!)), colors: noteTags.NOTE_TAG_COLORS });
     }),
   );
 
@@ -563,18 +617,24 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
     ...auth,
     ah((req, res) => {
       const user = req.user!;
-      const scope = sessionScopeFor(user);
+      const scope = noteScope(user);
       const tagId = Number(req.query.tag ?? 0) || null;
       const rawStatus = String(req.query.status ?? (String(req.query.overdue ?? '') === '1' ? 'overdue' : 'pending'));
-      const status = (['pending', 'overdue', 'today', 'week', 'pinned', 'done', 'all', 'trash'] as NoteStatus[]).includes(rawStatus as NoteStatus)
+      const status = (['pending', 'overdue', 'today', 'week', 'pinned', 'done', 'all', 'trash', 'derived'] as NoteStatus[]).includes(rawStatus as NoteStatus)
         ? (rawStatus as NoteStatus)
         : 'pending';
       const q = typeof req.query.q === 'string' && req.query.q.trim() ? req.query.q.trim() : null;
       const orderBy = String(req.query.order ?? '') === 'created' ? 'created' : 'due';
       const authorId = String(req.query.mine ?? '') === '1' ? user.id : null;
       const assignedTo = String(req.query.assigned ?? '') === '1' ? user.id : null;
+      const ids = String(req.query.ids ?? '')
+        .split(',')
+        .map((x) => Number(x))
+        .filter((x) => Number.isFinite(x) && x > 0)
+        .slice(0, 50);
       res.json({
-        notes: listAllNotes({ tagId, status, q, orderBy, authorId, assignedTo, viewerId: user.id, sessionIds: scope })
+        supervisor: esamEsAdmin(user),
+        notes: listAllNotes({ tagId, status: ids.length ? 'all' : status, q, orderBy, authorId, assignedTo, ids, viewerId: user.id, sessionIds: scope })
           .map((n) => withPermissions(user, n)),
         stats: noteStats({ sessionIds: scope, authorId, assignedTo, viewerId: user.id }),
       });
@@ -655,6 +715,7 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       });
       if (created.length) {
         publishNoteChange(created[0].id, assignedTo && assignedTo !== req.user!.id ? 'assigned' : 'created', req.user!.id);
+        announce(created[0].id, 'created', req.user!, { templateName: template.name, count: created.length });
       }
       res.status(201).json({ created: created.length });
     }),
@@ -714,6 +775,7 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       const after = getNote(note.id);
       const reassigned = !!after?.assigned_to && after.assigned_to !== note.assigned_to && after.assigned_to !== req.user!.id;
       publishNoteChange(note.id, reassigned ? 'assigned' : 'edited', req.user!.id);
+      if (reassigned) announce(note.id, 'reassigned', req.user!);
       res.json(withPermissions(req.user!, noteDTO(note.id)!));
     }),
   );
@@ -728,7 +790,63 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       const done = req.body?.done !== false && String(req.body?.done) !== '0';
       setNoteDone(note.id, req.user!.id, done);
       publishNoteChange(note.id, done ? 'done' : 'reopened', req.user!.id);
+      if (done && note.assigned_to) announce(note.id, 'resolved', req.user!);
       res.json(withPermissions(req.user!, noteDTO(note.id)!));
+    }),
+  );
+
+  // La persona abrió la nota: sus avisos quedan leídos y, si es el responsable,
+  // la derivación queda «vista».
+  app.post(
+    '/inbox/notes/:id/seen',
+    ...auth,
+    ah((req, res) => {
+      const note = accessibleNote(req, res, { allowDeleted: true });
+      if (!note) return;
+      markNoteRead(req.user!.id, note.id);
+      if (markAssignmentSeen(note.id, req.user!.id)) publishNoteChange(note.id, 'seen', req.user!.id);
+      res.json({ ...withPermissions(req.user!, noteDTO(note.id)!), unread: unreadCount(req.user!.id) });
+    }),
+  );
+
+  // El responsable confirma que se comunicó con el contacto (con el resultado).
+  app.post(
+    '/inbox/notes/:id/contacted',
+    ...auth,
+    ah((req, res) => {
+      const note = accessibleNote(req, res);
+      if (!note) return;
+      if (note.assigned_to !== req.user!.id && !esamEsAdmin(req.user!)) {
+        return res.status(403).json({ error: 'Solo la persona a la que se derivó puede confirmar el contacto.' });
+      }
+      const result = String(req.body?.result ?? '').trim().slice(0, 1000);
+      if (result.length < 3) {
+        return res.status(422).json({ error: 'Contá brevemente cómo fue la comunicación (al menos unas palabras).' });
+      }
+      markContacted(note.id, req.user!.id, result);
+      publishNoteChange(note.id, 'contacted', req.user!.id);
+      announce(note.id, 'contacted', req.user!);
+      res.json(withPermissions(req.user!, noteDTO(note.id)!));
+    }),
+  );
+
+  // Campana: últimas notificaciones y no leídas.
+  app.get(
+    '/notifications',
+    ...auth,
+    ah((req, res) => {
+      res.json({ unread: unreadCount(req.user!.id), items: listNotifications(req.user!.id, 30) });
+    }),
+  );
+
+  app.post(
+    '/notifications/read',
+    ...auth,
+    ah((req, res) => {
+      const all = req.body?.all === true || req.body?.all === '1';
+      const ids = Array.isArray(req.body?.ids) ? (req.body.ids as unknown[]).map((x) => Number(x)) : [];
+      markRead(req.user!.id, all ? 'all' : ids);
+      res.json({ unread: unreadCount(req.user!.id) });
     }),
   );
 

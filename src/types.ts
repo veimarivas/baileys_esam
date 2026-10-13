@@ -143,6 +143,15 @@ export interface ContactNoteRow {
   due_time: string | null;
   /** Cuándo se avisó el recordatorio (null = pendiente de avisar). */
   reminded_at: string | null;
+  /** Derivación: quién la derivó y cuándo. */
+  assigned_by: number | null;
+  assigned_at: string | null;
+  /** Cuándo la vio el responsable. */
+  seen_at: string | null;
+  /** Confirmación del responsable de que se comunicó con el contacto. */
+  contacted_at: string | null;
+  contacted_by: number | null;
+  contact_result: string | null;
   /** Responsable de la tarea (null = sin asignar). */
   assigned_to: number | null;
   /** Mensaje del chat desde el que se registró (si se guardó desde una burbuja). */

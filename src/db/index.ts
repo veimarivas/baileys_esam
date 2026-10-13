@@ -130,6 +130,28 @@ export function migrate(): void {
   addColumnIfMissing('contact_notes', 'due_time', 'TEXT');
   addColumnIfMissing('contact_notes', 'reminded_at', 'TEXT');
   db.exec('CREATE INDEX IF NOT EXISTS idx_contact_notes_reminder ON contact_notes(reminded_at, done_at, due_at)');
+  // Derivación: quién derivó y cuándo, cuándo la vio el responsable y su
+  // confirmación de que se comunicó con el contacto (con el resultado).
+  addColumnIfMissing('contact_notes', 'assigned_by', 'INTEGER');
+  addColumnIfMissing('contact_notes', 'assigned_at', 'TEXT');
+  addColumnIfMissing('contact_notes', 'seen_at', 'TEXT');
+  addColumnIfMissing('contact_notes', 'contacted_at', 'TEXT');
+  addColumnIfMissing('contact_notes', 'contacted_by', 'INTEGER');
+  addColumnIfMissing('contact_notes', 'contact_result', 'TEXT');
+  // Notificaciones del panel (campana).
+  db.exec(`CREATE TABLE IF NOT EXISTS notifications (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL,
+    kind       TEXT NOT NULL,
+    note_id    INTEGER,
+    actor_id   INTEGER,
+    title      TEXT NOT NULL,
+    body       TEXT,
+    link       TEXT,
+    created_at TEXT NOT NULL,
+    read_at    TEXT
+  )`);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, read_at, id)');
   // Plantillas de tareas (pasos que se repiten, p. ej. una inscripción).
   db.exec(`CREATE TABLE IF NOT EXISTS note_templates (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,

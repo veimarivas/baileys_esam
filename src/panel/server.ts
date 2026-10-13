@@ -112,7 +112,7 @@ const INBOX_WHERE = `chat_id NOT LIKE '%@broadcast' AND chat_id NOT LIKE '%@news
  * listado agrupado por fecha y gestor de etiquetas en la columna lateral.
  * El contenido lo arma `initNotes()` en public/app.js.
  */
-function renderNotesPage(): string {
+export function renderNotesPage(): string {
   return `<div class="notes-page" id="notes-page">
     <div class="np-stats" id="np-stats" role="tablist" aria-label="Estado del seguimiento"></div>
 

@@ -113,6 +113,9 @@ export interface ContactNoteWithAuthor extends ContactNoteRow {
   author_name: string | null;
   done_by_name: string | null;
   assigned_name: string | null;
+  assigned_area: string | null;
+  assigned_by_name: string | null;
+  contacted_by_name: string | null;
   /** Línea (sesión) desde la que se registró la nota. */
   session_id: string;
   session_name: string | null;
@@ -122,13 +125,16 @@ export interface ContactNoteWithAuthor extends ContactNoteRow {
 
 /** Columnas comunes de una nota con su autor, quién la completó y su línea de origen. */
 const NOTE_SELECT = `SELECT n.*, u.name AS author_name, d.name AS done_by_name, a.name AS assigned_name,
+    a.esam_area AS assigned_area, ab.name AS assigned_by_name, cb.name AS contacted_by_name,
     ct.session_id AS session_id, s.name AS session_name, COALESCE(s.phone, s.expected_phone) AS session_phone
   FROM contact_notes n
   JOIN contacts ct ON ct.id = n.contact_id
   LEFT JOIN sessions s ON s.id = ct.session_id
   LEFT JOIN users u ON u.id = n.user_id
   LEFT JOIN users d ON d.id = n.done_by
-  LEFT JOIN users a ON a.id = n.assigned_to`;
+  LEFT JOIN users a ON a.id = n.assigned_to
+  LEFT JOIN users ab ON ab.id = n.assigned_by
+  LEFT JOIN users cb ON cb.id = n.contacted_by`;
 
 /**
  * Fichas de la misma persona en todas las líneas: la propia más las que
@@ -288,8 +294,9 @@ export function addNote(
   extra: { assignedTo?: number | null; sourceMessageId?: number | null; dueTime?: string | null } = {},
 ): ContactNoteWithAuthor {
   const created = run(
-    `INSERT INTO contact_notes (contact_id, user_id, note_text, audio_path, due_at, due_time, pinned, assigned_to, source_message_id, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO contact_notes (contact_id, user_id, note_text, audio_path, due_at, due_time, pinned, assigned_to,
+       assigned_by, assigned_at, source_message_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     contactId,
     userId,
     noteText,
@@ -298,6 +305,8 @@ export function addNote(
     dueAt ? extra.dueTime || null : null,
     pinned ? 1 : 0,
     extra.assignedTo ?? null,
+    extra.assignedTo ? userId : null,
+    extra.assignedTo ? nowIso() : null,
     extra.sourceMessageId ?? null,
     nowIso(),
   );
@@ -352,6 +361,43 @@ export function updateNote(
     noteId,
   );
   if (patch.tagIds) setNoteTags(noteId, patch.tagIds);
+  if (assignedTo !== current.assigned_to) {
+    // Nueva derivación: empieza de cero (vista y contacto son del nuevo responsable).
+    run(
+      `UPDATE contact_notes SET assigned_by = ?, assigned_at = ?, seen_at = NULL,
+              contacted_at = NULL, contacted_by = NULL, contact_result = NULL WHERE id = ?`,
+      assignedTo ? userId : null,
+      assignedTo ? nowIso() : null,
+      noteId,
+    );
+  }
+}
+
+/** El responsable abrió la derivación: queda registrado una sola vez. */
+export function markAssignmentSeen(noteId: number, userId: number): boolean {
+  const changed = run(
+    'UPDATE contact_notes SET seen_at = ? WHERE id = ? AND assigned_to = ? AND seen_at IS NULL',
+    nowIso(),
+    noteId,
+    userId,
+  ).changes;
+  if (changed) logNoteEvent(noteId, userId, 'seen');
+  return !!changed;
+}
+
+/** El responsable confirma que se comunicó con el contacto, con el resultado. */
+export function markContacted(noteId: number, userId: number, result: string): void {
+  const now = nowIso();
+  run(
+    `UPDATE contact_notes SET contacted_at = ?, contacted_by = ?, contact_result = ?, seen_at = COALESCE(seen_at, ?)
+      WHERE id = ?`,
+    now,
+    userId,
+    result || null,
+    now,
+    noteId,
+  );
+  logNoteEvent(noteId, userId, 'contacted', undefined, result || null);
 }
 
 /** Pospone el recordatorio: nueva fecha y hora, y vuelve a avisar. */
@@ -416,7 +462,9 @@ export type NoteAction =
   | 'restored'
   | 'assigned'
   | 'snoozed'
-  | 'template';
+  | 'template'
+  | 'seen'
+  | 'contacted';
 
 export interface NoteHistoryEntry {
   id: number;
@@ -586,9 +634,10 @@ export interface GlobalNote extends ContactNoteWithAuthor {
  * Estado de seguimiento para filtrar:
  * pending = sin completar · overdue = vencidas · today = vencen hoy ·
  * week = vencen en los próximos 7 días · pinned = importantes pendientes ·
- * done = completadas · all = todas · trash = en la papelera.
+ * done = completadas · all = todas · trash = en la papelera ·
+ * derived = derivadas a otra persona y aún sin resolver.
  */
-export type NoteStatus = 'pending' | 'overdue' | 'today' | 'week' | 'pinned' | 'done' | 'all' | 'trash';
+export type NoteStatus = 'pending' | 'overdue' | 'today' | 'week' | 'pinned' | 'done' | 'all' | 'trash' | 'derived';
 
 const TODAY = "date('now','localtime')";
 
@@ -604,6 +653,8 @@ function statusClause(status: NoteStatus): string | null {
       return `n.done_at IS NULL AND n.due_at > ${TODAY} AND n.due_at <= date('now','localtime','+7 day')`;
     case 'pinned':
       return 'n.done_at IS NULL AND n.pinned = 1';
+    case 'derived':
+      return 'n.done_at IS NULL AND n.assigned_to IS NOT NULL';
     case 'done':
       return 'n.done_at IS NOT NULL';
     default:
@@ -652,6 +703,8 @@ export function listAllNotes(opts: {
   viewerId?: number | null;
   /** Solo tareas asignadas a este usuario. */
   assignedTo?: number | null;
+  /** Solo estas notas (p. ej. la de una notificación). */
+  ids?: number[];
   orderBy?: 'created' | 'due';
   limit?: number;
 } = {}): GlobalNote[] {
@@ -661,6 +714,10 @@ export function listAllNotes(opts: {
   if (opts.assignedTo) {
     where.push('n.assigned_to = ?');
     params.push(opts.assignedTo);
+  }
+  if (opts.ids?.length) {
+    where.push(`n.id IN (${opts.ids.map(() => '?').join(',')})`);
+    params.push(...opts.ids);
   }
   if (opts.tagId) {
     where.push('EXISTS (SELECT 1 FROM contact_note_tags nt WHERE nt.note_id = n.id AND nt.tag_id = ?)');
@@ -696,6 +753,7 @@ export function listAllNotes(opts: {
       : 'ORDER BY n.created_at DESC, n.id DESC';
   const rows = all<GlobalNote>(
     `SELECT n.*, u.name AS author_name, d.name AS done_by_name, x.name AS deleted_by_name, a.name AS assigned_name,
+            a.esam_area AS assigned_area, ab.name AS assigned_by_name, cb.name AS contacted_by_name,
             ct.name AS contact_name, ct.phone AS contact_phone, ct.chat_id AS chat_id, ct.session_id AS session_id,
             s.name AS session_name, COALESCE(s.phone, s.expected_phone) AS session_phone
        FROM contact_notes n
@@ -703,6 +761,8 @@ export function listAllNotes(opts: {
        LEFT JOIN users d ON d.id = n.done_by
        LEFT JOIN users x ON x.id = n.deleted_by
        LEFT JOIN users a ON a.id = n.assigned_to
+       LEFT JOIN users ab ON ab.id = n.assigned_by
+       LEFT JOIN users cb ON cb.id = n.contacted_by
        JOIN contacts ct ON ct.id = n.contact_id
        LEFT JOIN sessions s ON s.id = ct.session_id
       ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
@@ -723,6 +783,13 @@ export interface NoteStats {
   done: number;
   all: number;
   trash: number;
+  derived: number;
+  /** Derivadas que el responsable todavía no abrió. */
+  derived_unseen: number;
+  /** Derivadas vistas pero sin confirmación de contacto. */
+  derived_no_contact: number;
+  /** Derivadas con contacto confirmado (sin resolver aún). */
+  derived_contacted: number;
 }
 
 /** Conteos por estado de seguimiento (para los indicadores de /notes). */
@@ -734,7 +801,10 @@ export function noteStats(opts: {
 } = {}): NoteStats {
   const where: string[] = [];
   const params: unknown[] = [];
-  const empty: NoteStats = { pending: 0, overdue: 0, today: 0, week: 0, pinned: 0, done: 0, all: 0, trash: 0 };
+  const empty: NoteStats = {
+    pending: 0, overdue: 0, today: 0, week: 0, pinned: 0, done: 0, all: 0, trash: 0,
+    derived: 0, derived_unseen: 0, derived_no_contact: 0, derived_contacted: 0,
+  };
   if (!scopeClause(opts.sessionIds, where, params, opts.viewerId ?? null)) return empty;
   if (opts.assignedTo) {
     where.push('n.assigned_to = ?');
@@ -749,7 +819,11 @@ export function noteStats(opts: {
   const row = get<Record<keyof NoteStats, number | null>>(
     `SELECT ${sum('pending')} AS pending, ${sum('overdue')} AS overdue, ${sum('today')} AS today,
             ${sum('week')} AS week, ${sum('pinned')} AS pinned, ${sum('done')} AS done, ${sum('all')} AS "all",
-            SUM(CASE WHEN n.deleted_at IS NOT NULL THEN 1 ELSE 0 END) AS trash
+            SUM(CASE WHEN n.deleted_at IS NOT NULL THEN 1 ELSE 0 END) AS trash,
+            ${sum('derived')} AS derived,
+            SUM(CASE WHEN n.deleted_at IS NULL AND n.done_at IS NULL AND n.assigned_to IS NOT NULL AND n.seen_at IS NULL AND n.contacted_at IS NULL THEN 1 ELSE 0 END) AS derived_unseen,
+            SUM(CASE WHEN n.deleted_at IS NULL AND n.done_at IS NULL AND n.assigned_to IS NOT NULL AND n.seen_at IS NOT NULL AND n.contacted_at IS NULL THEN 1 ELSE 0 END) AS derived_no_contact,
+            SUM(CASE WHEN n.deleted_at IS NULL AND n.done_at IS NULL AND n.assigned_to IS NOT NULL AND n.contacted_at IS NOT NULL THEN 1 ELSE 0 END) AS derived_contacted
        FROM contact_notes n JOIN contacts ct ON ct.id = n.contact_id
       ${where.length ? 'WHERE ' + where.join(' AND ') : ''}`,
     ...params,
@@ -763,5 +837,9 @@ export function noteStats(opts: {
     done: Number(row?.done ?? 0),
     all: Number(row?.all ?? 0),
     trash: Number(row?.trash ?? 0),
+    derived: Number(row?.derived ?? 0),
+    derived_unseen: Number(row?.derived_unseen ?? 0),
+    derived_no_contact: Number(row?.derived_no_contact ?? 0),
+    derived_contacted: Number(row?.derived_contacted ?? 0),
   };
 }

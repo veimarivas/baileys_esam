@@ -1039,6 +1039,10 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
             <span class="ri-group-line"></span> Grupos
             <span class="cl-tab-count" data-count="group">0</span>
           </button>
+          <button type="button" class="cl-tab" data-tab="team" title="Compañeros del sistema: iniciá o seguí la conversación">
+            <span class="ri-team-line"></span> Equipo
+            <span class="cl-tab-count" data-count="team">0</span>
+          </button>
         </div>
         <label class="chatlist-search" for="chat-search">
           <span class="ri-search-line"></span>

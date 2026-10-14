@@ -1626,8 +1626,95 @@
       });
     }
 
+    // ── Equipo: compañeros del sistema, siempre visibles ──
+    function loadTeam() {
+      return api('/inbox/team')
+        .then(function (d) { state.team = (d && d.members) || []; renderTabs(); if (state.tab === 'team') renderList(); })
+        .catch(function () {});
+    }
+
+    // Conversación con un compañero: la de la lista (en vivo) o la que informó el servidor.
+    function teamConversation(m) {
+      var mine = state.conversations.filter(function (c) { return c.team && c.team.user_id === m.user_id; });
+      if (mine.length) {
+        return mine.filter(function (c) { return c.session_id === state.selectedSession; })[0] || mine[0];
+      }
+      return m.conversation || null;
+    }
+
+    function openTeamMember(m) {
+      var c = teamConversation(m);
+      if (c) {
+        if (!state.conversations.some(function (x) { return x.session_id === c.session_id && x.chat_id === c.chat_id; })) state.conversations.unshift(c);
+        openChat(c.session_id, c.chat_id, true);
+        return;
+      }
+      var own = root.getAttribute('data-session') || state.selectedSession;
+      if (!own) { toast('No tenés una línea de WhatsApp para escribirle.', true); return; }
+      var chatId = String(m.phone).replace(/\D+/g, '') + '@c.us';
+      openChat(own, chatId, true, {
+        id: 0, session_id: own, chat_id: chatId, status: 'open', unread_count: 0,
+        last_message_text: null, last_message_at: null, last_direction: null, created_at: null,
+        contact: { id: null, avatar: false, name: null, phone: String(m.phone), email: null, company: null, avatar_path: null },
+        person: { full_name: null, programas: [] }, notes: { open: 0, pinned: 0, overdue: 0 },
+        team: { user_id: m.user_id, name: m.name, area: m.area },
+      });
+    }
+
+    function renderTeamList() {
+      var s = state.search.trim().toLowerCase();
+      var rows = (state.team || []).filter(function (m) {
+        return !s || (m.name + ' ' + m.area + ' ' + m.phone).toLowerCase().indexOf(s) !== -1;
+      }).map(function (m) { return { m: m, c: teamConversation(m) }; });
+      // Con mensajes sin leer arriba, luego por actividad reciente y después por nombre.
+      rows.sort(function (a, b) {
+        var ua = a.c ? a.c.unread_count : 0, ub = b.c ? b.c.unread_count : 0;
+        if ((ua > 0) !== (ub > 0)) return ub > 0 ? 1 : -1;
+        var ta = (a.c && a.c.last_message_at) || '', tb = (b.c && b.c.last_message_at) || '';
+        if (ta !== tb) return ta < tb ? 1 : -1;
+        return a.m.name.localeCompare(b.m.name, 'es');
+      });
+      if (!rows.length) {
+        els.list.innerHTML = '<div class="cl-empty"><span class="ri-team-line"></span><p>' +
+          (s ? 'Sin coincidencias' : 'No hay compañeros con número registrado') + '</p></div>';
+        return;
+      }
+      rows.forEach(function (r) {
+        var m = r.m, c = r.c;
+        var el = document.createElement('div');
+        var active = c && c.session_id === state.selectedSession && c.chat_id === state.selectedChat;
+        el.className = 'convo team-row' + (active ? ' active' : '') + (c && c.unread_count > 0 ? ' unread' : '');
+        el.innerHTML =
+          avatarHtml(m.name, 'avatar-sm', c ? convoPhoto(c) : null) +
+          '<div class="convo-body">' +
+            '<div class="convo-team"><span class="ri-team-line" aria-hidden="true"></span>' + escapeHtml(m.area) + '</div>' +
+            '<div class="convo-top"><span class="convo-name">' + escapeHtml(m.name) + '</span>' +
+              (c && c.last_message_at ? '<span class="convo-time">' + timeAgo(c.last_message_at) + '</span>' : '') + '</div>' +
+            '<div class="convo-number"><span class="ri-whatsapp-line" aria-hidden="true"></span>' + escapeHtml(fmtPhone(m.phone)) +
+              (m.line_ready ? ' <span class="team-online" title="Su línea está conectada"></span>' : '') + '</div>' +
+            '<div class="convo-last">' + (c ? escapeHtml(c.last_message_text || '—') : '<span class="team-start">Iniciar conversación</span>') + '</div>' +
+          '</div>' +
+          (c && c.unread_count > 0 ? '<span class="unread-pill">' + c.unread_count + '</span>' : '');
+        el.addEventListener('click', function () { openTeamMember(m); });
+        els.list.appendChild(el);
+      });
+    }
+
+    // Compañero del sistema: área bajo la que trabaja (en lista, cabecera y ficha).
+    function teamLine(c) {
+      if (!c.team) return '';
+      return '<div class="convo-team" title="Usuario del sistema"><span class="ri-team-line" aria-hidden="true"></span>' + escapeHtml(c.team.area) + '</div>';
+    }
+
     function renderTabs() {
       if (!els.tabs) return;
+      var teamBtn = els.tabs.querySelector('[data-tab="team"]');
+      if (teamBtn) {
+        teamBtn.classList.toggle('active', state.tab === 'team');
+        var tb = teamBtn.querySelector('[data-count="team"]');
+        if (tb) tb.textContent = (state.team || []).length;
+        teamBtn.classList.toggle('has-unread', state.conversations.some(function (c) { return c.team && c.unread_count > 0; }));
+      }
       ['individual', 'group'].forEach(function (t) {
         var btn = els.tabs.querySelector('[data-tab="' + t + '"]');
         if (!btn) return;
@@ -1643,6 +1730,7 @@
 
     function renderList() {
       if (!els.list) return;
+      if (state.tab === 'team') { els.list.innerHTML = ''; renderTeamList(); return; }
       var rows = filteredConversations();
       els.list.innerHTML = '';
       if (!rows.length) {
@@ -1659,6 +1747,7 @@
     }
 
     function convoName(c) {
+      if (c.team && c.team.name) return c.team.name;
       if (c.person && c.person.full_name) return c.person.full_name;
       var name = c.contact && c.contact.name;
       if (name) return name;
@@ -1680,6 +1769,7 @@
       el.innerHTML =
         avatarHtml(name, 'avatar-sm', convoPhoto(c), isGroup ? 'is-group' : '') +
         '<div class="convo-body">' +
+          teamLine(c) +
           programaLine(c) +
           '<div class="convo-top"><span class="convo-name">' + nameHtml + '</span>' +
             '<span class="convo-time">' + timeAgo(c.last_message_at) + '</span></div>' +
@@ -1732,7 +1822,8 @@
     function openChat(sessionId, chatId, push, synthetic) {
       state.selectedSession = sessionId;
       state.selectedChat = chatId;
-      state.tab = /@g\.us$/.test(chatId) ? 'group' : 'individual';
+      // Desde «Equipo» se queda en esa pestaña para seguir eligiendo compañeros.
+      state.tab = /@g\.us$/.test(chatId) ? 'group' : (state.tab === 'team' ? 'team' : 'individual');
       state.replyTo = null;
       state.messages = [];
       state.messagesAfter = 0;
@@ -1974,6 +2065,7 @@
         '<button type="button" class="btn btn-icon btn-soft-secondary" id="toggle-list" title="Conversaciones"><span class="ri-menu-line"></span></button>' +
         avatarHtml(name, 'avatar-sm', convoPhoto(c)) +
         '<div class="chat-id">' +
+          (c.team ? '<div class="chat-progs"><span class="chat-team" title="Usuario del sistema"><span class="ri-team-line" aria-hidden="true"></span> ' + escapeHtml(c.team.area) + '</span></div>' : '') +
           ((c.person && c.person.programas || []).length
             ? '<div class="chat-progs">' + c.person.programas.map(function (p) { return '<span class="chat-programa" title="Programa según cronogramas">' + escapeHtml(p) + '</span>'; }).join('') + '</div>'
             : '') +
@@ -2593,7 +2685,7 @@
             ? '<div class="contact-progs">' + c.person.programas.map(function (p) { return '<span class="pf-prog">' + escapeHtml(p) + '</span>'; }).join('') + '</div>'
             : '') +
           nameBlockHtml(c) +
-          (c.person && c.person.full_name && ct.name && ct.name !== c.person.full_name ? '<div class="contact-waname">WhatsApp: ' + escapeHtml(ct.name) + '</div>' : '') +
+          (!c.team && c.person && c.person.full_name && ct.name && ct.name !== c.person.full_name ? '<div class="contact-waname">WhatsApp: ' + escapeHtml(ct.name) + '</div>' : '') +
           '<div class="contact-phone">' + escapeHtml(fmtPhone(ct.phone) || '') + '</div>' +
           (ct.email ? '<div class="contact-email">' + escapeHtml(ct.email) + '</div>' : '') +
         '</div>' +
@@ -2633,6 +2725,12 @@
       var isGroup = /@g\.us$/.test(c.chat_id);
       var shown = p.full_name || ct.name || '';
       if (isGroup) return '<div class="contact-name">' + escapeHtml(shown || 'Sin nombre') + '</div>';
+      // Compañero del sistema: nombre y área vienen de su usuario (no se editan aquí).
+      if (c.team) {
+        return '<div class="contact-team"><span class="ri-team-line" aria-hidden="true"></span> Usuario del sistema · ' + escapeHtml(c.team.area) + '</div>' +
+          '<div class="contact-name">' + escapeHtml(c.team.name) + '</div>' +
+          (ct.name && ct.name !== c.team.name ? '<div class="contact-waname">WhatsApp: ' + escapeHtml(ct.name) + '</div>' : '');
+      }
       var src = p.name_source === 'manual'
         ? '<div class="contact-namesrc">Registrado' + (p.name_by ? ' por ' + escapeHtml(p.name_by) : '') + ' en el panel</div>'
         : '';
@@ -2754,7 +2852,7 @@
       Array.prototype.forEach.call(els.tabs.querySelectorAll('.cl-tab'), function (btn) {
         btn.addEventListener('click', function () {
           var t = btn.getAttribute('data-tab');
-          if (t && t !== state.tab) { state.tab = t; renderTabs(); renderList(); }
+          if (t && t !== state.tab) { state.tab = t; renderTabs(); renderList(); if (t === 'team') loadTeam(); }
         });
       });
     }
@@ -2843,6 +2941,7 @@
 
     /* ── Arranque ── */
     loadConversations();
+    loadTeam();
     api('/inbox/quick-replies').then(function (q) { state.quickReplies = q; }).catch(function () {});
     initLive();
 

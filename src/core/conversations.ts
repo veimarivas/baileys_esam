@@ -6,6 +6,7 @@ import { phoneFromChatId } from './phone.js';
 import { resolveChatId } from './lid.js';
 import { noteCountsFor, type PersonNoteCounts } from './contacts.js';
 import { personTagsByKeys, phoneKeyOf, type PersonTags } from './person.js';
+import { teamTagFor, type TeamTag } from './team.js';
 import type { ConversationRow, MessageRow } from '../types.js';
 
 /**
@@ -45,6 +46,8 @@ export interface ConversationDTO {
   notes: PersonNoteCounts;
   /** Nombre completo y programas según cronogramas (de cualquier línea). */
   person: PersonTags;
+  /** El contacto es un compañero (usuario del sistema): su nombre y área. */
+  team: TeamTag | null;
 }
 
 export interface MessageDTO {
@@ -179,6 +182,7 @@ function mapConversation(
     assigned_agent: row.agent_id ? { id: row.agent_id, name: row.agent_name } : null,
     notes: (row.contact_id && notes?.get(row.contact_id)) || NO_NOTES,
     person: people?.get(personKey(row) ?? '') ?? NO_PERSON,
+    team: teamTagFor(personKey(row)),
   };
 }
 

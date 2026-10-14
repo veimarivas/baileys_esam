@@ -1206,6 +1206,21 @@ nuevo `src/panel/admin-views.ts`.
   número, foto) del chat anterior. Solo se refrescaban las notas. Ahora se redibuja
   entera.
 
+## 31. Equipo: compañeros del sistema en las conversaciones (2026-10-13)
+
+- **Nombre y área del compañero:** si el número de un chat es de un usuario del
+  sistema, se muestra su nombre y su área (Académico, Contabilidad, Marketing…) en
+  la lista, la cabecera y la ficha («Usuario del sistema · Área»), en lugar del
+  nombre de WhatsApp. El número sale de `users.esam_numero` (cronogramas) o de la
+  línea que tiene vinculada; el registrado en cronogramas tiene prioridad
+  (`src/core/team.ts`, caché de 60 s).
+- **Pestaña «Equipo»** en Conversaciones, junto a Números y Grupos: lista a todos los
+  compañeros con número, siempre visible. Los que tienen mensajes sin leer van
+  arriba, después por actividad. Un clic abre la conversación existente o inicia
+  una nueva desde la propia línea. Un punto verde indica que su línea está
+  conectada. `GET /inbox/team`.
+- Un usuario local no hereda la línea de un usuario de cronogramas con el mismo id.
+
 ---
 
 ## Notas de operación

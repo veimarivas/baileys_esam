@@ -34,6 +34,7 @@ import {
 } from '../core/contacts.js';
 import * as noteTags from '../core/note-tags.js';
 import { personTagsByKeys, phoneKeyOf, setPersonName } from '../core/person.js';
+import { teamMembers } from '../core/team.js';
 import { listNotifications, markNoteRead, markRead, notify, supervisorIds, unreadCount, type NotificationKind } from '../core/notifications.js';
 import * as noteTemplates from '../core/note-templates.js';
 import * as quickReplies from '../core/quick-replies.js';
@@ -278,6 +279,34 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
     ...auth,
     ah((req, res) => {
       res.json(quickReplies.listQuickReplies(req.user!.id));
+    }),
+  );
+
+  // Equipo: compañeros con número, siempre a mano para iniciar o seguir la
+  // conversación desde la línea del usuario.
+  app.get(
+    '/inbox/team',
+    ...auth,
+    ah((req, res) => {
+      const me = req.user!;
+      const members = teamMembers()
+        .filter((m) => m.user_id !== me.id)
+        .map((m) => {
+          let conv: ReturnType<typeof conversations.findConversationForUser>;
+          for (const k of m.keys) {
+            conv = conversations.findConversationForUser(me, k);
+            if (conv) break;
+          }
+          return {
+            user_id: m.user_id,
+            name: m.name,
+            area: m.area,
+            phone: m.phone,
+            line_ready: m.line_ready,
+            conversation: conv ?? null,
+          };
+        });
+      res.json({ members });
     }),
   );
 

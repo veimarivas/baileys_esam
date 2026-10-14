@@ -7,7 +7,7 @@ import { nowIso, delay, randInt } from '../util/async.js';
 import { logger } from '../logger.js';
 import { WaSession, type DecryptFailure, type InboundMessage, type QuotedRef } from './session.js';
 import { normalizePhone, phoneFromChatId } from '../core/phone.js';
-import { storeIncoming } from '../core/media.js';
+import { storeAvatar, storeIncoming } from '../core/media.js';
 import { audit, dispatchEvent } from '../core/webhooks.js';
 import { getConfig, setConfig } from '../core/config-store.js';
 import { contactIdFor, setAvatar, setContactGroup } from '../core/contacts.js';
@@ -1181,6 +1181,11 @@ export class SessionManager implements OutboundSender {
   }
 
   /** Trae la foto de perfil del contacto una vez por chat (best-effort). */
+  /** Trae la foto de perfil del chat si todavía no la hay (la usa el panel al abrir un chat). */
+  ensureAvatar(sessionId: string, chatId: string): void {
+    void this.refreshAvatar(sessionId, chatId);
+  }
+
   private async refreshAvatar(sessionId: string, chatId: string): Promise<void> {
     const key = `${sessionId}:${chatId}`;
     if (this.avatarTried.has(key)) return;
@@ -1191,7 +1196,8 @@ export class SessionManager implements OutboundSender {
         sessionId,
         chatId,
       );
-      if (contact?.avatar_path) return;
+      // Si ya hay foto y el archivo existe, no se vuelve a pedir.
+      if (contact?.avatar_path && fs.existsSync(contact.avatar_path)) return;
       const session = this.sessions.get(sessionId);
       if (!session?.isReady()) return;
       const url = await session.profilePictureUrl(chatId);
@@ -1200,7 +1206,7 @@ export class SessionManager implements OutboundSender {
       if (!res.ok) return;
       const buffer = Buffer.from(await res.arrayBuffer());
       if (!buffer.length) return;
-      const filePath = storeIncoming(buffer, res.headers.get('content-type') ?? 'image/jpeg', 'avatar.jpg');
+      const filePath = storeAvatar(buffer, res.headers.get('content-type') ?? 'image/jpeg');
       setAvatar(sessionId, chatId, filePath);
       panelBus.publish('conversation', { sessionId, chatId });
     } catch (err) {

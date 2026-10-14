@@ -148,7 +148,9 @@ export class BatchRunner {
         if (limits.hourlyRemaining <= 0) {
           const waitSeconds = secondsUntilNextHour();
           logger.info({ batch: batchId, sessionId, waitSeconds }, 'Lote en espera por límite horario');
+          setWaiting(batchId, `Límite por hora alcanzado (${limits.hourlyLimit} mensajes)`, waitSeconds * 1000);
           await delay(waitSeconds * 1000);
+          setWaiting(batchId, null);
           limits = limitState(sessionId, policy, session);
           hourBucket = Math.floor(Date.now() / 3_600_000);
         }
@@ -201,10 +203,18 @@ export class BatchRunner {
       // Ritmo humano: enfriamiento, jitter o pausa por fatiga, calculado en cada
       // envío para que una espera previa no deje los siguientes en ráfaga.
       const waitMs = pacing.delayBeforeMs(sentInRun, programKey);
-      if (waitMs > 0) await delay(waitMs);
+      if (waitMs > 0) {
+        // Solo se informan las esperas largas (calentamiento, pausas por fatiga).
+        if (waitMs >= 20_000) setWaiting(batchId, 'Ritmo anti-baneo entre mensajes', waitMs);
+        await delay(waitMs);
+        if (waitMs >= 20_000) setWaiting(batchId, null);
+      }
       // Fuera de ventana: esperar al próximo hueco (y volver a validar el lote).
       if (pacing.enabled() && !pacing.isWithinWindow()) {
-        await delay(pacing.secondsUntilNextWindow() * 1000);
+        const windowWait = pacing.secondsUntilNextWindow() * 1000;
+        setWaiting(batchId, 'Fuera del horario de envío', windowWait);
+        await delay(windowWait);
+        setWaiting(batchId, null);
         i--;
         continue;
       }
@@ -339,6 +349,24 @@ function secondsUntilNextHour(): number {
   const now = new Date();
   const seconds = (60 - now.getMinutes()) * 60 - now.getSeconds();
   return Math.max(30, seconds);
+}
+
+/**
+ * Motivo y hora estimada de una espera larga del lote (`meta.waiting`), para
+ * que quien envía sepa por qué no avanza. `null` la limpia.
+ */
+function setWaiting(batchId: number, reason: string | null, waitMs = 0): void {
+  const batch = get<BatchRow>('SELECT meta FROM batches WHERE id = ?', batchId);
+  if (!batch) return;
+  let meta: Record<string, unknown> = {};
+  try {
+    meta = batch.meta ? (JSON.parse(batch.meta) as Record<string, unknown>) : {};
+  } catch {
+    meta = {};
+  }
+  if (reason) meta.waiting = { reason, until: new Date(Date.now() + waitMs).toISOString() };
+  else delete meta.waiting;
+  run('UPDATE batches SET meta = ? WHERE id = ?', JSON.stringify(meta), batchId);
 }
 
 /** Pausa un lote guardando el motivo en `meta.anti_ban_pause`. */

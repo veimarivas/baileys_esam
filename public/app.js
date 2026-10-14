@@ -226,8 +226,16 @@
     });
   }
 
-  function avatarHtml(name, cls) {
-    return '<span class="' + (cls || 'avatar-xs') + ' ' + avClass(name) + '">' + escapeHtml(initials(name)) + '</span>';
+  function avatarHtml(name, cls, photoUrl, extraCls) {
+    return '<span class="' + (cls || 'avatar-xs') + ' ' + avClass(name) + (extraCls ? ' ' + extraCls : '') + (photoUrl ? ' has-photo' : '') + '">' +
+      escapeHtml(initials(name)) +
+      (photoUrl ? '<img src="' + escapeHtml(photoUrl) + '" alt="" loading="lazy" decoding="async" onerror="this.parentNode.classList.remove(\'has-photo\');this.remove()">' : '') +
+    '</span>';
+  }
+
+  // Foto de perfil de una conversación (propia o de la misma persona en otra línea).
+  function convoPhoto(c) {
+    return c && c.contact && c.contact.avatar && c.contact.id ? '/inbox/avatar/' + c.contact.id : null;
   }
 
   /* ── Construcción de una burbuja ── */
@@ -1670,7 +1678,7 @@
       var nameHtml = (isGroup ? '<span class="ri-group-line group-ico" title="Grupo"></span>' : '') + escapeHtml(name);
       var phone = (c.contact && c.contact.phone) ? c.contact.phone : '';
       el.innerHTML =
-        '<span class="avatar-sm ' + avClass(name) + (isGroup ? ' is-group' : '') + '">' + escapeHtml(initials(name)) + '</span>' +
+        avatarHtml(name, 'avatar-sm', convoPhoto(c), isGroup ? 'is-group' : '') +
         '<div class="convo-body">' +
           programaLine(c) +
           '<div class="convo-top"><span class="convo-name">' + nameHtml + '</span>' +
@@ -1746,6 +1754,10 @@
       loadNotes();
       loadTags();
       loadPerson();
+      var opened = selectedConversation();
+      if (opened && !(opened.contact && opened.contact.avatar)) {
+        jsonApi('/inbox/' + encodeURIComponent(sessionId) + '/' + encodeURIComponent(chatId) + '/avatar', 'POST').catch(function () {});
+      }
       if (state.tab === 'group') loadParticipants();
       if (push) history.pushState({ chat: chatId }, '', '/conversations/' + encodeURIComponent(chatId));
       // Acuse de lectura (local + WhatsApp).
@@ -1958,7 +1970,7 @@
       var phone = (c.contact && c.contact.phone) ? c.contact.phone : '';
       return '<div class="chat-header">' +
         '<button type="button" class="btn btn-icon btn-soft-secondary" id="toggle-list" title="Conversaciones"><span class="ri-menu-line"></span></button>' +
-        avatarHtml(name, 'avatar-sm') +
+        avatarHtml(name, 'avatar-sm', convoPhoto(c)) +
         '<div class="chat-id">' +
           ((c.person && c.person.programas || []).length
             ? '<div class="chat-progs">' + c.person.programas.map(function (p) { return '<span class="chat-programa" title="Programa según cronogramas">' + escapeHtml(p) + '</span>'; }).join('') + '</div>'
@@ -2574,7 +2586,7 @@
       }
 
       els.contact.innerHTML =
-        '<div class="contact-head">' + avatarHtml(name, 'avatar-xl') +
+        '<div class="contact-head">' + avatarHtml(name, 'avatar-xl', convoPhoto(c)) +
           ((c.person && c.person.programas || []).length
             ? '<div class="contact-progs">' + c.person.programas.map(function (p) { return '<span class="pf-prog">' + escapeHtml(p) + '</span>'; }).join('') + '</div>'
             : '') +
@@ -2765,12 +2777,36 @@
       head.appendChild(sel);
     }).catch(function () {});
 
+    // Chat de un enlace (p. ej. desde Notas y tareas): primero en la lista
+    // cargada (tolerando otro formato del número); si no, se busca en todas las
+    // conversaciones del usuario; si tampoco existe, se abre uno nuevo en su
+    // línea para escribirle.
     var initialChat = root.getAttribute('data-active');
     if (initialChat) {
       loadConversations().then(function () {
-        var found = state.conversations.filter(function (c) { return c.chat_id === initialChat; })[0];
-        if (found) openChat(found.session_id, found.chat_id, false);
-      });
+        var found = findConversation(initialChat);
+        if (found) { openChat(found.session_id, found.chat_id, false); return; }
+        return api('/inbox/find?chat=' + encodeURIComponent(initialChat)).then(function (d) {
+          var c = d && d.conversation;
+          if (c) {
+            if (!state.conversations.some(function (x) { return x.session_id === c.session_id && x.chat_id === c.chat_id; })) state.conversations.unshift(c);
+            openChat(c.session_id, c.chat_id, false);
+            return;
+          }
+          var digits = String(initialChat).replace(/@.*$/, '').replace(/\D+/g, '');
+          var own = root.getAttribute('data-session') || state.selectedSession;
+          if (digits && own && !/@g\.us$/.test(initialChat)) {
+            openChat(own, digits + '@c.us', false, {
+              id: 0, session_id: own, chat_id: digits + '@c.us', status: 'open', unread_count: 0,
+              last_message_text: null, last_message_at: null, last_direction: null, created_at: null,
+              contact: { id: null, avatar: false, name: null, phone: digits, email: null, company: null, avatar_path: null },
+              person: { full_name: null, programas: [] }, notes: { open: 0, pinned: 0, overdue: 0 },
+            });
+          } else {
+            toast('No se encontró esa conversación en tus líneas.', true);
+          }
+        });
+      }).catch(function () {});
     }
   }
 

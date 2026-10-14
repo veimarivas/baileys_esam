@@ -70,9 +70,27 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
 
   const sessionFor = (account?: string | null): SessionRow | undefined => {
     if (account) {
-      return get<SessionRow>('SELECT * FROM sessions WHERE owner_uid = ?', account) ?? manager.primary();
+      return get<SessionRow>('SELECT * FROM sessions WHERE owner_uid = ?', account) ?? readyPrimary();
     }
-    return manager.primary();
+    return readyPrimary();
+  };
+
+  /** La principal si está conectada; si no, la primera línea conectada. */
+  const readyPrimary = (): SessionRow | undefined => {
+    const primary = manager.primary();
+    if (primary?.status === 'ready') return primary;
+    return get<SessionRow>("SELECT * FROM sessions WHERE status = 'ready' ORDER BY created_at LIMIT 1") ?? primary;
+  };
+
+  /**
+   * Sin línea conectada el lote quedaría esperando sin enviar nada: se avisa en
+   * el acto (salvo envíos programados o de prueba). Devuelve el mensaje o null.
+   */
+  const notReadyMessage = (session: SessionRow, body: Record<string, unknown>): string | null => {
+    if (session.status === 'ready' || body.dry_run || body.scheduled_at) return null;
+    return body.account
+      ? `Tu línea de WhatsApp (${session.expected_phone ?? session.phone ?? session.name}) no está conectada. Vinculala escaneando el QR en Seguimiento ESAM › Mi conexión y volvé a enviar.`
+      : 'No hay ninguna línea de WhatsApp conectada en Seguimiento ESAM. Vinculá una en Conexión y volvé a enviar.';
   };
 
   /**
@@ -368,6 +386,11 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
         res.status(422).json({ message: 'No hay sesión de envío disponible.' });
         return;
       }
+      const notReady = notReadyMessage(session, body);
+      if (notReady) {
+        res.status(422).json({ message: notReady });
+        return;
+      }
 
       try {
         const result = createBatch(
@@ -411,14 +434,24 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
         sent: number;
         failed: number;
         skipped: number;
-      }>('SELECT id, name, status, total, sent, failed, skipped FROM batches WHERE id = ?', Number(req.params.id));
+        meta: string | null;
+      }>('SELECT id, name, status, total, sent, failed, skipped, meta FROM batches WHERE id = ?', Number(req.params.id));
       if (!batch) {
         res.status(404).json({ message: 'Lote no encontrado.' });
         return;
       }
       const pending = Math.max(0, batch.total - batch.sent - batch.failed - batch.skipped);
       const progress = batch.total > 0 ? Math.round(((batch.sent + batch.failed + batch.skipped) / batch.total) * 100) : 0;
+      let meta: { waiting?: { reason?: string; until?: string }; anti_ban_pause?: string } = {};
+      try {
+        meta = batch.meta ? JSON.parse(batch.meta) : {};
+      } catch {
+        meta = {};
+      }
       res.json({
+        waiting_reason: batch.status === 'running' ? meta.waiting?.reason ?? null : null,
+        waiting_until: batch.status === 'running' ? meta.waiting?.until ?? null : null,
+        paused_reason: batch.status === 'paused' ? meta.anti_ban_pause ?? null : null,
         batch_id: batch.id,
         name: batch.name,
         status: batch.status,
@@ -463,6 +496,11 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
       const session = sessionFor(body.account ? String(body.account) : null);
       if (!session) {
         res.status(422).json({ message: 'No hay sesión de envío disponible.' });
+        return;
+      }
+      const notReady = notReadyMessage(session, body);
+      if (notReady) {
+        res.status(422).json({ message: notReady });
         return;
       }
 

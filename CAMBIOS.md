@@ -1162,6 +1162,35 @@ nuevo `src/panel/admin-views.ts`.
   programa. Los enlaces «Abrir WhatsApp» (`wa.me`) no pasan por baileys y no lo
   registran.
 
+## 29. Enlace desde Notas, fotos de perfil y envíos masivos que no avanzaban (2026-10-13)
+
+- **Notas › contacto abre la conversación:** antes solo se buscaba el `chat_id` exacto
+  entre las 300 conversaciones cargadas y, si no aparecía, quedaba la lista. Ahora:
+  - se busca tolerando otro formato del número;
+  - si no está en la lista, se consulta `GET /inbox/find?chat=` (dentro del alcance
+    del usuario, también la misma persona en otra línea por `phone_key`);
+  - si tampoco existe, se abre un chat nuevo en la línea del usuario para escribirle.
+- **Foto de perfil de cada contacto** (lista, cabecera del chat y ficha):
+  - `GET /inbox/avatar/:contactId` respeta el alcance del usuario. Si esa línea no
+    tiene la foto, usa la de la misma persona en otra línea.
+  - Las fotos se guardan en `storage/avatars` (`storeAvatar`), fuera de la
+    limpieza de 30 días.
+  - Al abrir un chat sin foto se pide a WhatsApp (`POST /inbox/:session/:chat/avatar`
+    → `ensureAvatar`) y llega por SSE. Sin foto, o si falla, se ven las iniciales.
+- **Envíos masivos «en espera»** (cronogramas `/admin/programas/{id}/whatsapp`,
+  `/show`, cuotas):
+  - **Calentamiento por antigüedad real:** una línea recién vinculada en el VPS se
+    trataba como número nuevo (día 1: 3–5 min entre mensajes). Ahora la antigüedad
+    se toma del mensaje más antiguo de esa línea (`oldestMessageMs`). Un reinicio
+    manual o un bloqueo siguen mandando.
+  - **Motivo visible:** el lote guarda en `meta.waiting` por qué espera y hasta
+    cuándo (límite por hora, ritmo anti-baneo ≥ 20 s, fuera del horario).
+    `GET /api/v1/batches/:id` devuelve `waiting_reason`, `waiting_until` y
+    `paused_reason`, y el modal de cronogramas los muestra.
+  - **Línea no conectada → 422 inmediato:** antes el lote se creaba y quedaba sin
+    salir. Se exceptúan `dry_run` y `scheduled_at`. Sin `account`, se usa la
+    principal si está conectada o, si no, la primera conectada.
+
 ---
 
 ## Notas de operación

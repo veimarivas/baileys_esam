@@ -394,8 +394,26 @@ export function warmupStartMs(policy: AntiBanPolicy, session?: SessionRow | null
     if (Number.isFinite(t)) return t;
   }
   const fallback = session?.phone_verified_at ?? session?.created_at;
-  const t = fallback ? Date.parse(fallback) : Date.now();
-  return Number.isFinite(t) ? t : Date.now();
+  const linked = fallback ? Date.parse(fallback) : Date.now();
+  // Antigüedad real del número: el mensaje más antiguo que trajo el historial.
+  // Un número con meses de uso no vuelve al «día 1» por vincularse en otro
+  // equipo. Un reinicio explícito (arriba: bloqueo o manual) sí manda.
+  const oldest = session?.id ? oldestMessageMs(session.id) : null;
+  const candidates = [linked, oldest].filter((x): x is number => x !== null && Number.isFinite(x));
+  return candidates.length ? Math.min(...candidates) : Date.now();
+}
+
+const oldestCache = new Map<string, { at: number; value: number | null }>();
+
+/** Fecha del mensaje más antiguo de la sesión (en caché 10 min: se consulta seguido). */
+function oldestMessageMs(sessionId: string): number | null {
+  const cached = oldestCache.get(sessionId);
+  if (cached && Date.now() - cached.at < 600_000) return cached.value;
+  const row = get<{ at: string | null }>('SELECT MIN(occurred_at) AS at FROM messages WHERE session_id = ?', sessionId);
+  const t = row?.at ? Date.parse(row.at) : NaN;
+  const value = Number.isFinite(t) ? t : null;
+  oldestCache.set(sessionId, { at: Date.now(), value });
+  return value;
 }
 
 /**

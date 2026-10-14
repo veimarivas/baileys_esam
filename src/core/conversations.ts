@@ -32,6 +32,8 @@ export interface ConversationDTO {
   last_direction: string | null;
   contact: {
     id: number | null;
+    /** Hay foto de perfil (propia o de la misma persona en otra línea). */
+    avatar: boolean;
     name: string | null;
     phone: string | null;
     email: string | null;
@@ -150,7 +152,12 @@ function personKey(row: { ct_phone_key: string | null; chat_id: string }): strin
   return row.ct_phone_key ?? (row.chat_id.endsWith('@lid') ? null : phoneKeyOf(row.chat_id));
 }
 
-function mapConversation(row: ConvJoinRow, notes?: Map<number, PersonNoteCounts>, people?: Map<string, PersonTags>): ConversationDTO {
+function mapConversation(
+  row: ConvJoinRow,
+  notes?: Map<number, PersonNoteCounts>,
+  people?: Map<string, PersonTags>,
+  avatars?: Set<string>,
+): ConversationDTO {
   return {
     id: row.id,
     session_id: row.session_id,
@@ -162,6 +169,7 @@ function mapConversation(row: ConvJoinRow, notes?: Map<number, PersonNoteCounts>
     last_direction: row.last_direction,
     contact: {
       id: row.contact_id,
+      avatar: !!row.contact_id && (!!row.ct_avatar || (!!personKey(row) && !!avatars?.has(personKey(row)!))),
       name: row.ct_name,
       phone: row.ct_phone,
       email: row.ct_email,
@@ -176,8 +184,18 @@ function mapConversation(row: ConvJoinRow, notes?: Map<number, PersonNoteCounts>
 
 function mapConversations(rows: ConvJoinRow[]): ConversationDTO[] {
   const notes = noteCountsFor(rows.map((r) => r.contact_id ?? 0));
-  const people = personTagsByKeys(rows.map(personKey));
-  return rows.map((r) => mapConversation(r, notes, people));
+  const keys = [...new Set(rows.map(personKey).filter((k): k is string => !!k))];
+  const people = personTagsByKeys(keys);
+  // Personas con foto en alguna línea (la foto se sirve desde la que la tenga).
+  const avatars = new Set(
+    keys.length
+      ? all<{ phone_key: string }>(
+          `SELECT DISTINCT phone_key FROM contacts WHERE avatar_path IS NOT NULL AND phone_key IN (${keys.map(() => '?').join(',')})`,
+          ...keys,
+        ).map((r) => r.phone_key)
+      : [],
+  );
+  return rows.map((r) => mapConversation(r, notes, people, avatars));
 }
 
 const CONV_SELECT = `SELECT c.id, c.session_id, c.chat_id, c.status, c.unread_count, c.last_message_text,
@@ -188,6 +206,33 @@ const CONV_SELECT = `SELECT c.id, c.session_id, c.chat_id, c.status, c.unread_co
   FROM conversations c
   LEFT JOIN contacts ct ON ct.id = c.contact_id
   LEFT JOIN users u ON u.id = c.assigned_agent_id`;
+
+/**
+ * Conversación de un chat dentro del alcance del usuario, tolerando otro
+ * formato del número (@c.us, @s.whatsapp.net, @lid ya unido) o la misma
+ * persona en otra de sus líneas. Para abrir un chat desde un enlace.
+ */
+export function findConversationForUser(user: UserRow, chatParam: string): ConversationDTO | undefined {
+  const chat = chatParam.trim();
+  if (!chat) return undefined;
+  const key = chat.endsWith('@g.us') ? null : phoneKeyOf(chat);
+  const where: string[] = [INBOX_WHERE];
+  const params: unknown[] = [];
+  const scope = scopeClause(user);
+  if (scope) {
+    where.push(scope.sql);
+    params.push(...scope.params);
+  }
+  where.push(key ? '(c.chat_id = ? OR ct.phone_key = ?)' : 'c.chat_id = ?');
+  params.push(chat, ...(key ? [key] : []));
+  const row = get<ConvJoinRow>(
+    `${CONV_SELECT} WHERE ${where.join(' AND ')}
+     ORDER BY (c.chat_id = ?) DESC, COALESCE(c.last_message_at, c.updated_at) DESC LIMIT 1`,
+    ...params,
+    chat,
+  );
+  return row ? mapConversations([row])[0] : undefined;
+}
 
 /** ¿El mensaje pertenece a ese chat de esa línea? (para enlazar una nota a su mensaje). */
 export function messageInChat(messageId: number, sessionId: string, chatId: string): boolean {

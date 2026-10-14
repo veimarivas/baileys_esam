@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { all, db } from '../db/index.js';
-import { NOTES_MEDIA_DIR } from './media.js';
+import { AVATARS_MEDIA_DIR, NOTES_MEDIA_DIR } from './media.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 
@@ -16,7 +16,7 @@ export function cleanupMedia(days = config.mediaRetentionDays): { deleted: numbe
   if (!fs.existsSync(root)) return { deleted: 0, bytes: 0 };
   // La biblioteca de stickers y las notas de voz internas son contenido
   // permanente del panel, no adjuntos de chat.
-  const keep = new Set([path.join(root, 'stickers'), path.join(root, NOTES_MEDIA_DIR)]);
+  const keep = new Set([path.join(root, 'stickers'), path.join(root, NOTES_MEDIA_DIR), path.join(root, AVATARS_MEDIA_DIR)]);
   // Por si alguna nota de voz quedó guardada en otra carpeta (versiones anteriores).
   const noteFiles = new Set(
     all<{ audio_path: string }>('SELECT audio_path FROM contact_notes WHERE audio_path IS NOT NULL').map((r) =>

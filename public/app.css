@@ -3669,3 +3669,7 @@ html[data-bs-theme="dark"] .tpl-phone { background: #0b141a; }
 .chat-header .chat-id .sub .font-monospace { font-variant-numeric: tabular-nums; }
 .contact-panel .contact-progs { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.25rem; margin: 0.5rem 0 0.15rem; }
 @media (max-width: 767.98px) { .chat-header .chat-progs .chat-programa { display: inline-block; max-width: 60vw; } }
+
+/* Foto de perfil sobre las iniciales (si no carga, quedan las iniciales) */
+.has-photo { position: relative; overflow: hidden; }
+.has-photo > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: inherit; background: var(--esam-surface, #fff); }

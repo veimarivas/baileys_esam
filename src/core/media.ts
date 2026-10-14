@@ -74,6 +74,19 @@ export function storeNoteAudio(contents: Buffer, mime: string | null, filename?:
   return file;
 }
 
+/** Carpeta de las fotos de perfil: la retención de media no la toca. */
+export const AVATARS_MEDIA_DIR = 'avatars';
+
+/** Guarda una foto de perfil (permanente, fuera de la retención). */
+export function storeAvatar(contents: Buffer, mime: string | null): string {
+  const ext = extensionFor(mime, 'avatar.jpg');
+  const dir = path.resolve(config.storageDir, AVATARS_MEDIA_DIR);
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${randomUUID()}.${ext}`);
+  fs.writeFileSync(file, contents);
+  return file;
+}
+
 /** Guarda media entrante (webhook) y devuelve la ruta. */
 export function storeIncoming(contents: Buffer, mime: string | null, filename?: string | null): string {
   const ext = extensionFor(mime, filename);

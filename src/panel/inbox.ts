@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Express, NextFunction, Request, RequestHandler, Response } from 'express';
 import { logger } from '../logger.js';
+import { all, get } from '../db/index.js';
 import { panelBus } from './events.js';
 import { esamEsAdmin, sessionScopeFor, type UserRow } from '../auth/users.js';
 import type { SessionManager } from '../baileys/manager.js';
@@ -280,6 +281,43 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
     }),
   );
 
+  // Abre un chat desde un enlace (p. ej. desde Notas y tareas): busca la
+  // conversación del número en las líneas del usuario.
+  app.get(
+    '/inbox/find',
+    ...auth,
+    ah((req, res) => {
+      const chat = typeof req.query.chat === 'string' ? req.query.chat : '';
+      res.json({ conversation: conversations.findConversationForUser(req.user!, chat) ?? null });
+    }),
+  );
+
+  // Foto de perfil de un contacto (o de la misma persona en otra línea).
+  app.get(
+    '/inbox/avatar/:contactId',
+    ...auth,
+    ah((req, res) => {
+      const contact = get<{ id: number; session_id: string; phone_key: string | null; avatar_path: string | null }>(
+        'SELECT id, session_id, phone_key, avatar_path FROM contacts WHERE id = ?',
+        Number(req.params.contactId),
+      );
+      if (!contact) return res.status(404).end();
+      const scope = esamEsAdmin(req.user!) ? null : sessionScopeFor(req.user!);
+      if (scope !== null && !scope.includes(contact.session_id)) return res.status(403).end();
+      let file = contact.avatar_path && fs.existsSync(contact.avatar_path) ? contact.avatar_path : null;
+      if (!file && contact.phone_key) {
+        const others = all<{ avatar_path: string }>(
+          'SELECT avatar_path FROM contacts WHERE phone_key = ? AND avatar_path IS NOT NULL ORDER BY updated_at DESC',
+          contact.phone_key,
+        );
+        file = others.map((o) => o.avatar_path).find((p) => fs.existsSync(p)) ?? null;
+      }
+      if (!file) return res.status(404).end();
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      res.sendFile(path.resolve(file));
+    }),
+  );
+
   app.get(
     '/inbox/sessions',
     ...auth,
@@ -325,6 +363,17 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       } catch (err) {
         res.status(502).json({ error: (err as Error).message });
       }
+    }),
+  );
+
+  app.post(
+    '/inbox/:session/:chat/avatar',
+    ...auth,
+    ah((req, res) => {
+      const resolved = resolveAuthorized(req, res, String(req.params.session), String(req.params.chat));
+      if (!resolved) return;
+      manager.ensureAvatar(resolved.session.id, resolved.chatId);
+      res.json({ ok: true });
     }),
   );
 

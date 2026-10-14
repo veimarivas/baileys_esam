@@ -1960,6 +1960,8 @@
       root.classList.remove('contact-hidden');
       bindPane(c);
       renderNotesBanner();
+      // La ficha se redibuja entera: si no, conservaba la cabecera del chat anterior.
+      renderContact();
       var body = els.pane.querySelector('.chat-body');
       body.innerHTML = '<div class="text-muted text-center p-3">Cargando mensajes…</div>';
     }
@@ -2590,7 +2592,7 @@
           ((c.person && c.person.programas || []).length
             ? '<div class="contact-progs">' + c.person.programas.map(function (p) { return '<span class="pf-prog">' + escapeHtml(p) + '</span>'; }).join('') + '</div>'
             : '') +
-          '<div class="contact-name">' + escapeHtml((c.person && c.person.full_name) || ct.name || 'Sin nombre') + '</div>' +
+          nameBlockHtml(c) +
           (c.person && c.person.full_name && ct.name && ct.name !== c.person.full_name ? '<div class="contact-waname">WhatsApp: ' + escapeHtml(ct.name) + '</div>' : '') +
           '<div class="contact-phone">' + escapeHtml(fmtPhone(ct.phone) || '') + '</div>' +
           (ct.email ? '<div class="contact-email">' + escapeHtml(ct.email) + '</div>' : '') +
@@ -2603,6 +2605,8 @@
           '<dt>Inicio</dt><dd>' + (c.created_at ? new Date(c.created_at).toLocaleDateString() : '—') + '</dd>' +
           '<dt>Último mensaje</dt><dd>' + timeAgo(c.last_message_at) + '</dd>' +
         '</dl></div>';
+
+      bindNameEditor(c);
 
       // Notas internas: compositor (con borrador) y lista.
       renderNoteComposer();
@@ -2619,6 +2623,91 @@
         });
         renderMembers();
       }
+    }
+
+    // Nombre de la persona en la ficha. Si cronogramas no mandó datos, se puede
+    // registrar a mano; queda por número y lo ven todas las líneas.
+    function nameBlockHtml(c) {
+      var ct = c.contact || {};
+      var p = c.person || {};
+      var isGroup = /@g\.us$/.test(c.chat_id);
+      var shown = p.full_name || ct.name || '';
+      if (isGroup) return '<div class="contact-name">' + escapeHtml(shown || 'Sin nombre') + '</div>';
+      var src = p.name_source === 'manual'
+        ? '<div class="contact-namesrc">Registrado' + (p.name_by ? ' por ' + escapeHtml(p.name_by) : '') + ' en el panel</div>'
+        : '';
+      if (!p.full_name) {
+        return '<div class="contact-name">' + escapeHtml(shown || 'Sin nombre') + '</div>' +
+          '<button type="button" class="btn btn-sm btn-soft-primary contact-name-add" data-name-edit>' +
+            '<span class="ri-user-add-line" aria-hidden="true"></span> Registrar nombre</button>' +
+          '<div class="contact-name-form" hidden></div>';
+      }
+      return '<div class="contact-name">' + escapeHtml(shown) +
+          ' <button type="button" class="contact-name-edit" data-name-edit title="Editar nombre" aria-label="Editar nombre">' +
+          '<span class="ri-pencil-line" aria-hidden="true"></span></button></div>' + src +
+        '<div class="contact-name-form" hidden></div>';
+    }
+
+    function bindNameEditor(c) {
+      var trigger = els.contact.querySelector('[data-name-edit]');
+      var form = els.contact.querySelector('.contact-name-form');
+      if (!trigger || !form) return;
+      var sessionId = c.session_id, chatId = c.chat_id;
+      trigger.addEventListener('click', function () {
+        var current = (c.person && c.person.full_name) || '';
+        form.innerHTML =
+          '<input type="text" class="form-control form-control-sm" maxlength="120" placeholder="Apellidos, Nombres" />' +
+          '<div class="contact-name-actions">' +
+            '<button type="button" class="btn btn-sm btn-primary" data-save>Guardar</button>' +
+            '<button type="button" class="btn btn-sm btn-light" data-cancel>Cancelar</button>' +
+            (current ? '<button type="button" class="btn btn-sm btn-link text-danger" data-clear title="Quitar el nombre registrado">Quitar</button>' : '') +
+          '</div>' +
+          '<small class="text-muted">Lo verán todos los que atiendan este número, desde cualquier línea.</small>';
+        form.hidden = false;
+        trigger.hidden = true;
+        var input = form.querySelector('input');
+        input.value = current;
+        input.focus();
+        input.select();
+        var close = function () { form.hidden = true; form.innerHTML = ''; trigger.hidden = false; };
+        var save = function (value) {
+          var btns = form.querySelectorAll('button');
+          Array.prototype.forEach.call(btns, function (b) { b.disabled = true; });
+          jsonApi('/inbox/' + encodeURIComponent(sessionId) + '/' + encodeURIComponent(chatId) + '/name', 'PUT', { name: value })
+            .then(function (d) {
+              var person = (d && d.person) || { full_name: null, programas: [] };
+              // Misma persona en otras líneas de la lista: se actualiza ya.
+              var key = String(chatId).replace(/@.*$/, '').replace(/\D+/g, '').slice(-8);
+              state.conversations.forEach(function (x) {
+                if (x.session_id === sessionId && x.chat_id === chatId) x.person = person;
+                else if (key && !/@g\.us$/.test(x.chat_id) && String(x.chat_id).replace(/@.*$/, '').replace(/\D+/g, '').slice(-8) === key) x.person = person;
+              });
+              toast(value ? 'Nombre registrado' : 'Nombre quitado');
+              var opened = selectedConversation();
+              var headName = els.pane.querySelector('.chat-header .chat-id .name');
+              if (opened && headName && opened.session_id === sessionId && opened.chat_id === chatId) headName.textContent = convoName(opened);
+              renderList();
+              renderContact();
+              loadPerson();
+            })
+            .catch(function (err) {
+              Array.prototype.forEach.call(btns, function (b) { b.disabled = false; });
+              toast((err && err.message) || 'No se pudo guardar el nombre.', true);
+            });
+        };
+        form.querySelector('[data-save]').addEventListener('click', function () {
+          var v = input.value.trim();
+          if (!v) { input.focus(); return; }
+          save(v);
+        });
+        form.querySelector('[data-cancel]').addEventListener('click', close);
+        var clr = form.querySelector('[data-clear]');
+        if (clr) clr.addEventListener('click', function () { save(''); });
+        input.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter') { e.preventDefault(); form.querySelector('[data-save]').click(); }
+          if (e.key === 'Escape') close();
+        });
+      });
     }
 
     // Lista de miembros filtrada por el buscador (nombre, número o JID).

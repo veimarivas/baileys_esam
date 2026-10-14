@@ -223,6 +223,14 @@ function setupContactPhoneKey(): void {
  * los lotes ya enviados (`batches.meta.programa` + `batch_items.contact_name`).
  */
 function setupPersonPrograms(): void {
+  // Nombre registrado a mano en el panel (contactos que no llegaron desde
+  // cronogramas). Por número, así lo ven todas las líneas.
+  db.exec(`CREATE TABLE IF NOT EXISTS person_names (
+    phone_key  TEXT PRIMARY KEY,
+    full_name  TEXT NOT NULL,
+    updated_by INTEGER,
+    updated_at TEXT NOT NULL
+  )`);
   db.exec(`CREATE TABLE IF NOT EXISTS person_programs (
     phone_key   TEXT NOT NULL,
     programa    TEXT NOT NULL,

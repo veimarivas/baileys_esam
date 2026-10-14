@@ -1191,6 +1191,21 @@ nuevo `src/panel/admin-views.ts`.
     salir. Se exceptúan `dry_run` y `scheduled_at`. Sin `account`, se usa la
     principal si está conectada o, si no, la primera conectada.
 
+## 30. Nombre de contactos que no llegaron desde cronogramas (2026-10-13)
+
+- **Registrar nombre** en la ficha del contacto (botón «Registrar nombre», o el lápiz
+  para corregirlo). Se guarda por número en `person_names` y lo ven todos los
+  usuarios que atiendan a esa persona, desde cualquier línea: lista, cabecera,
+  ficha, búsqueda y `/notes`. La ficha indica quién lo registró. «Quitar» lo borra.
+- `PUT /inbox/:session/:chat/name` avisa por SSE a las conversaciones de ese
+  número para que se refresquen en vivo.
+- **Si cronogramas también manda un nombre**, gana el más reciente: un envío
+  posterior corrige al manual, y una corrección manual posterior se mantiene hasta
+  el próximo envío. El nombre de WhatsApp se sigue mostrando debajo.
+- **Corrección:** al cambiar de chat, la ficha conservaba la cabecera (nombre,
+  número, foto) del chat anterior. Solo se refrescaban las notas. Ahora se redibuja
+  entera.
+
 ---
 
 ## Notas de operación

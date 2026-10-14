@@ -3673,3 +3673,12 @@ html[data-bs-theme="dark"] .tpl-phone { background: #0b141a; }
 /* Foto de perfil sobre las iniciales (si no carga, quedan las iniciales) */
 .has-photo { position: relative; overflow: hidden; }
 .has-photo > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: inherit; background: var(--esam-surface, #fff); }
+
+/* Nombre registrado a mano en la ficha */
+.contact-panel .contact-name-edit { border: 0; background: none; padding: 0 0.15rem; color: var(--ib-ink-mute, #98a2b3); font-size: 0.85rem; line-height: 1; vertical-align: middle; cursor: pointer; }
+.contact-panel .contact-name-edit:hover { color: var(--ib-ink, #1f2937); }
+.contact-panel .contact-namesrc { font-size: 0.7rem; color: var(--ib-ink-mute, #98a2b3); margin-top: 0.1rem; }
+.contact-panel .contact-name-add { margin-top: 0.4rem; }
+.contact-panel .contact-name-form { width: 100%; max-width: 260px; margin: 0.5rem auto 0; text-align: left; }
+.contact-panel .contact-name-form small { display: block; margin-top: 0.3rem; font-size: 0.7rem; line-height: 1.3; }
+.contact-panel .contact-name-actions { display: flex; gap: 0.35rem; margin-top: 0.4rem; align-items: center; }

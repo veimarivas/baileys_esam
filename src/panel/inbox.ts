@@ -33,7 +33,7 @@ import {
   type NoteStatus,
 } from '../core/contacts.js';
 import * as noteTags from '../core/note-tags.js';
-import { personTagsByKeys, phoneKeyOf } from '../core/person.js';
+import { personTagsByKeys, phoneKeyOf, setPersonName } from '../core/person.js';
 import { listNotifications, markNoteRead, markRead, notify, supervisorIds, unreadCount, type NotificationKind } from '../core/notifications.js';
 import * as noteTemplates from '../core/note-templates.js';
 import * as quickReplies from '../core/quick-replies.js';
@@ -410,6 +410,9 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       res.json({
         programa: current?.programa ?? tags?.programas[0] ?? null,
         full_name: tags?.full_name ?? null,
+        name_source: tags?.name_source ?? null,
+        name_by: tags?.name_by ?? null,
+        can_name: !!key,
         programas: tags?.programas ?? [],
         lines: others,
         fill: { name: pick('name'), email: pick('email'), company: pick('company'), programa: pick('programa') },
@@ -418,6 +421,30 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
   );
 
   // ── Escritura ───────────────────────────────────────────────────────────────
+
+  // Nombre de la persona registrado a mano (contactos que no llegaron desde
+  // cronogramas). Se guarda por número: lo ven todas las líneas.
+  app.put(
+    '/inbox/:session/:chat/name',
+    ...auth,
+    ah((req, res) => {
+      const resolved = resolveAuthorized(req, res, String(req.params.session), String(req.params.chat));
+      if (!resolved) return;
+      const contact = getOrCreateContact(resolved.session.id, resolved.chatId);
+      const key = contact.phone_key ?? (resolved.chatId.endsWith('@g.us') || resolved.chatId.endsWith('@lid') ? null : phoneKeyOf(resolved.chatId));
+      if (!key) return res.status(422).json({ error: 'Este chat no tiene un número al que asociar el nombre.' });
+      const name = String(req.body?.name ?? '').trim();
+      if (name.length > 120) return res.status(422).json({ error: 'El nombre es demasiado largo (máx. 120 caracteres).' });
+      setPersonName(key, name || null, req.user!.id);
+      // Refresca a quien tenga a esta persona abierta o en la lista, en cualquier línea.
+      const chats = all<{ session_id: string; chat_id: string }>('SELECT session_id, chat_id FROM contacts WHERE phone_key = ?', key);
+      if (!chats.some((c) => c.session_id === resolved.session.id && c.chat_id === resolved.chatId)) {
+        chats.push({ session_id: resolved.session.id, chat_id: resolved.chatId });
+      }
+      for (const c of chats) panelBus.publish('conversation', { sessionId: c.session_id, chatId: c.chat_id });
+      res.json({ ok: true, person: personTagsByKeys([key]).get(key) ?? null });
+    }),
+  );
 
   app.post(
     '/inbox/:session/:chat/send',

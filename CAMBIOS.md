@@ -1221,6 +1221,56 @@ nuevo `src/panel/admin-views.ts`.
   conectada. `GET /inbox/team`.
 - Un usuario local no hereda la línea de un usuario de cronogramas con el mismo id.
 
+## 32. Conexión que se explica sola, cifrado, envíos masivos 6–7 s y pipeline de notas (2026-10-14)
+
+- **El QR no aparecía tras un bloqueo:** cuando WhatsApp cerraba la sesión (401,
+  típico tras envíos masivos) o restringía el número (403), las credenciales
+  viejas quedaban. «Mostrar QR» reconectaba con ellas, WhatsApp las rechazaba otra
+  vez y el QR nunca llegaba. Ahora se borran al instante. Si no se pueden borrar
+  (permisos), se avisa con el comando para arreglarlo.
+- **Motivo de cada desconexión** (`explainDisconnect`): cerrada o dada de baja,
+  número restringido, otra conexión con el mismo vínculo (440, ya no se reconecta
+  sola en bucle), claves dañadas (500, se regeneran) o red. Cada uno con qué hacer.
+  Se guarda en `sessions.disconnect_info`.
+- **Conexión › Diagnóstico** (visible también para usuarios no Super Admin, que
+  ahora tienen «Conexión» en el menú):
+  - último cierre explicado;
+  - credenciales que el servicio no puede escribir (causa de «Esperando el
+    mensaje»);
+  - lotes pausados por el anti-baneo y el ritmo y los límites de la línea.
+  - Acciones: **Reparar cifrado** (regenera las claves por contacto sin
+    desvincular) y **Empezar de cero** (borra credenciales y pide QR nuevo).
+  - Si el QR no sale, la caja explica por qué mientras sigue reintentando.
+- **«Esperando el mensaje»:**
+  - los reintentos de descifrado ahora también se atienden después de un
+    reinicio (texto enviado guardado en la BD, `lookupSent`);
+  - un error al guardar credenciales se registra como error visible.
+- **Envíos masivos 6–7 s:**
+  - nuevo perfil anti-baneo **Masivo institucional** (1500/día, 400/h, 6–7 s,
+    sin calentamiento, pausas de 2–4 min cada 60, freno por baja entrega o
+    bloqueos), aplicado una vez a todas las políticas;
+  - el intervalo se cuenta desde el envío anterior, así que el «escribiendo…» y
+    la verificación quedan dentro;
+  - la espera entre lotes de distintos programas baja de 10 a 1 minuto;
+  - `GET /api/v1/batches/:id` devuelve `anti_ban` (ritmo, uso por hora y día,
+    contactos nuevos, horario, tiempo estimado y línea conectada) y cronogramas lo
+    muestra en la ventana de progreso.
+- **Leer el enlace de un grupo** (`/api/v1/groups/resolve`) usa la línea del
+  usuario o cualquier línea conectada. Antes exigía la principal arrancada: «La
+  sesión no está arrancada».
+- **Fotos en grupos:** cada mensaje de grupo muestra la foto de perfil de quien lo
+  escribió (`GET /inbox/participant-avatar/:session/:jid`; se pide a WhatsApp una
+  vez y se guarda).
+- **Notas y tareas:**
+  - cada usuario ve en `/notes` solo lo suyo (lo que escribió, lo que derivó y lo
+    que le derivaron); el Super Admin ve todo;
+  - nueva vista **Pipeline** con cuatro etapas: Por hacer, En gestión,
+    Contactado (pide el resultado) y Resuelta (últimos 14 días). Las notas se
+    arrastran o se mueven con botones;
+  - `POST /inbox/notes/:id/stage`, columna `contact_notes.pipeline_stage` y evento
+    `stage` en el historial.
+- Modo claro: el texto que se escribe en el chat ya no queda blanco.
+
 ---
 
 ## Notas de operación

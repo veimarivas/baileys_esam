@@ -62,6 +62,10 @@ export function migrate(): void {
   db.exec('PRAGMA busy_timeout = 5000');
   db.exec(SCHEMA);
   // Migraciones ligeras para bases ya existentes.
+  // Etapa manual del pipeline de seguimiento ('todo' | 'doing'); las demás salen de los datos.
+  addColumnIfMissing('contact_notes', 'pipeline_stage', 'TEXT');
+  // Último cierre de conexión explicado (JSON de DisconnectInfo) para la vista Conexión.
+  addColumnIfMissing('sessions', 'disconnect_info', 'TEXT');
   addColumnIfMissing('messages', 'media_filename', 'TEXT');
   addColumnIfMissing('messages', 'media_seconds', 'INTEGER');
   addColumnIfMissing('messages', 'origin', 'TEXT');
@@ -177,6 +181,7 @@ export function migrate(): void {
   backfillInbox();
   backfillConversationLast();
   seedGlobalPolicy();
+  applyMassProfileV1();
   repairUnreadV1();
   logger.info({ db: resolved }, 'Esquema SQLite listo');
 }
@@ -407,6 +412,28 @@ function seedGlobalPolicy(): void {
      VALUES (NULL, 'medium', 300, 50, 45, 90, '08:00', '20:00', '1,2,3,4,5,6', 1, 50, 1, 20, 5, 15, 0.85, 1, ?, ?)`,
   ).run(now, now);
   logger.info('Politica anti-baneo global creada por defecto');
+}
+
+/**
+ * Una sola vez: todas las políticas pasan al perfil «Masivo institucional»
+ * (6–7 s por mensaje, sin calentamiento, pausas cortas y freno automático),
+ * el ritmo acordado para los envíos de cronogramas. Las palabras de baja se
+ * conservan. Después se puede cambiar el perfil por línea en Anti-Baneo.
+ */
+function applyMassProfileV1(): void {
+  const done = (db.prepare("SELECT value FROM configs WHERE key = 'antiban_mass_v1'").get() as { value?: string } | undefined)?.value;
+  if (done) return;
+  db.prepare(
+    `UPDATE anti_ban_policies SET risk_profile = 'mass', daily_limit = 1500, hourly_limit = 400,
+       delay_min_seconds = 6, delay_max_seconds = 7, window_start = '07:00', window_end = '21:00',
+       warmup_enabled = 0, warmup_start_date = NULL, warmup_day1_limit = 200,
+       pauses_enabled = 1, pause_every = 60, pause_min_minutes = 2, pause_max_minutes = 4,
+       health_delivery_threshold = 0.75, typing_simulation = 1, min_gap_seconds = 5, burst_per_minute = 12,
+       verify_numbers = 1, new_contacts_daily_limit = 600, max_consecutive_failures = 8, auto_pause_low_delivery = 1,
+       recontact_cooldown_hours = 0, max_unanswered = 0, block_rate_threshold = 0.04, updated_at = ?`,
+  ).run(new Date().toISOString());
+  setConfigFlag('antiban_mass_v1', '1');
+  logger.info('Políticas anti-baneo pasadas al perfil «Masivo institucional» (6–7 s por mensaje)');
 }
 
 export { resolved as dbPath };

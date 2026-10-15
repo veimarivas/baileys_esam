@@ -13,6 +13,7 @@ import { statementPdf, boletinPdf } from '../core/pdf.js';
 import { audit } from '../core/webhooks.js';
 import { upsertUser, usernameAvailableFor } from '../auth/users.js';
 import { logger } from '../logger.js';
+import { countNewContactsToday, getPolicy, limitState } from '../core/anti-ban.js';
 import type { SessionRow } from '../types.js';
 
 function ah(fn: (req: Request, res: Response) => Promise<unknown>) {
@@ -257,12 +258,19 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
         res.status(422).json({ message: 'Enlace o código inválido.' });
         return;
       }
-      const row = manager.primary();
-      if (!row) {
-        res.status(502).json({ message: 'No hay sesión principal.' });
+      // Cualquier línea conectada sirve para leer el enlace (no hace falta la principal).
+      const own = req.body?.account
+        ? get<SessionRow>("SELECT * FROM sessions WHERE owner_uid = ? AND status = 'ready'", String(req.body.account))
+        : undefined;
+      const row = own ?? readyPrimary();
+      if (!row || row.status !== 'ready') {
+        res.status(422).json({
+          message: 'No hay ninguna línea de WhatsApp conectada en Seguimiento ESAM para leer el enlace. Conectá una línea (Conexión) y volvé a intentar, o pegá el ID del grupo a mano.',
+        });
         return;
       }
       try {
+        await manager.start(row.id); // no-op si el socket ya está abierto
         const info = await manager.groupJoinInfo(row.id, code);
         res.json({ id: info.id, name: info.name });
       } catch (err) {
@@ -435,10 +443,35 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
         failed: number;
         skipped: number;
         meta: string | null;
-      }>('SELECT id, name, status, total, sent, failed, skipped, meta FROM batches WHERE id = ?', Number(req.params.id));
+        session_id: string;
+      }>('SELECT id, name, status, total, sent, failed, skipped, meta, session_id FROM batches WHERE id = ?', Number(req.params.id));
       if (!batch) {
         res.status(404).json({ message: 'Lote no encontrado.' });
         return;
+      }
+      // Detalle anti-baneo de la línea que envía: ritmo, límites y tiempo estimado.
+      let antiBan: Record<string, unknown> | null = null;
+      try {
+        const sessionRow = get<SessionRow>('SELECT * FROM sessions WHERE id = ?', batch.session_id);
+        const policy = getPolicy(batch.session_id);
+        const lim = limitState(batch.session_id, policy, sessionRow);
+        const remaining = Math.max(0, batch.total - batch.sent - batch.failed - batch.skipped);
+        const avg = (lim.delayMin + lim.delayMax) / 2;
+        antiBan = {
+          profile: policy.risk_profile,
+          pace: `${lim.delayMin}–${lim.delayMax} s por mensaje`,
+          hourly_limit: lim.hourlyLimit,
+          hourly_used: lim.hourlyUsed,
+          daily_limit: lim.dailyLimit,
+          daily_used: lim.dailyUsed,
+          new_contacts_today: countNewContactsToday(batch.session_id),
+          new_contacts_limit: policy.new_contacts_daily_limit,
+          window: `${policy.window_start}–${policy.window_end}`,
+          line_connected: sessionRow?.status === 'ready',
+          eta_minutes: remaining ? Math.ceil((remaining * avg) / 60) : 0,
+        };
+      } catch {
+        antiBan = null;
       }
       const pending = Math.max(0, batch.total - batch.sent - batch.failed - batch.skipped);
       const progress = batch.total > 0 ? Math.round(((batch.sent + batch.failed + batch.skipped) / batch.total) * 100) : 0;
@@ -461,6 +494,7 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
         skipped: batch.skipped,
         pending,
         progress,
+        anti_ban: antiBan,
       });
     }),
   );

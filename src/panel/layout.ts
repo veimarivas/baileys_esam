@@ -128,13 +128,12 @@ function scripts(): string {
 }
 
 function navList(user: UserRow, active: string, restrictToSettings = false, badges: Record<string, number> = {}, activeHref = ''): string {
-  const admin = esamEsAdmin(user);
+  // Quien no es Super Admin ve Conversaciones, Notas y tareas y su Conexión
+  // (para vincular, reparar o desvincular su número).
   return NAV.filter((n) => {
     if (!esamPuede(user, n.section)) return false;
     if (restrictToSettings) return n.section === 'settings';
-    // Quien no es Super Admin ve solo Conversaciones y Notas y tareas; su
-    // Conexión (QR) queda en el menú de usuario.
-    return admin || n.section !== 'settings';
+    return true;
   })
     .map((n) => {
       const count = badges[n.href] ?? 0;

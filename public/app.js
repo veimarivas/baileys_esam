@@ -79,6 +79,14 @@
               toast('Número vinculado correctamente' + (d.phone ? ': ' + d.phone : ''));
               setTimeout(function () { window.location.href = '/conversations'; }, 1400);
             }
+          } else if (d.reason) {
+            // Sin QR: se explica por qué y qué hacer (y se sigue intentando).
+            qr.innerHTML = '<div class="qr-reason">' +
+              '<div class="qr-reason-title"><i class="ri-error-warning-line"></i> ' + escapeHtml(d.reason.title) + '</div>' +
+              (d.reason.detail ? '<div class="qr-reason-text">' + escapeHtml(d.reason.detail) + '</div>' : '') +
+              '<div class="qr-reason-action"><b>Qué hacer:</b> ' + escapeHtml(d.reason.action) + '</div>' +
+              '<div class="qr-reason-wait"><span class="spinner-border spinner-border-sm"></span> Reintentando…</div></div>';
+            setTimeout(pollQr, 8000);
           } else {
             qr.innerHTML = '<span class="text-muted">Esperando QR…</span>';
             setTimeout(pollQr, 4000);
@@ -249,6 +257,17 @@
     // Acciones al hover (antes de la burbuja según el lado).
     var actions = buildActions(msg, ctx);
     if (isOut) { row.appendChild(actions.right); }
+
+    // En grupos, la foto de perfil de quien escribió (como en WhatsApp).
+    if (!isOut && msg.is_group && msg.sender_chat_id && ctx.sessionId) {
+      var who = msg.sender_name || msg.sender_phone || '?';
+      var av = document.createElement('span');
+      av.className = 'bubble-avatar';
+      av.innerHTML = avatarHtml(who, 'avatar-xs', '/inbox/participant-avatar/' + encodeURIComponent(ctx.sessionId()) + '/' + encodeURIComponent(msg.sender_chat_id));
+      av.title = who;
+      av.addEventListener('click', function () { ctx.onOpenContact(msg.sender_chat_id); });
+      row.appendChild(av);
+    }
 
     var wrap = document.createElement('div');
     wrap.className = 'bubble-wrap';
@@ -1050,7 +1069,7 @@
       pinned: 'ri-pushpin-2-fill', unpinned: 'ri-unpin-line', deleted: 'ri-delete-bin-6-line', restored: 'ri-arrow-go-back-line',
       assigned: 'ri-user-received-2-line',
       snoozed: 'ri-alarm-snooze-line', template: 'ri-file-list-3-line',
-      seen: 'ri-eye-line', contacted: 'ri-phone-line',
+      seen: 'ri-eye-line', contacted: 'ri-phone-line', stage: 'ri-kanban-view',
     };
 
     // Línea de tiempo: la creación sale de la propia nota; el resto, del historial.
@@ -1075,6 +1094,7 @@
         if (e.action === 'assigned') what = e.detail ? 'Asignó la tarea a ' + e.detail : 'Quitó el responsable';
         if (e.action === 'snoozed' && e.detail) what = 'Pospuso el recordatorio para ' + e.detail;
         if (e.action === 'template' && e.detail) what = 'La creó desde la plantilla «' + e.detail + '»';
+        if (e.action === 'stage') what = 'La movió a «' + (e.detail || 'otra etapa') + '»';
         if (e.action === 'contacted' && e.detail) extra = '<div class="nk-h-before"><span class="nk-h-label">Resultado</span><span>' + escapeHtml(e.detail) + '</span></div>';
         rows.push(item(HISTORY_ICONS[e.action] || 'ri-record-circle-line', e.user_name, what, e.created_at, extra));
       });
@@ -1277,6 +1297,7 @@
 
     return {
       dueState: dueState,
+      dueLabel: dueLabel,
       isPinned: isPinned,
       lineLabel: lineLabel,
       loadAssignees: loadAssignees,
@@ -2000,6 +2021,7 @@
     }
 
     var bubbleCtx = {
+      sessionId: function () { return state.selectedSession; },
       onReply: function (msg) { state.replyTo = msg; renderPane(); focusComposer(); },
       onGoto: function (id) { goToMessage(id); },
       onOpenContact: function (chatId) { if (chatId) openContactChat(chatId); },
@@ -3038,7 +3060,9 @@
       tagColors: root.querySelector('#tag-colors'),
       tagSave: root.querySelector('#tag-save'),
     };
-    var st = { status: 'pending', tag: null, tags: [], colors: ['#045474'], color: '#045474', notes: [], stats: null, managing: false };
+    var st = { status: 'pending', tag: null, tags: [], colors: ['#045474'], color: '#045474', notes: [], stats: null, managing: false, view: 'list' };
+    try { if (localStorage.getItem('notes-view') === 'board') st.view = 'board'; } catch (_) {}
+    els.board = root.querySelector('#np-board');
 
     function loadTags() {
       return api('/notes/tags').then(function (d) {
@@ -3053,7 +3077,9 @@
     }
 
     function loadNotes() {
-      var p = ['status=' + st.status, 'order=' + (els.order.value || 'due')];
+      // El pipeline muestra todas las etapas a la vez (sin papelera).
+      var status = st.view === 'board' ? 'all' : st.status;
+      var p = ['status=' + status, 'order=' + (els.order.value || 'due')];
       if (focusId) p.push('ids=' + focusId);
       if (els.search.value.trim()) p.push('q=' + encodeURIComponent(els.search.value.trim()));
       if (st.tag) p.push('tag=' + st.tag);
@@ -3064,7 +3090,7 @@
         st.notes = (d && d.notes) || [];
         st.stats = d && d.stats;
         renderStats();
-        renderNotes();
+        if (st.view === 'board') renderBoard(); else renderNotes();
         markSeen();
       }).catch(function (e) { toast(e.message, true); })
         .then(function () { els.list.classList.remove('loading'); });
@@ -3186,6 +3212,178 @@
         onChanged: function () { refresh(); },
       });
     }
+
+    /* ── Pipeline de seguimiento (tablero por etapas) ── */
+    var STAGES = [
+      { key: 'todo', label: 'Por hacer', icon: 'ri-inbox-line', hint: 'Registradas o derivadas que todavía nadie tomó.' },
+      { key: 'doing', label: 'En gestión', icon: 'ri-loader-2-line', hint: 'Alguien ya la está atendiendo.' },
+      { key: 'contacted', label: 'Contactado', icon: 'ri-phone-line', hint: 'Hubo comunicación con la persona; falta cerrar.' },
+      { key: 'done', label: 'Resuelta', icon: 'ri-check-double-line', hint: 'Cerradas en los últimos 14 días.' },
+    ];
+    var STAGE_KEYS = STAGES.map(function (s) { return s.key; });
+
+    function stageOf(n) {
+      if (n.done_at) return 'done';
+      if (n.contacted_at) return 'contacted';
+      if (n.pipeline_stage === 'doing' || (n.assigned_to && n.seen_at)) return 'doing';
+      return 'todo';
+    }
+
+    function canMove(n) { return !!(n.can_edit || n.assigned_to_me); }
+
+    function boardCard(n) {
+      var due = n.due_at ? NoteKit.dueState(n) : null;
+      var contact = n.contact_name || (n.contact_phone ? '+' + n.contact_phone : String(n.chat_id || '').split('@')[0]);
+      var text = (n.note_text || (n.audio_path ? 'Nota de voz' : '')).replace(/\s+/g, ' ');
+      var tags = (n.tags || []).map(function (t) { return '<span class="pl-tag" style="--tag:' + t.color + '" title="' + escapeHtml(t.name) + '">' + escapeHtml(t.name) + '</span>'; }).join('');
+      var movable = canMove(n);
+      var idx = STAGE_KEYS.indexOf(stageOf(n));
+      return '<article class="pl-card' + (due === 'overdue' && !n.done_at ? ' is-overdue' : '') + (NoteKit.isPinned(n) && !n.done_at ? ' is-pinned' : '') + '"' +
+          ' data-id="' + n.id + '"' + (movable ? ' draggable="true"' : '') + ' tabindex="0">' +
+        '<div class="pl-top">' +
+          '<a class="pl-contact" href="/conversations/' + encodeURIComponent(n.chat_id) + '" title="Abrir la conversación">' +
+            '<span class="ri-whatsapp-line" aria-hidden="true"></span>' + escapeHtml(contact) + '</a>' +
+          (NoteKit.isPinned(n) && !n.done_at ? '<span class="pl-pin ri-pushpin-2-fill" title="Importante"></span>' : '') +
+        '</div>' +
+        (text ? '<div class="pl-text">' + escapeHtml(text.slice(0, 220)) + '</div>' : '') +
+        (n.contact_result && n.contacted_at ? '<div class="pl-result"><span class="ri-chat-check-line"></span> ' + escapeHtml(n.contact_result.slice(0, 140)) + '</div>' : '') +
+        (tags ? '<div class="pl-tags">' + tags + '</div>' : '') +
+        '<div class="pl-foot">' +
+          (n.due_at ? '<span class="pl-due pl-due-' + (n.done_at ? 'done' : due) + '"><span class="ri-calendar-event-line"></span> ' + escapeHtml(NoteKit.dueLabel(n)) + '</span>' : '') +
+          (n.assigned_name ? '<span class="pl-who" title="Responsable"><span class="ri-user-received-2-line"></span> ' + escapeHtml(n.assigned_name) + '</span>'
+            : '<span class="pl-who" title="Registró"><span class="ri-user-line"></span> ' + escapeHtml(n.author_name || 'Equipo') + '</span>') +
+        '</div>' +
+        (movable
+          ? '<div class="pl-move">' +
+              (idx > 0 ? '<button type="button" class="pl-mv" data-to="' + STAGE_KEYS[idx - 1] + '" title="Mover a «' + STAGES[idx - 1].label + '»"><span class="ri-arrow-left-s-line"></span></button>' : '<span></span>') +
+              (idx < STAGES.length - 1 ? '<button type="button" class="pl-mv pl-mv-next" data-to="' + STAGE_KEYS[idx + 1] + '">' + STAGES[idx + 1].label + ' <span class="ri-arrow-right-s-line"></span></button>' : '') +
+            '</div>'
+          : '') +
+      '</article>';
+    }
+
+    function renderBoard() {
+      var cutoff = Date.now() - 14 * 86400000;
+      var cols = {};
+      STAGE_KEYS.forEach(function (k) { cols[k] = []; });
+      st.notes.forEach(function (n) {
+        if (n.deleted_at) return;
+        var k = stageOf(n);
+        if (k === 'done' && new Date(n.done_at).getTime() < cutoff) return;
+        cols[k].push(n);
+      });
+      // Dentro de cada columna: importantes y vencidas arriba, luego por fecha.
+      var rank = function (n) { return (NoteKit.isPinned(n) ? 0 : 2) + (n.due_at && NoteKit.dueState(n) === 'overdue' ? 0 : 1); };
+      STAGE_KEYS.forEach(function (k) {
+        cols[k].sort(function (a, b) {
+          if (k === 'done') return String(b.done_at).localeCompare(String(a.done_at));
+          return rank(a) - rank(b) || String(a.due_at || '9999').localeCompare(String(b.due_at || '9999'));
+        });
+      });
+      els.board.innerHTML = STAGES.map(function (s) {
+        var list = cols[s.key];
+        return '<section class="pl-col pl-col-' + s.key + '" data-stage="' + s.key + '">' +
+          '<header class="pl-col-head"><span class="pl-col-ic ' + s.icon + '" aria-hidden="true"></span>' +
+            '<span class="pl-col-title">' + s.label + '</span><span class="pl-col-count">' + list.length + '</span></header>' +
+          '<p class="pl-col-hint">' + s.hint + '</p>' +
+          '<div class="pl-col-body">' + (list.length ? list.map(boardCard).join('') : '<div class="pl-empty">Arrastrá una nota aquí</div>') + '</div>' +
+        '</section>';
+      }).join('');
+      bindBoard();
+    }
+
+    function moveNote(id, to) {
+      var n = st.notes.filter(function (x) { return x.id === id; })[0];
+      if (!n || stageOf(n) === to) return;
+      var send = function (result) {
+        jsonApi('/inbox/notes/' + id + '/stage', 'POST', { stage: to, result: result || '' })
+          .then(function () {
+            toast('Nota movida a «' + STAGES[STAGE_KEYS.indexOf(to)].label + '»');
+            loadNotes();
+          })
+          .catch(function (e) { toast(e.message, true); renderBoard(); });
+      };
+      if (to === 'contacted') askResult(n, send); else send();
+    }
+
+    // «Contactado» pide el resultado de la comunicación (queda en el historial).
+    function askResult(n, done) {
+      var wrap = document.createElement('div');
+      wrap.className = 'pl-dialog-backdrop';
+      wrap.innerHTML = '<div class="pl-dialog" role="dialog" aria-modal="true" aria-labelledby="pl-dlg-title">' +
+        '<h6 id="pl-dlg-title"><span class="ri-phone-line"></span> ¿Cómo fue la comunicación?</h6>' +
+        '<p class="pl-dialog-sub">' + escapeHtml(n.contact_name || n.contact_phone || '') + '</p>' +
+        '<textarea class="form-control" rows="3" maxlength="1000" placeholder="Ej.: Se le explicó el pago, queda en depositar el viernes."></textarea>' +
+        '<div class="pl-dialog-actions"><button type="button" class="btn btn-light btn-sm" data-act="cancel">Cancelar</button>' +
+        '<button type="button" class="btn btn-primary btn-sm" data-act="ok">Guardar</button></div></div>';
+      document.body.appendChild(wrap);
+      var ta = wrap.querySelector('textarea');
+      ta.focus();
+      var close = function () { wrap.remove(); renderBoard(); };
+      wrap.addEventListener('click', function (e) { if (e.target === wrap) close(); });
+      wrap.querySelector('[data-act="cancel"]').addEventListener('click', close);
+      wrap.querySelector('[data-act="ok"]').addEventListener('click', function () {
+        var v = ta.value.trim();
+        if (v.length < 3) { ta.focus(); toast('Contá brevemente cómo fue la comunicación.', true); return; }
+        wrap.remove();
+        done(v);
+      });
+      ta.addEventListener('keydown', function (e) { if (e.key === 'Escape') close(); });
+    }
+
+    function bindBoard() {
+      var dragId = null;
+      Array.prototype.forEach.call(els.board.querySelectorAll('.pl-card[draggable="true"]'), function (c) {
+        c.addEventListener('dragstart', function (e) {
+          dragId = Number(c.getAttribute('data-id'));
+          c.classList.add('dragging');
+          try { e.dataTransfer.setData('text/plain', String(dragId)); e.dataTransfer.effectAllowed = 'move'; } catch (_) {}
+        });
+        c.addEventListener('dragend', function () { c.classList.remove('dragging'); });
+      });
+      Array.prototype.forEach.call(els.board.querySelectorAll('.pl-col'), function (col) {
+        col.addEventListener('dragover', function (e) { if (dragId) { e.preventDefault(); col.classList.add('over'); } });
+        col.addEventListener('dragleave', function (e) { if (!col.contains(e.relatedTarget)) col.classList.remove('over'); });
+        col.addEventListener('drop', function (e) {
+          e.preventDefault();
+          col.classList.remove('over');
+          if (dragId) moveNote(dragId, col.getAttribute('data-stage'));
+          dragId = null;
+        });
+      });
+      Array.prototype.forEach.call(els.board.querySelectorAll('.pl-mv'), function (b) {
+        b.addEventListener('click', function () {
+          var id = Number(b.closest('.pl-card').getAttribute('data-id'));
+          moveNote(id, b.getAttribute('data-to'));
+        });
+      });
+    }
+
+    function applyView() {
+      Array.prototype.forEach.call(root.querySelectorAll('.np-view-btn'), function (b) {
+        var on = b.getAttribute('data-view') === st.view;
+        b.classList.toggle('on', on);
+        b.setAttribute('aria-pressed', String(on));
+      });
+      var board = st.view === 'board';
+      els.list.hidden = board;
+      els.board.hidden = !board;
+      els.stats.hidden = board;
+      els.order.hidden = board;
+      var trash = root.querySelector('#notes-trash');
+      if (trash) trash.hidden = board;
+    }
+
+    Array.prototype.forEach.call(root.querySelectorAll('.np-view-btn'), function (b) {
+      b.addEventListener('click', function () {
+        st.view = b.getAttribute('data-view');
+        if (st.view === 'board' && st.status === 'trash') st.status = 'pending';
+        try { localStorage.setItem('notes-view', st.view); } catch (_) {}
+        applyView();
+        loadNotes();
+      });
+    });
+    applyView();
 
     function renderTags() {
       if (!st.tags.length) {

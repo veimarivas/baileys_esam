@@ -152,6 +152,8 @@ export interface ContactNoteRow {
   contacted_at: string | null;
   contacted_by: number | null;
   contact_result: string | null;
+  /** Etapa manual del pipeline ('todo' | 'doing'); null = según los datos. */
+  pipeline_stage?: string | null;
   /** Responsable de la tarea (null = sin asignar). */
   assigned_to: number | null;
   /** Mensaje del chat desde el que se registró (si se guardó desde una burbuja). */

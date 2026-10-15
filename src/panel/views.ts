@@ -200,6 +200,116 @@ export function connectionCard(session: SessionRow | undefined, subtitle?: strin
   </div>`;
 }
 
+export interface ConnectionDiagnosis {
+  status: string;
+  ready: boolean;
+  disconnect: { code: number | null; kind: string; title: string; detail: string; action: string; at: string } | null;
+  auth: { ok: boolean; path: string; error?: string };
+  lastError: string | null;
+  blockedReason: string | null;
+  /** Lotes pausados por el anti-baneo en esta línea. */
+  pausedBatches: Array<{ id: number; name: string; reason: string | null }>;
+  /** Ritmo y límites vigentes de la línea. */
+  antiBan: { pace: string; hourly: number; daily: number; sentToday: number; newContactsToday: number; newContactsLimit: number; warmupDay: number | null } | null;
+}
+
+/**
+ * Diagnóstico de la conexión: por qué se desconectó o no genera QR, explicado
+ * con lo que hay que hacer, y las acciones para subsanarlo sin ayuda técnica.
+ */
+export function connectionDiagnosis(d: ConnectionDiagnosis): string {
+  const fecha = (iso: string) => {
+    try {
+      return new Date(iso).toLocaleString('es-BO', { dateStyle: 'short', timeStyle: 'short' });
+    } catch {
+      return iso;
+    }
+  };
+  const problems: string[] = [];
+  if (!d.auth.ok) {
+    problems.push(`<div class="diag-item is-danger">
+      <span class="diag-ico"><i class="ri-lock-2-line"></i></span>
+      <div><div class="diag-title">El servicio no puede guardar las credenciales de WhatsApp</div>
+        <div class="diag-text">Sin esto el cifrado se desfasa (los contactos ven «Esperando el mensaje») y el QR puede no aparecer.
+          <span class="text-muted">(${esc(d.auth.error ?? '')})</span></div>
+        <div class="diag-action"><b>Cómo se arregla:</b> en el servidor ejecutá
+          <code>sudo chown -R www-data:www-data ${esc(d.auth.path.replace(/[\\/][^\\/]+$/, ''))}</code> y después «Reconectar».</div></div>
+    </div>`);
+  }
+  if (d.status === 'blocked' && d.blockedReason) {
+    problems.push(`<div class="diag-item is-danger">
+      <span class="diag-ico"><i class="ri-forbid-2-line"></i></span>
+      <div><div class="diag-title">Conexión bloqueada por el sistema</div>
+        <div class="diag-text">${esc(d.blockedReason)}.</div>
+        <div class="diag-action"><b>Cómo se arregla:</b> escaneá el QR con el número autorizado para esta cuenta (el registrado en cronogramas).</div></div>
+    </div>`);
+  }
+  if (d.disconnect && !d.ready) {
+    const tone = d.disconnect.kind === 'banned' || d.disconnect.kind === 'logged_out' ? 'is-danger' : 'is-warn';
+    problems.push(`<div class="diag-item ${tone}">
+      <span class="diag-ico"><i class="ri-plug-line"></i></span>
+      <div><div class="diag-title">${esc(d.disconnect.title)}${d.disconnect.code ? ` <span class="diag-code">código ${d.disconnect.code}</span>` : ''}</div>
+        <div class="diag-text">${esc(d.disconnect.detail)} <span class="text-muted">· ${esc(fecha(d.disconnect.at))}</span></div>
+        <div class="diag-action"><b>Qué hacer:</b> ${esc(d.disconnect.action)}</div></div>
+    </div>`);
+  }
+  if (d.pausedBatches.length) {
+    problems.push(`<div class="diag-item is-warn">
+      <span class="diag-ico"><i class="ri-pause-circle-line"></i></span>
+      <div><div class="diag-title">${d.pausedBatches.length} envío(s) masivo(s) en pausa por el anti-baneo</div>
+        <div class="diag-text">${d.pausedBatches
+          .slice(0, 4)
+          .map((b) => `<div>· Lote #${b.id} ${esc(b.name)}${b.reason ? ` — <i>${esc(b.reason)}</i>` : ''}</div>`)
+          .join('')}</div>
+        <div class="diag-action"><b>Qué hacer:</b> esperá a que se normalice (las pausas protegen el número del bloqueo) y reanudalos desde Lotes.</div></div>
+    </div>`);
+  }
+  if (!problems.length) {
+    problems.push(`<div class="diag-item is-ok">
+      <span class="diag-ico"><i class="ri-shield-check-line"></i></span>
+      <div><div class="diag-title">${d.ready ? 'Todo en orden' : 'Sin problemas detectados'}</div>
+        <div class="diag-text">${d.ready ? 'La línea está conectada y las credenciales se guardan bien.' : 'Generá el QR para vincular el número.'}</div></div>
+    </div>`);
+  }
+
+  const ab = d.antiBan;
+  const antiBan = ab
+    ? `<div class="diag-ab">
+        <div class="diag-ab-title"><i class="ri-shield-star-line"></i> Anti-baneo de esta línea</div>
+        <div class="diag-ab-grid">
+          <div><span>Ritmo</span><b>${esc(ab.pace)}</b></div>
+          <div><span>Enviados hoy</span><b>${ab.sentToday} / ${ab.daily}</b></div>
+          <div><span>Por hora</span><b>hasta ${ab.hourly}</b></div>
+          <div><span>Contactos nuevos hoy</span><b>${ab.newContactsToday} / ${ab.newContactsLimit}</b></div>
+          ${ab.warmupDay ? `<div><span>Calentamiento</span><b>día ${ab.warmupDay}</b></div>` : ''}
+        </div>
+      </div>`
+    : '';
+
+  return `<div class="card diag-card">
+    <div class="card-header d-flex align-items-center gap-2">
+      <i class="ri-stethoscope-line text-primary fs-18"></i>
+      <h5 class="card-title mb-0">Diagnóstico de la conexión</h5>
+    </div>
+    <div class="card-body">
+      ${problems.join('')}
+      ${antiBan}
+      <div class="diag-tools">
+        <form method="post" action="/settings/repair" class="js-once" onsubmit="return confirm('Se regeneran las claves de cifrado con cada contacto, sin desvincular el número. ¿Continuar?')">
+          <button class="btn btn-soft-warning w-100" type="submit" ${d.ready ? '' : 'disabled'}>
+            <i class="ri-tools-line me-1"></i>Reparar cifrado</button>
+          <small>Usalo si los contactos ven «Esperando el mensaje» en lo que enviás.</small>
+        </form>
+        <form method="post" action="/settings/reset" class="js-once" onsubmit="return confirm('Se borran las credenciales de esta línea y vas a tener que escanear un QR nuevo. Las conversaciones no se borran. ¿Continuar?')">
+          <button class="btn btn-soft-danger w-100" type="submit">
+            <i class="ri-restart-line me-1"></i>Empezar de cero (QR nuevo)</button>
+          <small>Si no aparece el QR o la línea quedó trabada. No borra conversaciones ni notas.</small>
+        </form>
+      </div>
+    </div>
+  </div>`;
+}
+
 /** Lista de lotes en tarjetas con barra de progreso. */
 export function batchList(rows: BatchRow[]): string {
   if (rows.length === 0) {

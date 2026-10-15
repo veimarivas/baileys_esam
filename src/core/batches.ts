@@ -113,6 +113,7 @@ export class BatchRunner {
     let sinceHealthRefresh = 0;
     // Envíos efectivos en esta corrida (para jitter/pausas por fatiga).
     let sentInRun = 0;
+    let lastSendAt = 0;
     let newContactsToday = policy.active ? countNewContactsToday(sessionId) : 0;
     const maxFailures = Math.max(1, policy.max_consecutive_failures || MAX_CONSECUTIVE_FAILURES);
 
@@ -202,7 +203,10 @@ export class BatchRunner {
 
       // Ritmo humano: enfriamiento, jitter o pausa por fatiga, calculado en cada
       // envío para que una espera previa no deje los siguientes en ráfaga.
-      const waitMs = pacing.delayBeforeMs(sentInRun, programKey);
+      // El intervalo se cuenta desde el inicio del envío anterior: el «escribiendo…»
+      // y la verificación del número quedan dentro (p. ej. 6–7 s por mensaje en total).
+      const elapsedMs = lastSendAt ? Date.now() - lastSendAt : 0;
+      const waitMs = Math.max(0, pacing.delayBeforeMs(sentInRun, programKey) - elapsedMs);
       if (waitMs > 0) {
         // Solo se informan las esperas largas (calentamiento, pausas por fatiga).
         if (waitMs >= 20_000) setWaiting(batchId, 'Ritmo anti-baneo entre mensajes', waitMs);
@@ -226,6 +230,7 @@ export class BatchRunner {
       }
 
       try {
+        lastSendAt = Date.now();
         const messageId = await this.sendItem(sessionId, item);
         updateItem(item.id, 'sent', null, messageId ?? null);
         if (messageId) run("UPDATE messages SET origin = 'batch' WHERE wa_message_id = ?", messageId);

@@ -50,6 +50,7 @@ const RISK_INFO: Record<RiskProfile, { title: string; text: string; icon: string
   low: { title: 'Conservador', text: 'Números nuevos o recién recuperados.', icon: 'ri-shield-check-line' },
   medium: { title: 'Balanceado', text: 'Números con historial y buena entrega.', icon: 'ri-scales-3-line' },
   high: { title: 'Agresivo', text: 'Solo números maduros y listas que responden.', icon: 'ri-flashlight-line' },
+  mass: { title: 'Masivo institucional', text: 'Envíos de cronogramas: 6–7 s por mensaje, con pausas y freno automático.', icon: 'ri-megaphone-line' },
 };
 
 type Tab = 'monitoreo' | 'politicas' | 'lista-negra' | 'bitacora';
@@ -86,7 +87,7 @@ function days(value: unknown): number[] {
 
 function profile(value: unknown, fallback: RiskProfile): RiskProfile {
   const v = s(value);
-  return v === 'low' || v === 'medium' || v === 'high' ? v : fallback;
+  return v === 'low' || v === 'medium' || v === 'high' || v === 'mass' ? v : fallback;
 }
 
 function tabOf(value: unknown): Tab {
@@ -323,7 +324,7 @@ function policyForm(action: string, p: AntiBanPolicy, opts: { scope: 'global' | 
         <input type="checkbox" name="window_days" value="${d}" ${p.window_days.includes(d) ? 'checked' : ''}/><span>${label}</span>
       </label>`,
   ).join('');
-  const presets = (['low', 'medium', 'high'] as RiskProfile[])
+  const presets = (['low', 'medium', 'high', 'mass'] as RiskProfile[])
     .map((r) => {
       const pr = RISK_PRESETS[r];
       return `<label class="ab-preset">

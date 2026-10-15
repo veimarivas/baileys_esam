@@ -185,6 +185,89 @@ export interface WaSessionOptions {
   /** Nombre de sesión = carpeta de credenciales. */
   name: string;
   proxyUrl?: string | null;
+  /**
+   * Contenido de un mensaje enviado buscado en la BD (texto). Respaldo de
+   * `getMessage` cuando el reintento llega después de un reinicio del servicio.
+   */
+  lookupSent?: (waMessageId: string) => proto.IMessage | undefined;
+}
+
+/** Por qué se cerró la conexión, explicado para quien tiene que resolverlo. */
+export interface DisconnectInfo {
+  code: number | null;
+  /** Clave estable: logged_out, banned, replaced, bad_session, restart, network, unknown. */
+  kind: string;
+  title: string;
+  detail: string;
+  /** Qué hacer para volver a conectar. */
+  action: string;
+  at: string;
+}
+
+export function explainDisconnect(code: number | null | undefined, message?: string | null): DisconnectInfo {
+  const at = new Date().toISOString();
+  const c = typeof code === 'number' ? code : null;
+  const base = { code: c, at };
+  if (c === DisconnectReason.loggedOut) {
+    return {
+      ...base,
+      kind: 'logged_out',
+      title: 'WhatsApp cerró la sesión de este dispositivo',
+      detail:
+        'El vínculo se cerró desde el teléfono (Dispositivos vinculados) o WhatsApp lo dio de baja, algo frecuente después de muchos envíos seguidos a números que no tienen guardado el contacto. Las credenciales ya no sirven y se borraron.',
+      action: 'Generá un QR nuevo y escanealo desde WhatsApp › Dispositivos vinculados. Antes de volver a enviar en masa, revisá el ritmo en Anti-Baneo.',
+    };
+  }
+  if (c === 403) {
+    return {
+      ...base,
+      kind: 'banned',
+      title: 'WhatsApp bloqueó el acceso de este número',
+      detail:
+        'WhatsApp rechazó la conexión (403). Suele indicar que el número fue restringido o suspendido por reportes o por volumen de mensajes. Las credenciales se borraron.',
+      action:
+        'Abrí WhatsApp en el teléfono: si muestra un aviso de cuenta suspendida, seguí los pasos para solicitar la revisión. Cuando el teléfono funcione normalmente, generá un QR nuevo. Esperá unas horas antes de volver a enviar en masa.',
+    };
+  }
+  if (c === DisconnectReason.connectionReplaced) {
+    return {
+      ...base,
+      kind: 'replaced',
+      title: 'Otra conexión abrió esta misma sesión',
+      detail:
+        'WhatsApp cerró esta conexión porque se abrió otra con las mismas credenciales (por ejemplo, el servicio corriendo dos veces en el servidor). Dos conexiones a la vez dañan el cifrado y los contactos ven «Esperando el mensaje».',
+      action:
+        'Cerrá WhatsApp Web u otro sistema que use este mismo vínculo, verificá que el servicio corra una sola vez (systemctl status esam-seguimiento) y después usá «Reconectar».',
+    };
+  }
+  if (c === DisconnectReason.badSession) {
+    return {
+      ...base,
+      kind: 'bad_session',
+      title: 'Las claves de cifrado quedaron dañadas',
+      detail: 'WhatsApp informó una sesión de cifrado inválida. Se regeneran las claves por contacto sin desvincular el número.',
+      action: 'Si el problema sigue, usá «Reparar cifrado» y, como último recurso, «Desvincular y generar QR».',
+    };
+  }
+  if (c === DisconnectReason.restartRequired) {
+    return { ...base, kind: 'restart', title: 'WhatsApp pidió reiniciar la conexión', detail: 'Es normal después de escanear el QR.', action: 'Se reconecta solo.' };
+  }
+  if (c === DisconnectReason.timedOut || c === DisconnectReason.connectionLost || c === DisconnectReason.connectionClosed) {
+    return {
+      ...base,
+      kind: 'network',
+      title: 'Se perdió la conexión con WhatsApp',
+      detail: 'Corte de red o de los servidores de WhatsApp.',
+      action: 'Se reconecta solo. Si sigue así varios minutos, revisá la red del servidor y el teléfono.',
+    };
+  }
+  return {
+    ...base,
+    kind: 'unknown',
+    title: 'La conexión se cerró',
+    detail: message ? `Detalle técnico: ${message}` : 'WhatsApp cerró la conexión sin dar un motivo.',
+    action: 'Se intenta reconectar sola. Si no vuelve, probá «Reconectar» o «Desvincular y generar QR».',
+  };
 }
 
 /** Traduce un chatId del contrato OpenWA (`@c.us`) al JID de Baileys. */
@@ -269,6 +352,8 @@ export class WaSession extends EventEmitter {
    * contacto ve "Esperando el mensaje…" para siempre.
    */
   private sentCache = new Map<string, proto.IMessage>();
+  /** Último cierre de conexión relevante (para explicarlo en Conexión). */
+  lastDisconnect: DisconnectInfo | null = null;
 
   constructor(private readonly opts: WaSessionOptions) {
     super();
@@ -326,12 +411,23 @@ export class WaSession extends EventEmitter {
       connectTimeoutMs: 60_000,
       keepAliveIntervalMs: 25_000,
       retryRequestDelayMs: 2_000,
-      getMessage: async (key: WAMessageKey) => (key?.id ? this.sentCache.get(key.id) : undefined),
+      // Reintento de un mensaje que el contacto no pudo descifrar: primero la
+      // caché en memoria; si el servicio se reinició, el texto guardado en la BD.
+      getMessage: async (key: WAMessageKey) =>
+        key?.id ? this.sentCache.get(key.id) ?? this.opts.lookupSent?.(key.id) : undefined,
     });
     this.sock = sock;
     this.installWatchdogs(sock);
 
-    sock.ev.on('creds.update', saveCreds);
+    // Si las credenciales no se pueden guardar (p. ej. archivos de root con el
+    // servicio corriendo como www-data) el cifrado se desfasa en silencio y los
+    // contactos ven «Esperando el mensaje»: se registra como error visible.
+    sock.ev.on('creds.update', () => {
+      Promise.resolve(saveCreds()).catch((err: Error) => {
+        this.lastError = `No se pudieron guardar las credenciales: ${err.message}`;
+        logger.error({ session: this.name, path: this.authPath, err: err.message }, 'No se pudieron guardar las credenciales');
+      });
+    });
     sock.ev.on('connection.update', (update: any) => void this.onConnection(update, sock));
     sock.ev.on('messages.upsert', (payload: any) => void this.onUpsert(payload));
     sock.ev.on('messages.update', (updates: any) => void this.onUpdate(updates));
@@ -470,30 +566,51 @@ export class WaSession extends EventEmitter {
 
     if (connection === 'close') {
       const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
-      const loggedOut = statusCode === DisconnectReason.loggedOut;
+      const errMessage = (lastDisconnect?.error as Error)?.message ?? null;
+      // 401 (cerrada desde el teléfono o dada de baja) y 403 (número restringido):
+      // las credenciales ya no sirven.
+      const loggedOut = statusCode === DisconnectReason.loggedOut || statusCode === 403;
+      const replaced = statusCode === DisconnectReason.connectionReplaced;
       const registered = !!this.sock?.authState?.creds?.registered;
+      const info = explainDisconnect(statusCode, errMessage);
       logger.warn(
-        {
-          session: this.name,
-          statusCode,
-          loggedOut,
-          registered,
-          err: (lastDisconnect?.error as Error)?.message,
-        },
+        { session: this.name, statusCode, kind: info.kind, registered, err: errMessage },
         'Conexión de WhatsApp cerrada',
       );
 
-      // Si aún no está registrado (esperando QR) y el socket se cae, se reinicia
-      // el ciclo de QR en vez de quedar en bucle con credenciales a medias.
       this.clearWatchdogs();
       this.sock = null;
-      this.status = loggedOut ? 'disconnected' : 'connecting';
+      this.status = loggedOut || replaced ? 'disconnected' : 'connecting';
+      if (info.kind !== 'restart' && info.kind !== 'network') this.lastDisconnect = info;
       this.emit('status', this.status);
 
       if (loggedOut) {
+        // Antes las credenciales viejas quedaban: el siguiente «Generar QR»
+        // reintentaba con ellas, WhatsApp las rechazaba otra vez y el QR nunca
+        // aparecía. Se borran para que el próximo intento pida un QR nuevo.
         this.qrDataUrl = null;
-        this.emit('disconnected', 'Sesión cerrada desde el teléfono');
+        this.phone = null;
+        if (!this.clearAuthDir()) {
+          info.detail += ` No se pudieron borrar las credenciales en ${this.authPath} (permisos): el QR no va a aparecer hasta corregirlo.`;
+          info.action = `En el servidor: sudo chown -R www-data:www-data ${path.dirname(this.authPath)} y después «Generar QR».`;
+        }
+        this.lastDisconnect = info;
+        this.emit('disconnected', info);
         return;
+      }
+
+      if (replaced) {
+        // No se reconecta solo: con dos instancias se echarían mutuamente sin fin.
+        this.emit('disconnected', info);
+        return;
+      }
+
+      if (info.kind === 'bad_session') {
+        try {
+          this.clearSignalSessions();
+        } catch {
+          // queda registrado; la reconexión sigue igual
+        }
       }
 
       if (!this.reconnecting) {
@@ -1168,11 +1285,62 @@ export class WaSession extends EventEmitter {
     this.emit('status', this.status);
   }
 
-  private clearAuthDir(): void {
+  /** Borra las credenciales. Devuelve `false` si no se pudo (p. ej. permisos). */
+  private clearAuthDir(): boolean {
     try {
       fs.rmSync(this.authPath, { recursive: true, force: true });
-    } catch {
-      // ignore
+      return !fs.existsSync(this.authPath);
+    } catch (err) {
+      logger.error({ session: this.name, path: this.authPath, err: (err as Error).message }, 'No se pudieron borrar las credenciales');
+      return false;
+    }
+  }
+
+  /**
+   * Borra las sesiones de cifrado por contacto y de grupo (sin tocar el vínculo
+   * del número). La próxima vez que se escriba a cada contacto se negocian claves
+   * nuevas: resuelve el «Esperando el mensaje» por claves desfasadas.
+   */
+  private clearSignalSessions(): number {
+    let removed = 0;
+    try {
+      for (const file of fs.readdirSync(this.authPath)) {
+        if (/^(session-|sender-key-)/.test(file)) {
+          fs.rmSync(path.join(this.authPath, file), { force: true });
+          removed++;
+        }
+      }
+    } catch (err) {
+      logger.error({ session: this.name, err: (err as Error).message }, 'No se pudieron limpiar las sesiones de cifrado');
+      throw new Error(`No se pudieron borrar las claves de cifrado (${(err as Error).message}). Revisá los permisos de ${this.authPath}.`);
+    }
+    logger.warn({ session: this.name, removed }, 'Sesiones de cifrado regeneradas');
+    return removed;
+  }
+
+  /** «Reparar cifrado»: cierra, regenera las claves por contacto y vuelve a conectar. */
+  async repairEncryption(): Promise<number> {
+    await this.stop();
+    const removed = this.clearSignalSessions();
+    await delay(1000);
+    await this.connect();
+    return removed;
+  }
+
+  /** ¿Se pueden escribir las credenciales? (si no, el cifrado se desfasa y el QR falla). */
+  authWritable(): { ok: boolean; path: string; error?: string } {
+    try {
+      fs.mkdirSync(this.authPath, { recursive: true });
+      const probe = path.join(this.authPath, `.probe-${process.pid}`);
+      fs.writeFileSync(probe, 'ok');
+      fs.rmSync(probe, { force: true });
+      // Todos los archivos existentes deben poder reescribirse.
+      for (const file of fs.readdirSync(this.authPath)) {
+        fs.accessSync(path.join(this.authPath, file), fs.constants.W_OK);
+      }
+      return { ok: true, path: this.authPath };
+    } catch (err) {
+      return { ok: false, path: this.authPath, error: (err as Error).message };
     }
   }
 }

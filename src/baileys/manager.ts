@@ -5,7 +5,7 @@ import { all, get, run } from '../db/index.js';
 import { config } from '../config.js';
 import { nowIso, delay, randInt } from '../util/async.js';
 import { logger } from '../logger.js';
-import { WaSession, type DecryptFailure, type InboundMessage, type QuotedRef } from './session.js';
+import { WaSession, type DecryptFailure, type DisconnectInfo, type InboundMessage, type QuotedRef } from './session.js';
 import { normalizePhone, phoneFromChatId } from '../core/phone.js';
 import { storeAvatar, storeIncoming } from '../core/media.js';
 import { audit, dispatchEvent } from '../core/webhooks.js';
@@ -15,8 +15,8 @@ import { setReaction } from '../core/conversations.js';
 import { addOptout, isOptoutRequest, looksLikeBlock, markBlocked } from '../core/optout.js';
 import { recomputeHealth } from '../core/health.js';
 import { getPolicy, resetTrust } from '../core/anti-ban.js';
-import { tagPerson } from '../core/person.js';
-import { lidForPhone } from '../core/lid.js';
+import { phoneKeyOf, tagPerson } from '../core/person.js';
+import { lidForPhone, resolveChatId } from '../core/lid.js';
 import { panelBus } from '../panel/events.js';
 import type { OutboundSender, SessionRow } from '../types.js';
 
@@ -166,12 +166,24 @@ export class SessionManager implements OutboundSender {
     if (existing) return existing;
 
     const row = this.snapshot(sessionId);
-    const session = new WaSession({ name: row.name, proxyUrl: row.proxy_url });
+    const session = new WaSession({
+      name: row.name,
+      proxyUrl: row.proxy_url,
+      // Respaldo de reintentos tras un reinicio: el texto enviado guardado en la BD.
+      lookupSent: (waId: string) => {
+        const m = get<{ body: string | null; content_type: string }>(
+          "SELECT body, content_type FROM messages WHERE session_id = ? AND wa_message_id = ? AND direction = 'out' LIMIT 1",
+          sessionId,
+          waId,
+        );
+        return m?.body && m.content_type === 'text' ? { conversation: m.body } : undefined;
+      },
+    });
 
     session.on('status', (status: string) => this.updateStatus(sessionId, status));
-    session.on('qr', () => this.updateStatus(sessionId, 'qr'));
+    session.on('qr', () => this.updateStatus(sessionId, 'qr', { disconnect_info: null }));
     session.on('ready', (phone: string) => void this.onReady(sessionId, phone));
-    session.on('disconnected', (reason: string) => void this.onDisconnected(sessionId, reason));
+    session.on('disconnected', (info: DisconnectInfo) => void this.onDisconnected(sessionId, info));
     session.on('message', (msg: InboundMessage) => this.enqueueInbound(sessionId, () => this.onMessage(sessionId, msg)));
     session.on('history', (msg: InboundMessage) => this.enqueueInbound(sessionId, () => this.onHistory(sessionId, msg)));
     session.on('decrypt-failure', (f: DecryptFailure) => this.onDecryptFailure(sessionId, f));
@@ -563,10 +575,60 @@ export class SessionManager implements OutboundSender {
     void this.resumeHistories(sessionId);
   }
 
-  private async onDisconnected(sessionId: string, reason: string): Promise<void> {
-    this.updateStatus(sessionId, 'disconnected', { last_error: reason });
-    await dispatchEvent(sessionId, 'session.disconnected', { reason });
+  private async onDisconnected(sessionId: string, info: DisconnectInfo): Promise<void> {
+    const reason = info.title;
+    const extra: Record<string, unknown> = { last_error: reason, disconnect_info: JSON.stringify(info) };
+    // Las credenciales se borraron: el número ya no está vinculado.
+    if (info.kind === 'logged_out' || info.kind === 'banned') {
+      extra.phone = null;
+      this.sessions.delete(sessionId);
+    }
+    this.updateStatus(sessionId, 'disconnected', extra);
+    audit('session.disconnected', { session_id: sessionId, code: info.code, kind: info.kind });
+    await dispatchEvent(sessionId, 'session.disconnected', { reason, code: info.code, kind: info.kind });
     recomputeHealth(sessionId, { lastError: reason });
+  }
+
+  /** «Reparar cifrado» sin desvincular (contactos que ven «Esperando el mensaje»). */
+  async repairEncryption(sessionId: string): Promise<number> {
+    const session = await this.instance(sessionId);
+    logger.warn({ sessionId }, 'Reparación de cifrado solicitada');
+    audit('session.repair', { session_id: sessionId });
+    return session.repairEncryption();
+  }
+
+  /**
+   * Diagnóstico de la conexión para la vista Conexión: estado, último cierre
+   * explicado, permisos de las credenciales y otra instancia del servicio.
+   */
+  async diagnose(sessionId: string): Promise<{
+    status: string;
+    phone: string | null;
+    ready: boolean;
+    disconnect: DisconnectInfo | null;
+    auth: { ok: boolean; path: string; error?: string };
+    lastError: string | null;
+    blockedReason: string | null;
+  }> {
+    const row = this.snapshot(sessionId);
+    const session = await this.instance(sessionId);
+    let disconnect = session.lastDisconnect;
+    if (!disconnect && (row as any).disconnect_info) {
+      try {
+        disconnect = JSON.parse((row as any).disconnect_info) as DisconnectInfo;
+      } catch {
+        disconnect = null;
+      }
+    }
+    return {
+      status: row.status,
+      phone: row.phone ?? null,
+      ready: session.isReady(),
+      disconnect,
+      auth: session.authWritable(),
+      lastError: session.lastError ?? row.last_error ?? null,
+      blockedReason: row.blocked_reason ?? null,
+    };
   }
 
   private async onMessage(sessionId: string, msg: InboundMessage): Promise<void> {
@@ -1184,6 +1246,32 @@ export class SessionManager implements OutboundSender {
   /** Trae la foto de perfil del chat si todavía no la hay (la usa el panel al abrir un chat). */
   ensureAvatar(sessionId: string, chatId: string): void {
     void this.refreshAvatar(sessionId, chatId);
+  }
+
+  /**
+   * Foto de perfil de un participante de grupo: la guardada para esa persona
+   * (en cualquier línea) o, si no hay, se pide a WhatsApp una sola vez.
+   */
+  async participantAvatar(sessionId: string, jid: string): Promise<string | null> {
+    const chatId = resolveChatId(jid);
+    if (!chatId || chatId.endsWith('@g.us')) return null;
+    const key = chatId.endsWith('@lid') ? null : phoneKeyOf(chatId);
+    const find = () => {
+      const rows = key
+        ? all<{ avatar_path: string }>(
+            'SELECT avatar_path FROM contacts WHERE phone_key = ? AND avatar_path IS NOT NULL ORDER BY updated_at DESC',
+            key,
+          )
+        : all<{ avatar_path: string }>(
+            'SELECT avatar_path FROM contacts WHERE chat_id = ? AND avatar_path IS NOT NULL',
+            chatId,
+          );
+      return rows.map((r) => r.avatar_path).find((p) => fs.existsSync(p)) ?? null;
+    };
+    const found = find();
+    if (found) return found;
+    await this.refreshAvatar(sessionId, chatId);
+    return find();
   }
 
   private async refreshAvatar(sessionId: string, chatId: string): Promise<void> {

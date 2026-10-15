@@ -400,6 +400,34 @@ export function markContacted(noteId: number, userId: number, result: string): v
   logNoteEvent(noteId, userId, 'contacted', undefined, result || null);
 }
 
+export type PipelineStage = 'todo' | 'doing' | 'contacted' | 'done';
+
+/**
+ * Mueve una nota en el pipeline de seguimiento:
+ * - `todo` / `doing`: etapa manual; si estaba resuelta o con contacto, se reabre.
+ * - `contacted`: confirma el contacto con su resultado.
+ * - `done`: la marca resuelta.
+ */
+export function setNoteStage(noteId: number, stage: PipelineStage, userId: number, result = ''): void {
+  const current = getNote(noteId);
+  if (!current) throw new Error('Nota no encontrada.');
+  if (stage === 'done') {
+    setNoteDone(noteId, userId, true);
+    return;
+  }
+  if (current.done_at) setNoteDone(noteId, userId, false);
+  if (stage === 'contacted') {
+    markContacted(noteId, userId, result);
+    return;
+  }
+  if (current.contacted_at) {
+    run('UPDATE contact_notes SET contacted_at = NULL, contacted_by = NULL, contact_result = NULL WHERE id = ?', noteId);
+  }
+  run('UPDATE contact_notes SET pipeline_stage = ?, updated_at = ? WHERE id = ?', stage, nowIso(), noteId);
+  if (stage === 'doing') logNoteEvent(noteId, userId, 'stage', undefined, 'En gestión');
+  else if (current.pipeline_stage === 'doing' || current.contacted_at) logNoteEvent(noteId, userId, 'stage', undefined, 'Por hacer');
+}
+
 /** Pospone el recordatorio: nueva fecha y hora, y vuelve a avisar. */
 export function snoozeNote(noteId: number, dueAt: string, dueTime: string, userId: number | null = null): void {
   const current = getNote(noteId);
@@ -464,7 +492,8 @@ export type NoteAction =
   | 'snoozed'
   | 'template'
   | 'seen'
-  | 'contacted';
+  | 'contacted'
+  | 'stage';
 
 export interface NoteHistoryEntry {
   id: number;
@@ -690,6 +719,13 @@ function scopeClause(
   return true;
 }
 
+/** Restringe a las notas de un usuario: autor, quien derivó o responsable. */
+function ownerClause(ownerId: number | null | undefined, where: string[], params: unknown[]): void {
+  if (!ownerId) return;
+  where.push('(n.user_id = ? OR n.assigned_to = ? OR n.assigned_by = ?)');
+  params.push(ownerId, ownerId, ownerId);
+}
+
 /** Lista global de notas, con filtros, orden y alcance por sesiones del usuario. */
 export function listAllNotes(opts: {
   tagId?: number | null;
@@ -705,12 +741,15 @@ export function listAllNotes(opts: {
   assignedTo?: number | null;
   /** Solo estas notas (p. ej. la de una notificación). */
   ids?: number[];
+  /** Solo las notas de este usuario: escritas, derivadas por él o derivadas a él. */
+  ownerId?: number | null;
   orderBy?: 'created' | 'due';
   limit?: number;
 } = {}): GlobalNote[] {
   const where: string[] = [];
   const params: unknown[] = [];
   if (!scopeClause(opts.sessionIds, where, params, opts.viewerId ?? null)) return [];
+  ownerClause(opts.ownerId, where, params);
   if (opts.assignedTo) {
     where.push('n.assigned_to = ?');
     params.push(opts.assignedTo);
@@ -802,6 +841,7 @@ export function noteStats(opts: {
   authorId?: number | null;
   viewerId?: number | null;
   assignedTo?: number | null;
+  ownerId?: number | null;
 } = {}): NoteStats {
   const where: string[] = [];
   const params: unknown[] = [];
@@ -810,6 +850,7 @@ export function noteStats(opts: {
     derived: 0, derived_unseen: 0, derived_no_contact: 0, derived_contacted: 0,
   };
   if (!scopeClause(opts.sessionIds, where, params, opts.viewerId ?? null)) return empty;
+  ownerClause(opts.ownerId, where, params);
   if (opts.assignedTo) {
     where.push('n.assigned_to = ?');
     params.push(opts.assignedTo);

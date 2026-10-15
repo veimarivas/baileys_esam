@@ -3,7 +3,7 @@ import { nowIso } from '../util/async.js';
 import type { SessionRow } from '../types.js';
 import type { PacingOptions } from './pacing.js';
 
-export type RiskProfile = 'low' | 'medium' | 'high';
+export type RiskProfile = 'low' | 'medium' | 'high' | 'mass';
 
 export interface AntiBanPolicy {
   id: number;
@@ -171,6 +171,40 @@ export const RISK_PRESETS: Record<RiskProfile, Omit<PolicyFields, 'risk_profile'
     block_rate_threshold: 0.05,
     optout_keywords: '',
   },
+  /**
+   * Envío masivo institucional (cronogramas): 6–7 s por mensaje, volumen alto,
+   * sin calentamiento. Lo que protege al número son las pausas, el tope por
+   * hora y las pausas automáticas por baja entrega o bloqueos.
+   */
+  mass: {
+    daily_limit: 1500,
+    hourly_limit: 400,
+    delay_min_seconds: 6,
+    delay_max_seconds: 7,
+    window_start: '07:00',
+    window_end: '21:00',
+    window_days: [1, 2, 3, 4, 5, 6],
+    warmup_enabled: false,
+    warmup_start_date: null,
+    warmup_day1_limit: 200,
+    pauses_enabled: true,
+    pause_every: 60,
+    pause_min_minutes: 2,
+    pause_max_minutes: 4,
+    health_delivery_threshold: 0.75,
+    active: true,
+    typing_simulation: true,
+    min_gap_seconds: 5,
+    burst_per_minute: 12,
+    verify_numbers: true,
+    new_contacts_daily_limit: 600,
+    max_consecutive_failures: 8,
+    auto_pause_low_delivery: true,
+    recontact_cooldown_hours: 0,
+    max_unanswered: 0,
+    block_rate_threshold: 0.04,
+    optout_keywords: '',
+  },
 };
 
 export interface PolicyFields {
@@ -227,7 +261,7 @@ function parseDays(raw: string | null): number[] {
 }
 
 function toProfile(value: string): RiskProfile {
-  return value === 'low' || value === 'high' ? value : 'medium';
+  return value === 'low' || value === 'high' || value === 'mass' ? value : 'medium';
 }
 
 function rowToPolicy(row: PolicyRow): AntiBanPolicy {
@@ -591,7 +625,8 @@ export function pacingOptionsFor(
     windowDays: policy.window_days,
     windowStart: policy.window_start,
     windowEnd: policy.window_end,
-    programCooldownMinutes,
+    // Masivo institucional: un lote tras otro de distintos programas casi sin espera.
+    programCooldownMinutes: policy.risk_profile === 'mass' ? Math.min(1, programCooldownMinutes) : programCooldownMinutes,
     pausesEnabled: policy.pauses_enabled,
     pauseEvery: policy.pause_every,
     pauseMin: policy.pause_min_minutes * 60,

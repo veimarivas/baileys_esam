@@ -28,9 +28,11 @@ import {
   restoreNote,
   setNoteDone,
   setNotePinned,
+  setNoteStage,
   snoozeNote,
   updateNote,
   type NoteStatus,
+  type PipelineStage,
 } from '../core/contacts.js';
 import * as noteTags from '../core/note-tags.js';
 import { personTagsByKeys, phoneKeyOf, setPersonName } from '../core/person.js';
@@ -342,6 +344,33 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
         file = others.map((o) => o.avatar_path).find((p) => fs.existsSync(p)) ?? null;
       }
       if (!file) return res.status(404).end();
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      res.sendFile(path.resolve(file));
+    }),
+  );
+
+  // Foto de perfil de quien escribe en un grupo (se pide a WhatsApp una vez y se guarda).
+  app.get(
+    '/inbox/participant-avatar/:session/:jid',
+    ...auth,
+    ah(async (req, res) => {
+      const sessionId = String(req.params.session);
+      const scope = esamEsAdmin(req.user!) ? null : sessionScopeFor(req.user!);
+      if (scope !== null && !scope.includes(sessionId)) return res.status(403).end();
+      let file: string | null = null;
+      try {
+        file = await Promise.race([
+          manager.participantAvatar(sessionId, String(req.params.jid)),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000)),
+        ]);
+      } catch {
+        file = null;
+      }
+      if (!file) {
+        // Sin foto (o privada): el navegador no reintenta en la próxima hora.
+        res.setHeader('Cache-Control', 'private, max-age=3600');
+        return res.status(404).end();
+      }
       res.setHeader('Cache-Control', 'private, max-age=3600');
       res.sendFile(path.resolve(file));
     }),
@@ -742,11 +771,17 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
         .map((x) => Number(x))
         .filter((x) => Number.isFinite(x) && x > 0)
         .slice(0, 50);
+      // En /notes cada usuario ve solo lo suyo: lo que escribió, lo que derivó y lo
+      // que le derivaron. El Super Admin supervisa todo. (En la ficha del chat se
+      // siguen viendo las notas de la persona de todos, para dar continuidad.)
+      const admin = esamEsAdmin(user);
+      const ownerId = admin ? null : user.id;
+      const listScope = admin ? scope : null;
       res.json({
-        supervisor: esamEsAdmin(user),
-        notes: listAllNotes({ tagId, status: ids.length ? 'all' : status, q, orderBy, authorId, assignedTo, ids, viewerId: user.id, sessionIds: scope })
+        supervisor: admin,
+        notes: listAllNotes({ tagId, status: ids.length ? 'all' : status, q, orderBy, authorId, assignedTo, ids, viewerId: user.id, sessionIds: listScope, ownerId })
           .map((n) => withPermissions(user, n)),
-        stats: noteStats({ sessionIds: scope, authorId, assignedTo, viewerId: user.id }),
+        stats: noteStats({ sessionIds: listScope, authorId, assignedTo, viewerId: user.id, ownerId }),
       });
     }),
   );
@@ -937,6 +972,32 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       publishNoteChange(note.id, 'contacted', req.user!.id);
       announce(note.id, 'contacted', req.user!);
       res.json(withPermissions(req.user!, noteDTO(note.id)!));
+    }),
+  );
+
+  // Pipeline: mover la nota de etapa (Por hacer · En gestión · Contactado · Resuelta).
+  app.post(
+    '/inbox/notes/:id/stage',
+    ...auth,
+    ah((req, res) => {
+      const note = accessibleNote(req, res);
+      if (!note) return;
+      const user = req.user!;
+      // La mueve quien la escribió, quien la tiene asignada o el Super Admin.
+      if (!canEditNote(user, note) && note.assigned_to !== user.id) {
+        return res.status(403).json({ error: 'Solo quien registró la nota o su responsable puede moverla.' });
+      }
+      const stage = String(req.body?.stage ?? '') as PipelineStage;
+      if (!['todo', 'doing', 'contacted', 'done'].includes(stage)) return res.status(422).json({ error: 'Etapa inválida.' });
+      const result = String(req.body?.result ?? '').trim().slice(0, 1000);
+      if (stage === 'contacted' && result.length < 3) {
+        return res.status(422).json({ error: 'Contá brevemente cómo fue la comunicación (al menos unas palabras).' });
+      }
+      setNoteStage(note.id, stage, user.id, result);
+      publishNoteChange(note.id, `stage:${stage}`, user.id);
+      if (stage === 'contacted') announce(note.id, 'contacted', user);
+      if (stage === 'done' && note.assigned_to) announce(note.id, 'resolved', user);
+      res.json(withPermissions(user, noteDTO(note.id)!));
     }),
   );
 

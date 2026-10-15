@@ -6,7 +6,8 @@ import { config } from '../config.js';
 import { all, get, run } from '../db/index.js';
 import { logger } from '../logger.js';
 import { SessionManager } from '../baileys/manager.js';
-import { batchList, card, connectionCard, emptyState, fmtDate, initials, insight, kvList, safeJson, sectionHead, stat, statusBadge, table } from './views.js';
+import { batchList, card, connectionCard, connectionDiagnosis, emptyState, fmtDate, initials, insight, kvList, safeJson, sectionHead, stat, statusBadge, table, type ConnectionDiagnosis } from './views.js';
+import { countNewContactsToday, getPolicy, limitState } from '../core/anti-ban.js';
 import { esc, renderLayout, renderLogin, renderPlain } from './layout.js';
 import { sessionCookieHeader, sessionStore, clearCookieHeader } from '../auth/sessions.js';
 import { verifySsoToken, safeNext } from '../auth/sso.js';
@@ -119,6 +120,10 @@ export function renderNotesPage(): string {
     <div class="np-layout">
       <section class="np-main" aria-label="Notas">
         <div class="np-toolbar">
+          <div class="np-view" role="group" aria-label="Vista">
+            <button type="button" class="np-view-btn on" data-view="list" aria-pressed="true"><span class="ri-list-check-2"></span> Lista</button>
+            <button type="button" class="np-view-btn" data-view="board" aria-pressed="false"><span class="ri-kanban-view"></span> Pipeline</button>
+          </div>
           <label class="notes-search"><span class="ri-search-line" aria-hidden="true"></span>
             <input type="search" id="notes-search" placeholder="Buscar en las notas, por contacto o número…" autocomplete="off" aria-label="Buscar notas" /></label>
           <select id="notes-order" class="form-select form-select-sm" aria-label="Orden">
@@ -132,6 +137,7 @@ export function renderNotesPage(): string {
         </div>
         <div id="np-active" class="np-active"></div>
         <div id="notes-list" class="np-list" aria-live="polite"></div>
+        <div id="np-board" class="np-board" hidden aria-live="polite"></div>
       </section>
 
       <aside class="np-side" aria-label="Etiquetas">
@@ -460,6 +466,40 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
 
   // ── Conexión ─────────────────────────────────────────────────────────────────
 
+  /** Diagnóstico completo de una línea (conexión, credenciales, anti-baneo). */
+  const diagnosisFor = async (session: SessionRow): Promise<ConnectionDiagnosis> => {
+    const d = await manager.diagnose(session.id);
+    let antiBan: ConnectionDiagnosis['antiBan'] = null;
+    try {
+      const policy = getPolicy(session.id);
+      const lim = limitState(session.id, policy, session);
+      antiBan = {
+        pace: `${lim.delayMin}–${lim.delayMax} s por mensaje`,
+        hourly: lim.hourlyLimit,
+        daily: lim.dailyLimit,
+        sentToday: lim.dailyUsed,
+        newContactsToday: countNewContactsToday(session.id),
+        newContactsLimit: policy.new_contacts_daily_limit,
+        warmupDay: lim.enabled ? lim.day : null,
+      };
+    } catch {
+      antiBan = null;
+    }
+    const pausedBatches = all<{ id: number; name: string; meta: string | null }>(
+      "SELECT id, name, meta FROM batches WHERE session_id = ? AND status = 'paused' ORDER BY id DESC LIMIT 10",
+      session.id,
+    ).map((b) => {
+      let reason: string | null = null;
+      try {
+        reason = (JSON.parse(b.meta ?? '{}') as { anti_ban_pause?: string }).anti_ban_pause ?? null;
+      } catch {
+        reason = null;
+      }
+      return { id: b.id, name: b.name, reason };
+    });
+    return { ...d, antiBan, pausedBatches };
+  };
+
   app.get(
     '/settings',
     requireUser,
@@ -492,11 +532,14 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
           ['Panel', `<span class="ff-monospace">http://${esc(config.host)}:${config.panelPort}</span>`],
         ])}`,
       );
+      const diagnosis = session ? connectionDiagnosis(await diagnosisFor(session)) : '';
+      const admin = esamEsAdmin(req.user!);
       const body = `<div class="row g-3">
         <div class="col-lg-7">${connectionCard(session, session?.owner_name ?? undefined)}</div>
-        <div class="col-lg-5">${gatewayCard}</div>
+        <div class="col-lg-5">${diagnosis}</div>
       </div>
-      ${sessionsCard}`;
+      ${admin ? `<div class="row g-3 mt-0"><div class="col-lg-5">${gatewayCard}</div></div>` : ''}
+      ${admin ? sessionsCard : ''}`;
       res.send(
         renderLayout('Conexión', req.user!, 'settings', body, {
           flash: flash(req),
@@ -515,9 +558,72 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
       const session = sessionForUser(req.user!) ?? (esamEsAdmin(req.user!) ? manager.primary() : undefined);
       if (!session) return res.json({ connected: false, qrCode: null });
       // `manager.qr()` arranca la sesión si hace falta y espera el QR.
-      const code = await manager.qr(session.id);
+      let code: string | null = null;
+      let failure: string | null = null;
+      try {
+        code = await manager.qr(session.id);
+      } catch (err) {
+        failure = (err as Error).message;
+      }
       const fresh = manager.byId(session.id)!;
-      res.json({ connected: fresh.status === 'ready', phone: fresh.phone, qrCode: code });
+      const connected = fresh.status === 'ready';
+      // Sin QR y sin conexión: se explica por qué y qué hacer.
+      let reason: { title: string; detail: string; action: string } | null = null;
+      if (!connected && !code) {
+        const d = await manager.diagnose(session.id);
+        if (!d.auth.ok) {
+          reason = {
+            title: 'El servicio no puede escribir las credenciales',
+            detail: d.auth.error ?? '',
+            action: `En el servidor: sudo chown -R www-data:www-data ${d.auth.path.replace(/[\\/][^\\/]+$/, '')} y volvé a intentar.`,
+          };
+        } else if (d.disconnect) {
+          reason = { title: d.disconnect.title, detail: d.disconnect.detail, action: d.disconnect.action };
+        } else {
+          reason = {
+            title: 'WhatsApp todavía no envió el QR',
+            detail: failure ?? 'La conexión con WhatsApp está tardando.',
+            action: 'Esperá unos segundos y volvé a pulsar «Mostrar QR». Si sigue sin aparecer, usá «Empezar de cero (QR nuevo)».',
+          };
+        }
+      }
+      res.json({ connected, phone: fresh.phone, qrCode: code, reason });
+    }),
+  );
+
+  // Regenera las claves de cifrado por contacto sin desvincular («Esperando el mensaje»).
+  app.post(
+    '/settings/repair',
+    requireUser,
+    requireSection('settings'),
+    ah(async (req: AuthedRequest, res) => {
+      const session = sessionForUser(req.user!) ?? (esamEsAdmin(req.user!) ? manager.primary() : undefined);
+      if (!session) return res.redirect('/settings');
+      try {
+        const n = await manager.repairEncryption(session.id);
+        audit('session.repair', { session_id: session.id, by: req.user!.id, removed: n });
+        res.redirect(
+          '/settings?ok=' +
+            encodeURIComponent(`Cifrado reparado (${n} claves regeneradas). Los próximos mensajes negocian claves nuevas con cada contacto: enviá uno de prueba.`),
+        );
+      } catch (err) {
+        res.redirect('/settings?ok=' + encodeURIComponent('No se pudo reparar: ' + (err as Error).message));
+      }
+    }),
+  );
+
+  // Empezar de cero: borra credenciales (aunque estén trabadas) y deja listo para un QR nuevo.
+  app.post(
+    '/settings/reset',
+    requireUser,
+    requireSection('settings'),
+    ah(async (req: AuthedRequest, res) => {
+      const session = sessionForUser(req.user!) ?? (esamEsAdmin(req.user!) ? manager.primary() : undefined);
+      if (!session) return res.redirect('/settings');
+      await manager.logout(session.id);
+      run('UPDATE sessions SET disconnect_info = NULL WHERE id = ?', session.id);
+      audit('session.reset', { session_id: session.id, by: req.user!.id });
+      res.redirect('/settings?ok=' + encodeURIComponent('Listo para vincular de nuevo: pulsá «Mostrar QR» y escanealo desde WhatsApp › Dispositivos vinculados.'));
     }),
   );
 
@@ -1111,7 +1217,9 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     (_req: AuthedRequest, res) => {
       res.send(
         renderLayout('Notas y tareas', _req.user!, 'conversations', renderNotesPage(), {
-          subtitle: 'Lo que el equipo sabe de cada persona y sus pendientes, compartido entre todas las líneas de WhatsApp.',
+          subtitle: esamEsAdmin(_req.user!)
+            ? 'Notas, tareas y derivaciones de todo el equipo, en lista o en pipeline por etapas.'
+            : 'Tus notas, tareas y lo que te derivaron, en lista o en pipeline por etapas.',
           activeHref: '/notes',
         }),
       );

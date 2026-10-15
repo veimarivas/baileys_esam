@@ -436,7 +436,8 @@ export class WaSession extends EventEmitter {
     sock.ev.on('messages.upsert', (payload: any) => void this.onUpsert(payload));
     sock.ev.on('messages.update', (updates: any) => void this.onUpdate(updates));
     sock.ev.on('messaging-history.set', (payload: any) => void this.onHistorySet(payload));
-    sock.ev.on('chats.phoneNumberShare', (payload: any) => this.onPhoneNumberShare(payload));
+    // Baileys 7: el par LID↔número llega por `lid-mapping.update` ({ lid, pn }).
+    sock.ev.on('lid-mapping.update', (payload: any) => this.onPhoneNumberShare({ lid: payload?.lid, jid: payload?.pn }));
     sock.ev.on('contacts.upsert', (contacts: any) => this.onContacts(contacts));
     sock.ev.on('contacts.update', (contacts: any) => this.onContacts(contacts));
     sock.ev.on('presence.update', (presence: any) => void this.onPresence(presence));
@@ -727,6 +728,10 @@ export class WaSession extends EventEmitter {
     // Los contactos del historial traen el par LID<->número cuando WhatsApp lo
     // comparte: se aprovecha para poder mostrar el teléfono en el panel.
     for (const contact of historyContacts) this.mapContact(contact);
+    // Baileys 7: el historial trae además la tabla LID↔número completa.
+    for (const m of (payload?.lidPnMappings ?? []) as Array<{ lid?: string; pn?: string }>) {
+      if (m?.lid && m?.pn) rememberLid(m.lid, m.pn);
+    }
     let i = 0;
     for (const raw of historyMessages) {
       try {
@@ -741,6 +746,25 @@ export class WaSession extends EventEmitter {
     // Los chats del historial traen el contador real de no leídos del teléfono:
     // se aplica DESPUÉS de los mensajes para que sea el valor final.
     this.onChatsUpdate(payload?.chats ?? []);
+  }
+
+  /** LIDs ya consultados en el almacén de Baileys (para no repetir la búsqueda). */
+  private lidLookups = new Set<string>();
+
+  /**
+   * Baileys 7 guarda su propio mapeo LID↔número (`signalRepository.lidMapping`):
+   * si lo conoce, se usa para mostrar el número en lugar del código. Best-effort.
+   */
+  private async lookupLid(lid: string): Promise<void> {
+    if (this.lidLookups.has(lid) || phoneForLid(lid)) return;
+    this.lidLookups.add(lid);
+    try {
+      const repo = (this.sock as any)?.signalRepository?.lidMapping;
+      const pn = repo?.getPNForLID ? await repo.getPNForLID(lid) : null;
+      if (pn) rememberLid(lid, String(pn));
+    } catch {
+      // sin mapeo conocido: queda como «número oculto»
+    }
   }
 
   /** WhatsApp comparte el número real detrás de un LID: se guarda el mapeo. */
@@ -784,15 +808,23 @@ export class WaSession extends EventEmitter {
     // anónimo). Baileys >= 6.7.17 expone el teléfono real en la key
     // (`senderPn`/`participantPn`) y el LID inverso (`senderLid`); se guarda el
     // mapeo para mostrar el número y unir la conversación con la del número.
+    // Baileys 7 deja el JID alternativo en `remoteJidAlt`/`participantAlt` (si el
+    // principal es LID, el alternativo es el número y viceversa).
+    const remoteAlt: string | null = key?.remoteJidAlt ?? null;
+    const participantAlt: string | null = key?.participantAlt ?? null;
     if (rawJid.endsWith('@lid')) {
-      const pn = key?.senderPn ?? key?.participantPn ?? (raw as any)?.senderPn ?? null;
+      const pn = key?.senderPn ?? key?.participantPn ?? (remoteAlt?.endsWith('@s.whatsapp.net') ? remoteAlt : null) ?? (raw as any)?.senderPn ?? null;
       if (pn) rememberLid(rawJid, pn);
+      else await this.lookupLid(rawJid);
     } else if (rawJid.endsWith('@s.whatsapp.net')) {
-      const lid = key?.senderLid ?? key?.participantLid ?? null;
+      const lid = key?.senderLid ?? key?.participantLid ?? (remoteAlt?.endsWith('@lid') ? remoteAlt : null);
       if (lid) rememberLid(lid, rawJid);
     }
-    if (key?.participant && String(key.participant).endsWith('@lid') && key?.participantPn) {
-      rememberLid(key.participant, key.participantPn);
+    if (key?.participant && String(key.participant).endsWith('@lid')) {
+      const ppn = key?.participantPn ?? (participantAlt?.endsWith('@s.whatsapp.net') ? participantAlt : null);
+      if (ppn) rememberLid(key.participant, ppn);
+    } else if (key?.participant && participantAlt?.endsWith('@lid')) {
+      rememberLid(participantAlt, key.participant);
     }
 
     const remote = resolveChatId(rawJid);
@@ -806,7 +838,12 @@ export class WaSession extends EventEmitter {
     // `participant` del propio mensaje y no en la key: se miran ambos.
     let senderJid: string | null = null;
     if (isGroup) {
-      const pn = key?.participantPn ?? key?.senderPn ?? (raw as any)?.participantPn ?? null;
+      const pn =
+        key?.participantPn ??
+        key?.senderPn ??
+        (participantAlt?.endsWith('@s.whatsapp.net') ? participantAlt : null) ??
+        (raw as any)?.participantPn ??
+        null;
       const participant = key?.participant || (raw as any)?.participant || null;
       if (pn) {
         senderJid = resolveChatId(pn);

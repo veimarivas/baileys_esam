@@ -1331,6 +1331,23 @@ nuevo `src/panel/admin-views.ts`.
   - corre a las 07:30 y solo prepara lotes de programas En desarrollo e
     Inscripciones de la gestión actual, que esperan confirmación.
 
+## 35. Baileys 7.0.0-rc14 («Esperando el mensaje») (2026-10-15)
+
+- Se pasa de `@whiskeysockets/baileys` 6.7.24 (rama legacy) a **7.0.0-rc14**, con
+  el manejo nuevo de identificadores LID y de reintentos de descifrado (la causa
+  conocida de «Esperando el mensaje» en WhatsApp Web y el celular).
+- Adaptaciones:
+  - el evento `chats.phoneNumberShare` se reemplaza por `lid-mapping.update`;
+  - el número real se toma de `remoteJidAlt` / `participantAlt`;
+  - el historial trae `lidPnMappings`;
+  - para un LID sin número se consulta el mapeo propio de Baileys
+    (`signalRepository.lidMapping.getPNForLID`).
+- Verificado: compila, todas las pruebas pasan y el handshake con WhatsApp entrega
+  el QR. Requiere Node ≥ 20 y **`npm install` en el servidor** antes de
+  compilar.
+- Después de actualizar conviene vincular de nuevo cada línea («Empezar de cero»
+  en Conexión) para que arranque con claves nuevas.
+
 ---
 
 ## Notas de operación

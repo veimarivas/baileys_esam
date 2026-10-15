@@ -185,6 +185,7 @@ export function migrate(): void {
   backfillConversationLast();
   seedGlobalPolicy();
   applyMassProfileV1();
+  stopLegacyBatchesV1();
   repairUnreadV1();
   logger.info({ db: resolved }, 'Esquema SQLite listo');
 }
@@ -437,6 +438,26 @@ function applyMassProfileV1(): void {
   ).run(new Date().toISOString());
   setConfigFlag('antiban_mass_v1', '1');
   logger.info('Políticas anti-baneo pasadas al perfil «Masivo institucional» (6–7 s por mensaje)');
+}
+
+/**
+ * Una sola vez (incidente del 15/10/2026): se cancelan todos los lotes que
+ * quedaron en curso, programados o en pausa con la versión anterior, que podía
+ * enviar desde líneas ajenas y sin confirmación. Así, al volver a vincular un
+ * número, no se reanuda ningún envío viejo. Corre antes de que la cola
+ * reanude lotes pendientes.
+ */
+function stopLegacyBatchesV1(): void {
+  const done = (db.prepare("SELECT value FROM configs WHERE key = 'batches_stop_v1'").get() as { value?: string } | undefined)?.value;
+  if (done) return;
+  const now = new Date().toISOString();
+  const res = db
+    .prepare(`UPDATE batches SET status = 'cancelled', updated_at = ? WHERE status IN ('running', 'scheduled', 'paused')`)
+    .run(now);
+  db.prepare(`UPDATE batch_items SET status = 'skipped', error = COALESCE(error, 'Cancelado: lote detenido al actualizar'), updated_at = ?
+               WHERE status = 'pending' AND batch_id IN (SELECT id FROM batches WHERE status = 'cancelled')`).run(now);
+  setConfigFlag('batches_stop_v1', '1');
+  logger.warn({ batches: Number(res.changes) }, 'Lotes anteriores detenidos: no se reanudarán');
 }
 
 export { resolved as dbPath };

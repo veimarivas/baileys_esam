@@ -1302,6 +1302,35 @@ nuevo `src/panel/admin-views.ts`.
 - **Notas › Pipeline:** las cuatro columnas usan todo el ancho (el panel de
   etiquetas se oculta en esa vista) y ya no quedan detrás de él.
 
+## 34. Envíos masivos solo desde la propia línea y con confirmación (incidente 15/10/2026)
+
+- **Qué pasó:** a las 08:00 la tarea automática de cronogramas
+  (`whatsapp:recordatorios`, días 1, 5, 10 y 15) creó recordatorios de cobranza de
+  todos los programas, concluidos incluidos, sin indicar desde qué cuenta salían.
+  Baileys usaba la principal y, si no estaba conectada, la primera línea
+  conectada de cualquier usuario. Además, si la cuenta pedida no tenía línea,
+  también caía a otra.
+- **Línea estricta** (`sessionFor`): con `account`, solo la línea de ese usuario;
+  si no tiene, 422 con explicación. Sin `account`, solo la principal. Nunca se
+  usa la línea de otro usuario.
+- **Confirmación previa:** con `require_confirmation` el lote queda
+  `awaiting_confirmation` y no se envía. El dueño de la línea y el Super Admin
+  reciben una notificación (campana) que lleva a `/batches/confirm/:grupo`,
+  donde confirman o cancelan todos los lotes de la programación juntos. Sin
+  confirmación se cancelan solos a las 20 h. Endpoint para avisar una sola vez:
+  `POST /api/v1/batches/confirm-group/:grupo/notify` (`src/core/batch-confirm.ts`).
+- **Lotes:** aviso de programaciones pendientes y botón **Detener todos los envíos
+  masivos**.
+- **Una sola vez al actualizar:** se cancelan todos los lotes en curso,
+  programados o en pausa de la versión anterior (`batches_stop_v1`); al volver a
+  vincular no se reanuda ningún envío viejo.
+- **cronogramas:**
+  - la tarea automática queda **apagada** hasta que el Super Admin la active en
+    Ajustes › WhatsApp, eligiendo la **única cuenta** desde cuya línea sale, los
+    días y la hora;
+  - corre a las 07:30 y solo prepara lotes de programas En desarrollo e
+    Inscripciones de la gestión actual, que esperan confirmación.
+
 ---
 
 ## Notas de operación

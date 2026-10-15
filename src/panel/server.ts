@@ -8,6 +8,8 @@ import { logger } from '../logger.js';
 import { SessionManager } from '../baileys/manager.js';
 import { batchList, card, connectionCard, connectionDiagnosis, emptyState, fmtDate, initials, insight, kvList, safeJson, sectionHead, stat, statusBadge, table, type ConnectionDiagnosis } from './views.js';
 import { countNewContactsToday, getPolicy, limitState } from '../core/anti-ban.js';
+import { cancelGroup, canDecide, confirmGroup, getGroup, pendingGroupsFor, type ConfirmGroup } from '../core/batch-confirm.js';
+import { nowIso } from '../util/async.js';
 import { esc, renderLayout, renderLogin, renderPlain } from './layout.js';
 import { sessionCookieHeader, sessionStore, clearCookieHeader } from '../auth/sessions.js';
 import { verifySsoToken, safeNext } from '../auth/sso.js';
@@ -689,6 +691,111 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     }),
   );
 
+  // ── Envíos programados que esperan confirmación ─────────────────────────────
+  // Abierta a cualquier usuario: decide el dueño de la línea que envía o el Super Admin.
+  const confirmPage = (user: UserRow, g: ConfirmGroup, flashMsg: string | null): string => {
+    const decide = canDecide(user, g);
+    const when = g.scheduledAt
+      ? new Date(g.scheduledAt).toLocaleString('es-BO', { dateStyle: 'full', timeStyle: 'short' })
+      : 'apenas se confirme';
+    const stateBadge = {
+      pending: '<span class="badge bg-warning-subtle text-warning fs-12">Esperando confirmación</span>',
+      confirmed: '<span class="badge bg-success-subtle text-success fs-12">Confirmado</span>',
+      cancelled: '<span class="badge bg-danger-subtle text-danger fs-12">Cancelado: no se envía</span>',
+      mixed: '<span class="badge bg-info-subtle text-info fs-12">Parcial</span>',
+    }[g.status];
+    const rows = g.batches
+      .map((b) => `<tr><td>#${b.id}</td><td>${esc(b.name)}</td><td class="text-end">${b.total}</td><td>${statusBadge(b.status)}</td></tr>`)
+      .join('');
+    return `<div class="row justify-content-center"><div class="col-xl-8">
+      ${flashMsg ? `<div class="alert alert-info">${esc(flashMsg)}</div>` : ''}
+      <div class="card">
+        <div class="card-header d-flex align-items-center gap-2 flex-wrap">
+          <i class="ri-calendar-schedule-line fs-20 text-primary"></i>
+          <h5 class="card-title mb-0 flex-grow-1">Envío programado</h5>${stateBadge}
+        </div>
+        <div class="card-body">
+          <div class="row g-3 mb-3">
+            <div class="col-sm-4"><div class="text-muted fs-12">Mensajes</div><div class="fs-4 fw-bold">${g.total}</div></div>
+            <div class="col-sm-4"><div class="text-muted fs-12">Desde la línea</div><div class="fw-semibold">${esc(g.sessionLabel)}</div></div>
+            <div class="col-sm-4"><div class="text-muted fs-12">Cuándo</div><div class="fw-semibold">${esc(when)}</div></div>
+          </div>
+          ${g.status === 'pending'
+            ? insight('warn', 'Este envío <b>no sale hasta que lo confirmes</b>. Si nadie lo confirma en 20 horas, se cancela solo. Revisá la lista antes de confirmar.')
+            : ''}
+          <div class="table-responsive"><table class="table table-sm align-middle mb-3">
+            <thead><tr><th>Lote</th><th>Nombre</th><th class="text-end">Mensajes</th><th>Estado</th></tr></thead>
+            <tbody>${rows}</tbody></table></div>
+          ${g.status === 'pending' && decide
+            ? `<div class="d-flex flex-wrap gap-2">
+                 <form method="post" action="/batches/confirm/${encodeURIComponent(g.group)}" class="js-once"
+                       onsubmit="return confirm('¿Confirmás el envío de ${g.total} mensaje(s) desde ${esc(g.sessionLabel).replace(/'/g, '')}?')">
+                   <input type="hidden" name="action" value="confirm" />
+                   <button class="btn btn-success" type="submit"><i class="ri-check-line me-1"></i>Sí, enviar</button>
+                 </form>
+                 <form method="post" action="/batches/confirm/${encodeURIComponent(g.group)}" class="js-once">
+                   <input type="hidden" name="action" value="cancel" />
+                   <button class="btn btn-outline-danger" type="submit"><i class="ri-close-line me-1"></i>No enviar (cancelar)</button>
+                 </form>
+               </div>`
+            : g.status === 'pending'
+              ? insight('info', 'Solo el dueño de la línea o el Super Admin puede confirmar este envío.')
+              : ''}
+        </div>
+      </div></div></div>`;
+  };
+
+  app.get(
+    '/batches/confirm/:group',
+    requireUser,
+    requireSection('conversations'),
+    ah(async (req: AuthedRequest, res) => {
+      const g = getGroup(String(req.params.group));
+      if (!g) return res.status(404).send(renderPlain('Envío no encontrado', '<p>La programación no existe o ya se eliminó.</p>'));
+      const msg = typeof req.query.ok === 'string' ? req.query.ok : null;
+      res.send(renderLayout('Confirmar envío programado', req.user!, 'batches', confirmPage(req.user!, g, msg), { activeHref: '/batches' }));
+    }),
+  );
+
+  app.post(
+    '/batches/confirm/:group',
+    requireUser,
+    requireSection('conversations'),
+    ah(async (req: AuthedRequest, res) => {
+      const group = String(req.params.group);
+      const g = getGroup(group);
+      if (!g) return res.redirect('/conversations');
+      if (!canDecide(req.user!, g)) return res.status(403).send(renderPlain('Sin permiso', '<p>Solo el dueño de la línea o el Super Admin puede decidir este envío.</p>'));
+      const action = String(req.body?.action ?? '');
+      let msg: string;
+      if (action === 'confirm') {
+        const n = confirmGroup(group, req.user!);
+        msg = n ? `Confirmado: ${n} lote(s) programado(s). Se envían a la hora indicada con el ritmo anti-baneo.` : 'No había lotes pendientes de confirmar.';
+      } else {
+        const n = cancelGroup(group, req.user!);
+        msg = n ? `Cancelado: ${n} lote(s) no se enviarán.` : 'No había lotes pendientes.';
+      }
+      res.redirect(`/batches/confirm/${encodeURIComponent(group)}?ok=${encodeURIComponent(msg)}`);
+    }),
+  );
+
+  // Botón de emergencia: cancela todo envío masivo en curso, programado, en pausa o por confirmar.
+  app.post(
+    '/batches/stop-all',
+    requireUser,
+    requireSection('batches'),
+    ah(async (req: AuthedRequest, res) => {
+      const n = run(
+        `UPDATE batches SET status = 'cancelled', updated_at = ?
+          WHERE status IN ('running', 'scheduled', 'paused', 'awaiting_confirmation')`,
+        nowIso(),
+      ).changes;
+      audit('batch.stop_all', { by: req.user!.id, batches: n });
+      logger.warn({ by: req.user!.id, batches: n }, 'Se detuvieron todos los envíos masivos');
+      res.redirect('/batches');
+    }),
+  );
+
   // ── Lotes ────────────────────────────────────────────────────────────────────
 
   app.get(
@@ -697,7 +804,23 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     requireSection('batches'),
     ah(async (req: AuthedRequest, res) => {
       const rows = all<any>('SELECT * FROM batches ORDER BY id DESC LIMIT 100');
-      const body = batchList(rows);
+      const pending = pendingGroupsFor(req.user!);
+      const pendingCard = pending.length
+        ? `<div class="alert alert-warning d-flex flex-column gap-1">
+             <div class="fw-semibold"><i class="ri-calendar-schedule-line me-1"></i>${pending.length} envío(s) programado(s) esperando confirmación</div>
+             ${pending
+               .map((g) => `<a href="/batches/confirm/${encodeURIComponent(g.group)}">${g.total} mensaje(s) · ${esc(g.sessionLabel)} → Revisar y decidir</a>`)
+               .join('')}
+           </div>`
+        : '';
+      const active = all<{ c: number }>("SELECT COUNT(*) AS c FROM batches WHERE status IN ('running','scheduled','paused')")[0]?.c ?? 0;
+      const stopAll = active
+        ? `<form method="post" action="/batches/stop-all" class="mb-3 js-once"
+                 onsubmit="return confirm('Se cancelan TODOS los envíos masivos en curso, programados y en pausa (${active}). Los mensajes ya enviados no se pueden deshacer. ¿Continuar?')">
+             <button class="btn btn-danger btn-sm" type="submit"><i class="ri-stop-circle-line me-1"></i>Detener todos los envíos masivos (${active})</button>
+           </form>`
+        : '';
+      const body = pendingCard + stopAll + batchList(rows);
       res.send(
         renderLayout('Lotes', req.user!, 'batches', body, {
           subtitle: 'Seguimiento de envíos por lotes con progreso en vivo.',

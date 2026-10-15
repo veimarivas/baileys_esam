@@ -14,6 +14,7 @@ import { audit } from '../core/webhooks.js';
 import { upsertUser, usernameAvailableFor } from '../auth/users.js';
 import { logger } from '../logger.js';
 import { countNewContactsToday, getPolicy, limitState } from '../core/anti-ban.js';
+import { AWAITING, getGroup, markAwaiting, notifyGroup } from '../core/batch-confirm.js';
 import type { SessionRow } from '../types.js';
 
 function ah(fn: (req: Request, res: Response) => Promise<unknown>) {
@@ -69,11 +70,17 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
     next();
   });
 
+  /**
+   * Línea desde la que sale un envío masivo. Con `account` (usuario de
+   * cronogramas) es SOLO la línea de ese usuario: nunca se cae a la de otro.
+   * Sin `account`, solo la línea principal del sistema. Antes, si la línea
+   * pedida no existía o la principal estaba desconectada, se usaba la primera
+   * línea conectada de cualquier usuario y los mensajes salían desde números
+   * ajenos.
+   */
   const sessionFor = (account?: string | null): SessionRow | undefined => {
-    if (account) {
-      return get<SessionRow>('SELECT * FROM sessions WHERE owner_uid = ?', account) ?? readyPrimary();
-    }
-    return readyPrimary();
+    if (account) return get<SessionRow>('SELECT * FROM sessions WHERE owner_uid = ?', account);
+    return manager.primary();
   };
 
   /** La principal si está conectada; si no, la primera línea conectada. */
@@ -391,10 +398,18 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
 
       const session = sessionFor(body.account ? String(body.account) : null);
       if (!session) {
-        res.status(422).json({ message: 'No hay sesión de envío disponible.' });
+        res.status(422).json({
+          message: body.account
+            ? 'Tu cuenta no tiene una línea de WhatsApp vinculada en Seguimiento ESAM. Vinculá tu número en Conexión: los envíos salen solo desde tu propia línea.'
+            : 'No hay una línea principal configurada en Seguimiento ESAM.',
+        });
         return;
       }
-      const notReady = notReadyMessage(session, body);
+      // Programación con confirmación: se crea sin enviar y espera que el dueño
+      // de la línea (o el Super Admin) la confirme desde la notificación.
+      const needsConfirm = !!body.require_confirmation;
+      const confirmGroup = needsConfirm ? String(body.confirm_group || `cg-${session.id.slice(0, 8)}-${Date.now()}`) : null;
+      const notReady = needsConfirm ? null : notReadyMessage(session, body);
       if (notReady) {
         res.status(422).json({ message: notReady });
         return;
@@ -411,7 +426,9 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
             defaultMedia: body.default_media ?? null,
             meta: { source: 'integration', account: body.account ?? null, ...(body.meta ?? {}), category: body.category ?? null },
             dryRun: !!body.dry_run,
-            scheduledAt: body.scheduled_at ?? null,
+            // Con confirmación se crea como programado (sin encolar) y enseguida pasa a «esperando confirmación».
+            // (siempre la fecha de reserva: si la hora pedida ya pasó, createBatch lo encolaría sin confirmar)
+            scheduledAt: needsConfirm ? '9999-12-31T00:00:00.000Z' : body.scheduled_at ?? null,
           },
           runner,
         );
@@ -420,7 +437,16 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
           res.json({ dry_run: true, total: result.total, skipped: result.skipped });
           return;
         }
-        res.status(201).json({ batch_id: result.batchId, total: result.total, skipped: result.skipped });
+        if (needsConfirm && result.batchId) {
+          markAwaiting(result.batchId, confirmGroup!, body.scheduled_at ?? null);
+          if (body.notify !== false && !body.confirm_group) notifyGroup(confirmGroup!, body.confirm_description ?? null);
+        }
+        res.status(201).json({
+          batch_id: result.batchId,
+          total: result.total,
+          skipped: result.skipped,
+          ...(needsConfirm ? { status: AWAITING, confirm_group: confirmGroup } : {}),
+        });
       } catch (err) {
         if (err instanceof MissingTemplateVariableError) {
           res.status(422).json({ message: 'Plantilla incompleta: ' + err.message });
@@ -428,6 +454,20 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
         }
         res.status(422).json({ message: (err as Error).message });
       }
+    }),
+  );
+
+  // Avisa una sola vez por programación (cuando el integrador creó todos sus lotes).
+  app.post(
+    '/api/v1/batches/confirm-group/:group/notify',
+    ah(async (req, res) => {
+      const group = String(req.params.group);
+      if (!getGroup(group)) {
+        res.status(404).json({ message: 'Programación no encontrada.' });
+        return;
+      }
+      notifyGroup(group, req.body?.description ? String(req.body.description) : null);
+      res.json({ ok: true });
     }),
   );
 

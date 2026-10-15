@@ -76,13 +76,13 @@ export function statusBadge(status: string | null | undefined): string {
       ? 'success'
       : s === 'disconnected' || s === 'blocked' || s === 'failed' || s === 'cancelled'
         ? 'danger'
-        : s === 'qr' || s === 'paused' || s === 'scheduled' || s === 'pending' || s === 'connecting'
+        : s === 'qr' || s === 'paused' || s === 'scheduled' || s === 'awaiting_confirmation' || s === 'pending' || s === 'connecting'
           ? 'warning'
           : 'secondary';
   const label: Record<string, string> = {
     created: 'Creada', connecting: 'Conectando', qr: 'Esperando QR', ready: 'Conectada',
     disconnected: 'Desconectada', blocked: 'Bloqueada', running: 'En curso', done: 'Completado',
-    paused: 'Pausado', cancelled: 'Cancelado', scheduled: 'Programado', pending: 'Pendiente',
+    paused: 'Pausado', cancelled: 'Cancelado', scheduled: 'Programado', pending: 'Pendiente', awaiting_confirmation: 'Esperando confirmación',
     sent: 'Enviado', failed: 'Fallido', skipped: 'Omitido', delivered: 'Entregado', read: 'Leído',
   };
   return `<span class="badge badge-status bg-${kind}-subtle text-${kind}"><span class="badge-dot"></span>${esc(label[s] ?? s)}</span>`;

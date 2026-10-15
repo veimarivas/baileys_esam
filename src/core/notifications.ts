@@ -19,7 +19,9 @@ export type NotificationKind =
   /** Quien recibió la derivación confirmó que se comunicó. */
   | 'contacted'
   /** Una tarea derivada se marcó como resuelta. */
-  | 'resolved';
+  | 'resolved'
+  /** Hay envíos masivos programados esperando tu confirmación. */
+  | 'batch_confirm';
 
 export interface NotificationRow {
   id: number;

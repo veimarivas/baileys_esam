@@ -1138,16 +1138,16 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
         </div>
         <div class="cl-tabs" id="chat-tabs">
           <button type="button" class="cl-tab active" data-tab="individual">
-            <span class="ri-user-line"></span> Números
-            <span class="cl-tab-count" data-count="individual">0</span>
+            <span class="cl-tab-ic ri-user-line" aria-hidden="true"></span><span class="cl-tab-label">Números</span>
+            <span class="cl-tab-count" data-count="individual" hidden>0</span>
           </button>
           <button type="button" class="cl-tab" data-tab="group">
-            <span class="ri-group-line"></span> Grupos
-            <span class="cl-tab-count" data-count="group">0</span>
+            <span class="cl-tab-ic ri-group-line" aria-hidden="true"></span><span class="cl-tab-label">Grupos</span>
+            <span class="cl-tab-count" data-count="group" hidden>0</span>
           </button>
-          <button type="button" class="cl-tab" data-tab="team" title="Compañeros del sistema: iniciá o seguí la conversación">
-            <span class="ri-team-line"></span> Equipo
-            <span class="cl-tab-count" data-count="team">0</span>
+          <button type="button" class="cl-tab" data-tab="team">
+            <span class="cl-tab-ic ri-team-line" aria-hidden="true"></span><span class="cl-tab-label">Equipo</span>
+            <span class="cl-tab-count" data-count="team" hidden>0</span>
           </button>
         </div>
         <label class="chatlist-search" for="chat-search">

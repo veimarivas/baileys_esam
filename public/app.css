@@ -3704,10 +3704,40 @@ html[data-bs-theme="dark"] .tpl-phone { background: #0b141a; }
 }
 .convo .team-online { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #0e9f6e; margin-left: 0.25rem; }
 .convo .team-start { color: var(--ib-brand, #045474); font-weight: 600; }
-/* Tres pestañas (Números · Grupos · Equipo) en el ancho de la lista */
-.cl-tabs { gap: 0.25rem; padding-left: 0.6rem; padding-right: 0.6rem; }
-.cl-tab { min-width: 0; padding: 0.4rem 0.3rem; gap: 0.25rem; font-size: 0.78rem; white-space: nowrap; }
-.cl-tab-count { padding: 0 0.28rem; font-size: 0.66rem; }
+/* Tres pestañas (Números · Grupos · Equipo): solo el contador de no leídos,
+   que nunca se corta; la etiqueta se acorta si falta espacio. */
+.cl-tabs { display: flex; gap: 0.3rem; padding-left: 0.6rem; padding-right: 0.6rem; }
+/* Cada pestaña toma el ancho de su texto + contador y reparte el sobrante. */
+.cl-tab { flex: 1 1 auto; min-width: 0; padding: 0.42rem 0.4rem; gap: 0.25rem; font-size: 0.78rem; white-space: nowrap; overflow: hidden; }
+.cl-tab .cl-tab-ic { flex-shrink: 0; font-size: 0.9rem; }
+.cl-tab .cl-tab-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.cl-tab-count { flex-shrink: 0; min-width: 1.2rem; padding: 0 0.32rem; font-size: 0.66rem; line-height: 1.15rem; text-align: center; }
+.cl-tab-count[hidden] { display: none !important; }
+.cl-tab.has-unread .cl-tab-count { background: #e53935; color: #fff; }
+.cl-tab.active.has-unread .cl-tab-count { background: #fff; color: #c62828; }
+/* Fila de conversación: nombre y número a todo el ancho; hora e indicadores a la derecha */
+.convo { gap: 0.6rem; }
+.convo .convo-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.convo .convo-number { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.convo .convo-side { flex-shrink: 0; align-self: stretch; display: flex; flex-direction: column; align-items: flex-end; justify-content: space-between; gap: 0.25rem; padding: 0.1rem 0; min-width: 2.2rem; }
+.convo .convo-side .convo-time { font-size: 0.66rem; white-space: nowrap; }
+.convo.unread .convo-side .convo-time { color: #1f9d55; font-weight: 700; }
+.convo .convo-badges { display: flex; flex-direction: column; align-items: flex-end; gap: 0.2rem; }
+.convo .convo-badges .unread-pill { min-width: 20px; height: 20px; padding: 0 0.35rem; font-size: 0.66rem; }
+@media (max-width: 991.98px) {
+  .convo { padding: 0.6rem 0.65rem; }
+  .convo .convo-name { font-size: 0.92rem; }
+  .convo .convo-number { font-size: 0.74rem; }
+  .convo .convo-last { font-size: 0.8rem; }
+}
+/* Lista angosta (portátil chico): sin íconos para dar lugar al texto */
+@media (min-width: 992px) and (max-width: 1399.98px) { .cl-tab .cl-tab-ic { display: none; } }
+/* Celular angosto: texto + contador sin ícono */
+@media (max-width: 399.98px) { .cl-tab .cl-tab-ic { display: none; } .cl-tab { justify-content: center; padding-inline: 0.3rem; } }
+/* Celular: el nombre largo usa hasta dos líneas en vez de cortarse */
+@media (max-width: 575.98px) {
+  .convo .convo-name { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.2; word-break: break-word; }
+}
 
 /* Notas: selector Lista / Pipeline */
 .np-view { display: inline-flex; border: 1px solid var(--ib-line); border-radius: 10px; overflow: hidden; flex-shrink: 0; }

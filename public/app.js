@@ -1820,13 +1820,17 @@
           avatarHtml(m.name, 'avatar-sm', c ? convoPhoto(c) : null) +
           '<div class="convo-body">' +
             '<div class="convo-team"><span class="ri-team-line" aria-hidden="true"></span>' + escapeHtml(m.area) + '</div>' +
-            '<div class="convo-top"><span class="convo-name">' + escapeHtml(m.name) + '</span>' +
-              (c && c.last_message_at ? '<span class="convo-time">' + timeAgo(c.last_message_at) + '</span>' : '') + '</div>' +
+            '<div class="convo-top"><span class="convo-name" title="' + escapeHtml(m.name) + '">' + escapeHtml(m.name) + '</span></div>' +
             '<div class="convo-number"><span class="ri-whatsapp-line" aria-hidden="true"></span>' + escapeHtml(fmtPhone(m.phone)) +
               (m.line_ready ? ' <span class="team-online" title="Su línea está conectada"></span>' : '') + '</div>' +
             '<div class="convo-last">' + (c ? escapeHtml(c.last_message_text || '—') : '<span class="team-start">Iniciar conversación</span>') + '</div>' +
           '</div>' +
-          (c && c.unread_count > 0 ? '<span class="unread-pill">' + c.unread_count + '</span>' : '');
+          '<div class="convo-side">' +
+            '<span class="convo-time">' + (c && c.last_message_at ? timeAgo(c.last_message_at) : '') + '</span>' +
+            '<span class="convo-badges">' +
+              (c && c.unread_count > 0 ? '<span class="unread-pill">' + (c.unread_count > 99 ? '99+' : c.unread_count) + '</span>' : '') +
+            '</span>' +
+          '</div>';
         el.addEventListener('click', function () { openTeamMember(m); });
         els.list.appendChild(el);
       });
@@ -1838,14 +1842,26 @@
       return '<div class="convo-team" title="Usuario del sistema"><span class="ri-team-line" aria-hidden="true"></span>' + escapeHtml(c.team.area) + '</div>';
     }
 
+    // Cada pestaña muestra solo cuántas conversaciones tienen mensajes sin leer
+    // (sin número cuando no hay ninguna).
+    function setTabCount(btn, key, unread) {
+      var badge = btn.querySelector('[data-count="' + key + '"]');
+      if (badge) {
+        badge.textContent = unread > 99 ? '99+' : String(unread);
+        badge.hidden = unread === 0;
+      }
+      btn.classList.toggle('has-unread', unread > 0);
+      var label = btn.querySelector('.cl-tab-label');
+      btn.title = (label ? label.textContent : '') + (unread ? ' · ' + unread + ' sin leer' : '');
+    }
+
     function renderTabs() {
       if (!els.tabs) return;
+      var unreadOf = function (list) { return list.filter(function (c) { return c.unread_count > 0; }).length; };
       var teamBtn = els.tabs.querySelector('[data-tab="team"]');
       if (teamBtn) {
         teamBtn.classList.toggle('active', state.tab === 'team');
-        var tb = teamBtn.querySelector('[data-count="team"]');
-        if (tb) tb.textContent = (state.team || []).length;
-        teamBtn.classList.toggle('has-unread', state.conversations.some(function (c) { return c.team && c.unread_count > 0; }));
+        setTabCount(teamBtn, 'team', unreadOf(state.conversations.filter(function (c) { return !!c.team; })));
       }
       ['individual', 'group'].forEach(function (t) {
         var btn = els.tabs.querySelector('[data-tab="' + t + '"]');
@@ -1854,9 +1870,7 @@
           return (t === 'group') === isGroupChat(c);
         });
         btn.classList.toggle('active', state.tab === t);
-        var badge = btn.querySelector('[data-count="' + t + '"]');
-        if (badge) badge.textContent = list.length;
-        btn.classList.toggle('has-unread', list.some(function (c) { return c.unread_count > 0; }));
+        setTabCount(btn, t, unreadOf(list));
       });
     }
 
@@ -1909,15 +1923,19 @@
         '<div class="convo-body">' +
           teamLine(c) +
           programaLine(c) +
-          '<div class="convo-top"><span class="convo-name">' + nameHtml + '</span>' +
-            '<span class="convo-time">' + timeAgo(c.last_message_at) + '</span></div>' +
+          '<div class="convo-top"><span class="convo-name" title="' + escapeHtml(name) + '">' + nameHtml + '</span></div>' +
           (!isGroup && phone ? '<div class="convo-number"><span class="ri-whatsapp-line" aria-hidden="true"></span>' + escapeHtml(fmtPhone(phone)) + '</div>'
             : isHiddenNumber(c) ? '<div class="convo-number is-hidden" title="WhatsApp no comparte el número de esta persona. Podés responderle igual y registrar su nombre en la ficha."><span class="ri-eye-off-line" aria-hidden="true"></span>Número oculto por WhatsApp</div>' : '') +
           '<div class="convo-last">' + escapeHtml(c.last_message_text || '—') + '</div>' +
         '</div>' +
-        convoNotesHtml(c) +
-        (c.unread_count > 0 ? '<span class="unread-pill">' + c.unread_count + '</span>' : '') +
-        (phone ? '<span class="convo-phone-mini" title="' + escapeHtml(phone) + '"></span>' : '');
+        // Columna derecha: hora arriba; no leídos y notas debajo (no le quitan ancho al nombre).
+        '<div class="convo-side">' +
+          '<span class="convo-time">' + timeAgo(c.last_message_at) + '</span>' +
+          '<span class="convo-badges">' +
+            convoNotesHtml(c) +
+            (c.unread_count > 0 ? '<span class="unread-pill">' + (c.unread_count > 99 ? '99+' : c.unread_count) + '</span>' : '') +
+          '</span>' +
+        '</div>';
       el.addEventListener('click', function () { openChat(c.session_id, c.chat_id, true); });
       return el;
     }

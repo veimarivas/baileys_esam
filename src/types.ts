@@ -96,6 +96,10 @@ export interface MessageRow {
   transcription: string | null;
   origin: string | null;
   reply_to_wa_id: string | null;
+  /** Autor del mensaje citado según WhatsApp (contextInfo.participant). */
+  reply_to_sender?: string | null;
+  /** Texto del mensaje citado según WhatsApp. */
+  reply_to_body?: string | null;
   sender_type: string | null;
   sender_uid: number | null;
   sender_jid: string | null;

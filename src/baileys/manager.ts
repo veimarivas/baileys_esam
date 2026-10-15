@@ -196,6 +196,7 @@ export class SessionManager implements OutboundSender {
     );
     session.on('ack', (ack: { messageId: string; status: string }) => void this.onAck(sessionId, ack));
     session.on('presence', (p: { chatId: string; typing: boolean }) => void this.onPresence(sessionId, p));
+    session.on('contact-name', (c: { chatId: string; name: string }) => this.onContactName(sessionId, c.chatId, c.name));
 
     this.sessions.set(sessionId, session);
     return session;
@@ -587,6 +588,32 @@ export class SessionManager implements OutboundSender {
     audit('session.disconnected', { session_id: sessionId, code: info.code, kind: info.kind });
     await dispatchEvent(sessionId, 'session.disconnected', { reason, code: info.code, kind: info.kind });
     recomputeHealth(sessionId, { lastError: reason });
+  }
+
+  /**
+   * Nombre de perfil que comparte WhatsApp para un chat: completa el de la
+   * conversación y la ficha si todavía no tienen (no crea contactos nuevos ni
+   * pisa un nombre ya registrado).
+   */
+  private onContactName(sessionId: string, chatId: string, name: string): void {
+    try {
+      const changed =
+        run(
+          `UPDATE conversations SET contact_name = ? WHERE session_id = ? AND chat_id = ? AND (contact_name IS NULL OR contact_name = '')`,
+          name,
+          sessionId,
+          chatId,
+        ).changes +
+        run(
+          `UPDATE contacts SET name = ? WHERE session_id = ? AND chat_id = ? AND (name IS NULL OR name = '')`,
+          name,
+          sessionId,
+          chatId,
+        ).changes;
+      if (changed) panelBus.publish('conversation', { sessionId, chatId });
+    } catch {
+      // best-effort
+    }
   }
 
   /** «Reparar cifrado» sin desvincular (contactos que ven «Esperando el mensaje»). */
@@ -1202,6 +1229,14 @@ export class SessionManager implements OutboundSender {
       new Date(msg.timestamp * 1000).toISOString(),
       nowIso(),
     );
+    if (msg.quotedWaId && (msg.quotedSender || msg.quotedBody)) {
+      run(
+        'UPDATE messages SET reply_to_sender = ?, reply_to_body = ? WHERE id = ?',
+        msg.quotedSender ?? null,
+        msg.quotedBody ?? null,
+        result.lastInsertRowid,
+      );
+    }
     return result.lastInsertRowid;
   }
 

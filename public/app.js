@@ -177,8 +177,11 @@
     return AV_CLASSES[Math.abs(hash) % AV_CLASSES.length];
   }
   function initials(name) {
-    return (String(name == null ? '' : name).trim() || '?')
-      .split(/\s+/).slice(0, 2).map(function (w) { return w.charAt(0); }).join('').toUpperCase() || '?';
+    // Solo letras y números: un nombre con emojis o símbolos no rompe el avatar.
+    var words = String(name == null ? '' : name).trim().split(/\s+/)
+      .map(function (w) { return Array.from(w).filter(function (ch) { return /[\p{L}\p{N}]/u.test(ch); })[0] || ''; })
+      .filter(Boolean);
+    return words.slice(0, 2).join('').toUpperCase() || '?';
   }
 
   var TICKS = { sending: '🕓', sent: '✓', delivered: '✓✓', read: '✓✓', failed: '⚠', received: '' };
@@ -239,6 +242,13 @@
       escapeHtml(initials(name)) +
       (photoUrl ? '<img src="' + escapeHtml(photoUrl) + '" alt="" loading="lazy" decoding="async" onerror="this.parentNode.classList.remove(\'has-photo\');this.remove()">' : '') +
     '</span>';
+  }
+
+  // Número legible (+591 7XXX XXXX) para las burbujas (el inbox tiene su propia copia).
+  function fmtPhone(phone) {
+    var d = String(phone || '').replace(/\D+/g, '');
+    if (/^591\d{8}$/.test(d)) return '+591 ' + d.slice(3, 7) + ' ' + d.slice(7);
+    return d ? '+' + d : '';
   }
 
   // Foto de perfil de una conversación (propia o de la misma persona en otra línea).
@@ -306,13 +316,15 @@
       var qName = msg.reply_to.sender_name || '';
       var qPhone = msg.reply_to.sender_phone || '';
       var qContact = msg.reply_to.sender_chat_id || '';
-      var nameLabel = qName || qPhone || 'Contacto';
-      var clickable = qContact && !/@g\.us$/.test(qContact);
+      // A quién se responde: el agente («Tú») o el contacto (nombre o número).
+      var nameLabel = msg.reply_to.from_me ? (qName || 'Tú') : (qName || (qPhone ? fmtPhone(qPhone) : '') || (msg.is_group ? 'Participante del grupo' : 'Contacto'));
+      var clickable = !msg.reply_to.from_me && qContact && !/@g\.us$/.test(qContact);
       var linkCls = clickable ? ' quote-contact-link' : '';
-      q.innerHTML = '<div class="quote-title">Respondiendo</div>' +
-        (nameLabel !== 'Contacto' || qPhone
-          ? '<div class="quote-info"><span class="quote-author' + linkCls + '">' + escapeHtml(nameLabel) + '</span>' +
-            (qPhone ? '<span class="quote-wa' + linkCls + '"><span class="ri-whatsapp-line"></span> ' + escapeHtml(qPhone) + '</span>' : '') +
+      q.classList.toggle('quote-mine', !!msg.reply_to.from_me);
+      q.innerHTML = '<div class="quote-title"><span class="ri-reply-line" aria-hidden="true"></span> Respondiendo a ' +
+          '<span class="quote-author' + linkCls + '">' + escapeHtml(nameLabel) + '</span></div>' +
+        (qName && qPhone && !msg.reply_to.from_me
+          ? '<div class="quote-info"><span class="quote-wa' + linkCls + '"><span class="ri-whatsapp-line"></span> ' + escapeHtml(fmtPhone(qPhone)) + '</span>' +
             (clickable ? '<span class="quote-tap"><span class="ri-corner-up-left-line"></span> Abrir conversación</span>' : '') + '</div>'
           : '') + qBody;
       if (clickable) {
@@ -474,6 +486,9 @@
         tr.textContent = '🎙 ' + msg.transcription;
         frag.appendChild(tr);
       }
+    } else if (type === 'document' && hasMedia && isPdf(msg)) {
+      frag.appendChild(buildPdfCard(msg, murl));
+      if (msg.body && msg.media_filename) frag.appendChild(paragraph(msg.body, ctx));
     } else if (type === 'document' && hasMedia) {
       var fileName = msg.media_filename || msg.body || 'Documento';
       var doc = document.createElement('div');
@@ -495,6 +510,102 @@
       frag.appendChild(paragraph(msg.body != null ? msg.body : '[' + type + ']', ctx));
     }
     return frag;
+  }
+
+  /* ── PDF con vista previa (primera página, como las imágenes) ── */
+  function isPdf(msg) {
+    return /pdf/i.test(String(msg.media_mime || '')) || /\.pdf$/i.test(String(msg.media_filename || ''));
+  }
+
+  var pdfLib = null;          // promesa de pdf.js (se carga solo si aparece un PDF)
+  var pdfThumbs = {};         // id de mensaje → { url, pages } (no se re-dibuja al refrescar)
+  var pdfObserver = null;
+
+  function loadPdfLib() {
+    if (pdfLib) return pdfLib;
+    pdfLib = new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = '/vendor/pdfjs/pdf.min.js';
+      s.onload = function () {
+        if (!window.pdfjsLib) return reject(new Error('pdf.js no disponible'));
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = '/vendor/pdfjs/pdf.worker.min.js';
+        resolve(window.pdfjsLib);
+      };
+      s.onerror = function () { reject(new Error('No se pudo cargar pdf.js')); };
+      document.head.appendChild(s);
+    });
+    return pdfLib;
+  }
+
+  function renderPdfThumb(card) {
+    var id = card.getAttribute('data-pdf-id');
+    var url = card.getAttribute('data-pdf-url');
+    var box = card.querySelector('.pdf-thumb');
+    var paint = function (t) {
+      box.innerHTML = '<img src="' + t.url + '" alt="Vista previa del PDF">';
+      box.classList.add('ready');
+      var sub = card.querySelector('.pdf-pages');
+      if (sub && t.pages) sub.textContent = t.pages + (t.pages === 1 ? ' página' : ' páginas');
+    };
+    if (pdfThumbs[id]) { paint(pdfThumbs[id]); return; }
+    loadPdfLib()
+      .then(function (lib) { return lib.getDocument({ url: url, disableAutoFetch: true, disableStream: true }).promise; })
+      .then(function (pdf) {
+        return pdf.getPage(1).then(function (page) {
+          var base = page.getViewport({ scale: 1 });
+          var scale = Math.min(2, 520 / base.width);
+          var vp = page.getViewport({ scale: scale });
+          var canvas = document.createElement('canvas');
+          canvas.width = Math.round(vp.width);
+          canvas.height = Math.round(Math.min(vp.height, vp.width * 1.3));
+          var c2d = canvas.getContext('2d');
+          c2d.fillStyle = '#fff';
+          c2d.fillRect(0, 0, canvas.width, canvas.height);
+          return page.render({ canvasContext: c2d, viewport: vp }).promise.then(function () {
+            var t = { url: canvas.toDataURL('image/jpeg', 0.82), pages: pdf.numPages };
+            pdfThumbs[id] = t;
+            paint(t);
+            pdf.destroy();
+          });
+        });
+      })
+      .catch(function () {
+        box.classList.add('failed');
+        box.innerHTML = '<span class="ri-file-pdf-2-line" aria-hidden="true"></span>';
+      });
+  }
+
+  function observePdf(card) {
+    if (!('IntersectionObserver' in window)) { renderPdfThumb(card); return; }
+    if (!pdfObserver) {
+      pdfObserver = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) {
+          if (e.isIntersecting) { pdfObserver.unobserve(e.target); renderPdfThumb(e.target); }
+        });
+      }, { rootMargin: '200px' });
+    }
+    pdfObserver.observe(card);
+  }
+
+  function buildPdfCard(msg, murl) {
+    var fileName = msg.media_filename || msg.body || 'Documento.pdf';
+    var card = document.createElement('div');
+    card.className = 'pdf-card';
+    card.setAttribute('data-pdf-id', String(msg.id));
+    card.setAttribute('data-pdf-url', murl);
+    card.innerHTML =
+      '<a class="pdf-thumb" href="' + murl + '" target="_blank" rel="noopener" title="Abrir el PDF">' +
+        '<span class="pdf-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span></span></a>' +
+      '<div class="pdf-foot">' +
+        '<span class="pdf-ic ri-file-pdf-2-fill" aria-hidden="true"></span>' +
+        '<a class="pdf-meta" href="' + murl + '" target="_blank" rel="noopener">' +
+          '<span class="nm">' + escapeHtml(fileName) + '</span>' +
+          '<span class="doc-sub">PDF · <span class="pdf-pages">vista previa</span></span></a>' +
+        '<a class="doc-download" href="' + murl + '" download="' + escapeHtml(fileName) + '" title="Descargar"><span class="ri-download-2-line"></span></a>' +
+      '</div>';
+    if (pdfThumbs[msg.id]) setTimeout(function () { renderPdfThumb(card); }, 0);
+    else setTimeout(function () { observePdf(card); }, 0);
+    return card;
   }
 
   function paragraph(text, ctx) {
@@ -1774,7 +1885,13 @@
       if (name) return name;
       var phone = c.contact && c.contact.phone;
       if (phone) return phone;
+      // WhatsApp ocultó el número (@lid): no se muestra el código interno.
+      if (isHiddenNumber(c)) return 'Contacto con número oculto';
       return String(c.chat_id || '').split('@')[0];
+    }
+
+    function isHiddenNumber(c) {
+      return /@lid$/.test(String(c && c.chat_id || '')) && !(c.contact && c.contact.phone);
     }
 
     function renderConvo(c) {
@@ -1794,7 +1911,8 @@
           programaLine(c) +
           '<div class="convo-top"><span class="convo-name">' + nameHtml + '</span>' +
             '<span class="convo-time">' + timeAgo(c.last_message_at) + '</span></div>' +
-          (!isGroup && phone ? '<div class="convo-number"><span class="ri-whatsapp-line" aria-hidden="true"></span>' + escapeHtml(fmtPhone(phone)) + '</div>' : '') +
+          (!isGroup && phone ? '<div class="convo-number"><span class="ri-whatsapp-line" aria-hidden="true"></span>' + escapeHtml(fmtPhone(phone)) + '</div>'
+            : isHiddenNumber(c) ? '<div class="convo-number is-hidden" title="WhatsApp no comparte el número de esta persona. Podés responderle igual y registrar su nombre en la ficha."><span class="ri-eye-off-line" aria-hidden="true"></span>Número oculto por WhatsApp</div>' : '') +
           '<div class="convo-last">' + escapeHtml(c.last_message_text || '—') + '</div>' +
         '</div>' +
         convoNotesHtml(c) +
@@ -2065,12 +2183,23 @@
       fetchMessages(true);
     }
 
+    // Tamaños de pantalla: «compacto» = la ficha va como panel lateral encima del
+    // chat; «móvil» = lista y chat de a uno (con volver).
+    function isCompact() { return window.matchMedia('(max-width: 1199.98px)').matches; }
+    function isMobile() { return window.matchMedia('(max-width: 991.98px)').matches; }
+
     function renderPane() {
       var c = selectedConversation();
-      if (!c) { els.pane.innerHTML = emptyPane(); els.contact.innerHTML = ''; els.contact.classList.add('d-none'); root.classList.add('contact-hidden'); return; }
+      if (!c) {
+        els.pane.innerHTML = emptyPane(); els.contact.innerHTML = ''; els.contact.classList.add('d-none');
+        root.classList.add('contact-hidden'); root.classList.remove('has-chat');
+        return;
+      }
       els.pane.innerHTML = chatHeaderHtml(c) + '<div id="chat-notes-banner"></div><div class="chat-body"></div>' + composerHtml(c);
       els.contact.classList.remove('d-none');
-      root.classList.remove('contact-hidden');
+      root.classList.add('has-chat');
+      // En pantallas grandes la ficha se ve al costado; en las chicas se abre a pedido.
+      root.classList.toggle('contact-hidden', isCompact());
       bindPane(c);
       renderNotesBanner();
       // La ficha se redibuja entera: si no, conservaba la cabecera del chat anterior.
@@ -2084,7 +2213,8 @@
       var isGroup = /@g\.us$/.test(c.chat_id);
       var phone = (c.contact && c.contact.phone) ? c.contact.phone : '';
       return '<div class="chat-header">' +
-        '<button type="button" class="btn btn-icon btn-soft-secondary" id="toggle-list" title="Conversaciones"><span class="ri-menu-line"></span></button>' +
+        '<button type="button" class="btn btn-icon btn-soft-secondary" id="toggle-list" title="Conversaciones" aria-label="Volver a las conversaciones">' +
+          '<span class="ri-menu-line tl-desk" aria-hidden="true"></span><span class="ri-arrow-left-line tl-mob" aria-hidden="true"></span></button>' +
         avatarHtml(name, 'avatar-sm', convoPhoto(c)) +
         '<div class="chat-id">' +
           (c.team ? '<div class="chat-progs"><span class="chat-team" title="Usuario del sistema"><span class="ri-team-line" aria-hidden="true"></span> ' + escapeHtml(c.team.area) + '</span></div>' : '') +
@@ -2092,7 +2222,7 @@
             ? '<div class="chat-progs">' + c.person.programas.map(function (p) { return '<span class="chat-programa" title="Programa según cronogramas">' + escapeHtml(p) + '</span>'; }).join('') + '</div>'
             : '') +
           '<div class="name">' + (isGroup ? '<span class="ri-group-line group-ico" title="Grupo"></span>' : '') + escapeHtml(name) + '</div>' +
-          '<div class="sub"><span class="font-monospace">' + escapeHtml(isGroup ? phone : fmtPhone(phone)) + '</span>' +
+          '<div class="sub"><span class="font-monospace">' + escapeHtml(isGroup ? phone : isHiddenNumber(c) ? 'Número oculto por WhatsApp' : fmtPhone(phone)) + '</span>' +
             (c.person && c.person.full_name && c.contact && c.contact.name && c.contact.name !== c.person.full_name
               ? '<span class="chat-waname" title="Nombre en WhatsApp"> · ' + escapeHtml(c.contact.name) + '</span>' : '') +
             '<span id="typing-hint" class="typing-hint"></span></div></div>' +
@@ -2104,7 +2234,10 @@
 
     function composerHtml() {
       var reply = state.replyTo
-        ? '<div class="reply-preview"><div style="min-width:0;flex:1"><div class="rp-title">Respondiendo</div>' +
+        ? '<div class="reply-preview"><div style="min-width:0;flex:1"><div class="rp-title">Respondiendo a ' +
+            escapeHtml(state.replyTo.direction === 'out'
+              ? 'tu mensaje'
+              : (state.replyTo.sender_name || (state.replyTo.sender_phone ? fmtPhone(state.replyTo.sender_phone) : '') || convoName(selectedConversation() || {}))) + '</div>' +
             '<div class="rp-body">' + escapeHtml(state.replyTo.body || '[' + state.replyTo.content_type + ']') + '</div></div>' +
             '<button type="button" id="cancel-reply" aria-label="Cancelar respuesta"><span class="ri-close-line"></span></button></div>'
         : '';
@@ -2135,7 +2268,11 @@
       });
 
       var toggleList = els.pane.querySelector('#toggle-list');
-      if (toggleList) toggleList.addEventListener('click', function () { root.classList.toggle('list-hidden'); });
+      if (toggleList) toggleList.addEventListener('click', function () {
+        // En el celular es «volver a la lista»; en pantallas grandes, ocultar/mostrar la lista.
+        if (isMobile()) { root.classList.remove('has-chat'); root.classList.add('contact-hidden'); }
+        else root.classList.toggle('list-hidden');
+      });
       var toggleContact = els.pane.querySelector('#toggle-contact');
       if (toggleContact) toggleContact.addEventListener('click', function () {
         root.classList.toggle('contact-hidden');
@@ -2549,8 +2686,7 @@
     function renderPerson() {
       var p = state.person;
       var fillBox = els.contact.querySelector('#person-fill');
-      var linesBox = els.contact.querySelector('#person-lines');
-      if (!p || !fillBox || !linesBox) return;
+      if (!p || !fillBox) return;
       var f = p.fill || {};
       var fillRow = function (label, item) {
         return item ? '<div class="pf-row"><span class="pf-label">' + label + '</span><span class="pf-value">' + escapeHtml(item.value) +
@@ -2565,25 +2701,6 @@
             progs.map(function (x) { return '<span class="pf-prog">' + escapeHtml(x) + '</span>'; }).join('') + '</span></div>'
         : inHead ? '' : fillRow('Programa', f.programa);
       fillBox.innerHTML = fillRow('Nombre', f.name) + fillRow('Email', f.email) + fillRow('Empresa', f.company) + programa;
-      var lines = p.lines || [];
-      if (!lines.length) { linesBox.innerHTML = ''; linesBox.hidden = true; return; }
-      linesBox.hidden = false;
-      linesBox.innerHTML = '<h6><span class="ri-links-line" aria-hidden="true"></span> También escribió a</h6>' +
-        lines.map(function (l) {
-          var line = l.session_name || 'Otra línea';
-          var phone = l.session_phone ? '+' + String(l.session_phone).replace(/^\+/, '') : '';
-          var waiting = l.last_direction === 'in' && l.status !== 'closed';
-          var activity = l.last_message_at
-            ? (l.last_direction === 'in' ? 'Escribió ' : 'Le respondieron ') + timeAgo(l.last_message_at)
-            : 'Sin mensajes todavía';
-          return '<div class="pl-row' + (waiting ? ' waiting' : '') + '">' +
-            '<span class="pl-ic ri-whatsapp-line" aria-hidden="true"></span>' +
-            '<div class="pl-body"><div class="pl-line">' + escapeHtml(line) + (phone ? ' <span class="pl-phone">' + escapeHtml(phone) + '</span>' : '') + '</div>' +
-              '<div class="pl-meta">' + escapeHtml(activity) + (l.programa ? ' · ' + escapeHtml(l.programa) : '') + '</div></div>' +
-            (waiting ? '<span class="pl-badge" title="El último mensaje es del contacto">Sin responder</span>' : '') +
-          '</div>';
-        }).join('') +
-        '<p class="nk-hint pl-hint">Las notas y tareas de esas líneas se ven abajo, en «Notas y tareas».</p>';
     }
 
     // Lista: pendientes arriba (por fecha de seguimiento) y resueltas plegadas.
@@ -2702,18 +2819,19 @@
       }
 
       els.contact.innerHTML =
+        '<button type="button" class="contact-close" id="contact-close" aria-label="Cerrar la ficha"><span class="ri-close-line"></span></button>' +
         '<div class="contact-head">' + avatarHtml(name, 'avatar-xl', convoPhoto(c)) +
           ((c.person && c.person.programas || []).length
             ? '<div class="contact-progs">' + c.person.programas.map(function (p) { return '<span class="pf-prog">' + escapeHtml(p) + '</span>'; }).join('') + '</div>'
             : '') +
           nameBlockHtml(c) +
           (!c.team && c.person && c.person.full_name && ct.name && ct.name !== c.person.full_name ? '<div class="contact-waname">WhatsApp: ' + escapeHtml(ct.name) + '</div>' : '') +
-          '<div class="contact-phone">' + escapeHtml(fmtPhone(ct.phone) || '') + '</div>' +
+          '<div class="contact-phone">' + escapeHtml(fmtPhone(ct.phone) || (isHiddenNumber(c) ? 'Número oculto por WhatsApp' : '')) + '</div>' +
+          (isHiddenNumber(c) ? '<div class="contact-hidden-hint">WhatsApp no comparte su número. Podés responderle igual y registrar su nombre.</div>' : '') +
           (ct.email ? '<div class="contact-email">' + escapeHtml(ct.email) + '</div>' : '') +
         '</div>' +
         '<div class="person-fill" id="person-fill"></div>' +
         membersHtml +
-        '<div class="panel-section person-lines" id="person-lines" hidden></div>' +
         notesSectionHtml() +
         '<div class="panel-section contact-meta"><h6>Conversación</h6><dl>' +
           '<dt>Inicio</dt><dd>' + (c.created_at ? new Date(c.created_at).toLocaleDateString() : '—') + '</dd>' +
@@ -2721,6 +2839,8 @@
         '</dl></div>';
 
       bindNameEditor(c);
+      var closeBtn = els.contact.querySelector('#contact-close');
+      if (closeBtn) closeBtn.addEventListener('click', function () { root.classList.add('contact-hidden'); });
 
       // Notas internas: compositor (con borrador) y lista.
       renderNoteComposer();
@@ -2891,6 +3011,10 @@
       els.search.value = ''; state.search = ''; els.clear.hidden = true; renderList(); els.search.focus();
     });
     if (els.rail) els.rail.addEventListener('click', function () { root.classList.remove('list-hidden'); });
+    // Ficha abierta como panel (pantallas chicas): tocar el fondo oscurecido la cierra.
+    root.addEventListener('click', function (e) {
+      if (e.target === root && isCompact() && !root.classList.contains('contact-hidden')) root.classList.add('contact-hidden');
+    });
 
     /* ── SSE + polling ── */
     // «Te asignaron una tarea»: solo al responsable y si no se la asignó él mismo.
@@ -3366,6 +3490,7 @@
         b.setAttribute('aria-pressed', String(on));
       });
       var board = st.view === 'board';
+      root.classList.toggle('board-mode', board);
       els.list.hidden = board;
       els.board.hidden = !board;
       els.stats.hidden = board;

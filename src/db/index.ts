@@ -62,6 +62,9 @@ export function migrate(): void {
   db.exec('PRAGMA busy_timeout = 5000');
   db.exec(SCHEMA);
   // Migraciones ligeras para bases ya existentes.
+  // Respuestas: autor y texto del mensaje citado (contextInfo), por si el original no está.
+  addColumnIfMissing('messages', 'reply_to_sender', 'TEXT');
+  addColumnIfMissing('messages', 'reply_to_body', 'TEXT');
   // Etapa manual del pipeline de seguimiento ('todo' | 'doing'); las demás salen de los datos.
   addColumnIfMissing('contact_notes', 'pipeline_stage', 'TEXT');
   // Último cierre de conexión explicado (JSON de DisconnectInfo) para la vista Conexión.

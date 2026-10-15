@@ -463,7 +463,7 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
         const from = others.find((l) => l[key]);
         return from ? { value: from[key], line: from.session_name || from.session_phone || 'otra línea' } : null;
       };
-      const key = contact.phone_key ?? (resolved.chatId.endsWith('@g.us') || resolved.chatId.endsWith('@lid') ? null : phoneKeyOf(resolved.chatId));
+      const key = contact.phone_key ?? (resolved.chatId.endsWith('@g.us') ? null : resolved.chatId.endsWith('@lid') ? resolved.chatId : phoneKeyOf(resolved.chatId));
       const tags = key ? personTagsByKeys([key]).get(key) : undefined;
       res.json({
         programa: current?.programa ?? tags?.programas[0] ?? null,
@@ -489,7 +489,7 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       const resolved = resolveAuthorized(req, res, String(req.params.session), String(req.params.chat));
       if (!resolved) return;
       const contact = getOrCreateContact(resolved.session.id, resolved.chatId);
-      const key = contact.phone_key ?? (resolved.chatId.endsWith('@g.us') || resolved.chatId.endsWith('@lid') ? null : phoneKeyOf(resolved.chatId));
+      const key = contact.phone_key ?? (resolved.chatId.endsWith('@g.us') ? null : resolved.chatId.endsWith('@lid') ? resolved.chatId : phoneKeyOf(resolved.chatId));
       if (!key) return res.status(422).json({ error: 'Este chat no tiene un número al que asociar el nombre.' });
       const name = String(req.body?.name ?? '').trim();
       if (name.length > 120) return res.status(422).json({ error: 'El nombre es demasiado largo (máx. 120 caracteres).' });

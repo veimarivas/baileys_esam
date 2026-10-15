@@ -1271,6 +1271,37 @@ nuevo `src/panel/admin-views.ts`.
     `stage` en el historial.
 - Modo claro: el texto que se escribe en el chat ya no queda blanco.
 
+## 33. Conversaciones adaptables, PDF con vista previa, citas con autor y número oculto (2026-10-15)
+
+- **Diseño adaptable:**
+  - pantallas anchas con tres columnas (340/300 px según el ancho);
+  - portátil chico o tablet: la ficha se abre como panel encima del chat, con
+    fondo oscurecido y botón de cerrar;
+  - celular: lista y chat de a uno, con «volver», chat a pantalla completa (sin
+    el título de página) y compositor visible respetando el borde inferior del
+    teléfono.
+  - Antes, por debajo de 992 px la lista y el chat se apilaban y la ficha (con
+    las notas) no se podía abrir.
+- **PDF con vista previa:** la primera página se muestra como miniatura, con la
+  cantidad de páginas y la descarga. Se dibuja en el navegador con pdf.js
+  (`public/vendor/pdfjs`, servido por el panel, sin CDN), al verse en pantalla y
+  una sola vez.
+- **Citas con autor:** «Respondiendo a …» muestra siempre a quién se responde:
+  - el agente («Tú») si el mensaje citado es nuestro;
+  - si es de un participante, su nombre o número, también cuando el original no
+    está guardado. Se guarda el autor y el texto que informa WhatsApp
+    (`messages.reply_to_sender`, `reply_to_body`).
+  - La vista previa al responder también dice a quién.
+- **Número oculto por WhatsApp (@lid):** cuando WhatsApp no comparte el número,
+  se muestra «Contacto con número oculto» en lugar del código interno. Se guarda
+  el nombre de perfil que llega en los contactos y se puede registrar un nombre
+  desde la ficha (la clave es el identificador del chat).
+- **Ficha del contacto:** se quitó «También escribió a»; quedan los datos y las
+  notas y tareas del equipo.
+- **Avatares:** las iniciales ignoran emojis y símbolos (ya no aparecen «��»).
+- **Notas › Pipeline:** las cuatro columnas usan todo el ancho (el panel de
+  etiquetas se oculta en esa vista) y ya no quedan detrás de él.
+
 ---
 
 ## Notas de operación

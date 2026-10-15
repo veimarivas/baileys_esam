@@ -84,6 +84,8 @@ export interface MessageDTO {
     wa_message_id: string;
     body: string | null;
     content_type: string;
+    /** El mensaje citado es nuestro (agente / teléfono de la línea). */
+    from_me: boolean;
     /** Contacto autor del mensaje citado (para mostrar/abrir en grupos). */
     sender_name: string | null;
     sender_phone: string | null;
@@ -152,7 +154,8 @@ const NO_PERSON: PersonTags = { full_name: null, programas: [] };
 /** Clave de la persona: la de su ficha o, si falta, la del número del chat. */
 function personKey(row: { ct_phone_key: string | null; chat_id: string }): string | null {
   if (row.chat_id.endsWith('@g.us')) return null;
-  return row.ct_phone_key ?? (row.chat_id.endsWith('@lid') ? null : phoneKeyOf(row.chat_id));
+  // Número oculto (@lid): la clave es el propio identificador (permite registrar su nombre).
+  return row.ct_phone_key ?? (row.chat_id.endsWith('@lid') ? row.chat_id : phoneKeyOf(row.chat_id));
 }
 
 function mapConversation(
@@ -310,6 +313,8 @@ interface MessageJoinRow extends MessageRow {
   reply_contact: string | null;
   reply_sender_jid: string | null;
   reply_chat_id: string | null;
+  reply_direction: string | null;
+  reply_agent: string | null;
   sender_name: string | null;
 }
 
@@ -321,6 +326,27 @@ function mediaStatus(row: MessageRow): MessageDTO['media_status'] {
   if (row.media_path && fs.existsSync(row.media_path)) return 'ok';
   if (row.media_state === 'missing') return 'missing';
   return row.media_ref ? 'pending' : 'unfetched';
+}
+
+/**
+ * Mensaje citado con su autor: si el citado es nuestro, el agente («Tú» si no
+ * se sabe); si es de un contacto, su nombre o número (también cuando el
+ * original no está guardado, con lo que informó WhatsApp en la respuesta).
+ */
+function replyRef(row: MessageJoinRow): NonNullable<MessageDTO['reply_to']> {
+  const fromUs = row.reply_direction === 'out';
+  const jid = row.reply_sender_jid ?? (row.reply_id ? null : row.reply_to_sender ?? null);
+  const chat = jid ? resolveChatId(jid) : null;
+  return {
+    id: row.reply_id,
+    wa_message_id: row.reply_to_wa_id!,
+    body: row.reply_body ?? row.reply_to_body ?? null,
+    content_type: row.reply_type ?? 'text',
+    from_me: fromUs,
+    sender_name: fromUs ? row.reply_agent || 'Tú' : row.reply_contact,
+    sender_phone: !fromUs && chat ? phoneFromChatId(chat) || null : null,
+    sender_chat_id: !fromUs && chat && !chat.endsWith('@g.us') ? chat : null,
+  };
 }
 
 function mapMessage(row: MessageJoinRow, reactions: MessageDTO['reactions']): MessageDTO {
@@ -344,26 +370,18 @@ function mapMessage(row: MessageJoinRow, reactions: MessageDTO['reactions']): Me
     sender_name: row.direction === 'in' ? row.contact_name : null,
     sender_chat_id: row.direction === 'in' && row.sender_jid ? resolveChatId(row.sender_jid) : null,
     sender_phone: row.direction === 'in' && row.sender_jid ? phoneFromChatId(resolveChatId(row.sender_jid)) || null : null,
-    reply_to: row.reply_to_wa_id
-      ? {
-          id: row.reply_id,
-          wa_message_id: row.reply_to_wa_id,
-          body: row.reply_body,
-          content_type: row.reply_type ?? 'text',
-          sender_name: row.reply_contact,
-          sender_phone: row.reply_sender_jid ? phoneFromChatId(resolveChatId(row.reply_sender_jid)) || null : null,
-          sender_chat_id: row.reply_sender_jid ? resolveChatId(row.reply_sender_jid) : null,
-        }
-      : null,
+    reply_to: row.reply_to_wa_id ? replyRef(row) : null,
     reactions,
   };
 }
 
 const MSG_SELECT = `SELECT m.*, r.id AS reply_id, r.body AS reply_body, r.content_type AS reply_type,
     r.contact_name AS reply_contact, r.sender_jid AS reply_sender_jid, r.chat_id AS reply_chat_id,
+    r.direction AS reply_direction, ru.name AS reply_agent,
     u.name AS sender_name
   FROM messages m
   LEFT JOIN messages r ON r.wa_message_id = m.reply_to_wa_id AND r.session_id = m.session_id
+  LEFT JOIN users ru ON ru.id = r.sender_uid
   LEFT JOIN users u ON u.id = m.sender_uid`;
 
 export interface MessagePage {
@@ -436,9 +454,13 @@ export function listMessages(sessionId: string, chatId: string, query: MessageQu
  * mensaje, su nombre completo de cronogramas o el de su ficha de contacto.
  */
 function fillGroupSenderNames(rows: MessageJoinRow[]): void {
-  const missing = rows.filter((r) => r.direction === 'in' && !r.contact_name && r.sender_jid && String(r.chat_id).endsWith('@g.us'));
-  if (!missing.length) return;
-  const jids = [...new Set(missing.map((r) => String(r.sender_jid)))];
+  const isGroup = (r: MessageJoinRow) => String(r.chat_id).endsWith('@g.us');
+  const missing = rows.filter((r) => r.direction === 'in' && !r.contact_name && r.sender_jid && isGroup(r));
+  // Autor del mensaje citado sin nombre (de un contacto, no nuestro).
+  const replyJid = (r: MessageJoinRow) => r.reply_sender_jid ?? (r.reply_id ? null : r.reply_to_sender ?? null);
+  const missingReply = rows.filter((r) => r.reply_to_wa_id && r.reply_direction !== 'out' && !r.reply_contact && replyJid(r));
+  if (!missing.length && !missingReply.length) return;
+  const jids = [...new Set([...missing.map((r) => String(r.sender_jid)), ...missingReply.map((r) => String(replyJid(r)))])];
   const ph = jids.map(() => '?').join(',');
   const known = new Map(
     all<{ sender_jid: string; contact_name: string }>(
@@ -459,11 +481,12 @@ function fillGroupSenderNames(rows: MessageJoinRow[]): void {
         ).map((r) => [r.phone_key, r.name])
       : [],
   );
-  for (const r of missing) {
-    const jid = String(r.sender_jid);
+  const nameOf = (jid: string) => {
     const key = phoneKeyOf(resolveChatId(jid)) ?? '';
-    r.contact_name = known.get(jid) ?? people.get(key)?.full_name ?? contactNames.get(key) ?? null;
-  }
+    return known.get(jid) ?? people.get(key)?.full_name ?? contactNames.get(key) ?? null;
+  };
+  for (const r of missing) r.contact_name = nameOf(String(r.sender_jid));
+  for (const r of missingReply) r.reply_contact = nameOf(String(replyJid(r)));
 }
 
 export function getMessageById(id: number): MessageRow | undefined {

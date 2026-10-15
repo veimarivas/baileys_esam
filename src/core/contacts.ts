@@ -794,7 +794,7 @@ export function listAllNotes(opts: {
     `SELECT n.*, u.name AS author_name, d.name AS done_by_name, x.name AS deleted_by_name, a.name AS assigned_name,
             a.esam_area AS assigned_area, ab.name AS assigned_by_name, cb.name AS contacted_by_name,
             COALESCE(
-              (SELECT pn.full_name FROM person_names pn WHERE pn.phone_key = ct.phone_key),
+              (SELECT pn.full_name FROM person_names pn WHERE pn.phone_key = COALESCE(ct.phone_key, ct.chat_id)),
               (SELECT pp.full_name FROM person_programs pp WHERE pp.phone_key = ct.phone_key AND pp.full_name IS NOT NULL
                 ORDER BY pp.last_at DESC LIMIT 1),
               ct.name) AS contact_name, ct.phone AS contact_phone, ct.chat_id AS chat_id, ct.session_id AS session_id,

@@ -134,6 +134,10 @@ export interface InboundMessage {
   senderJid?: string | null;
   /** wamid del mensaje citado (respuesta con `contextInfo.stanzaId`). */
   quotedWaId?: string | null;
+  /** Autor del mensaje citado (`contextInfo.participant`), ya resuelto. */
+  quotedSender?: string | null;
+  /** Texto del mensaje citado (por si el original no está guardado). */
+  quotedBody?: string | null;
   /** Reaccion entrante: apunta a un wamid y trae el emoji. */
   reaction?: { targetWaId: string; emoji: string } | null;
   /** Referencia serializada para descargar la media más tarde (si no se bajó). */
@@ -762,6 +766,12 @@ export class WaSession extends EventEmitter {
     }
     // id = LID y lid = número (orden invertido).
     if (id.endsWith('@lid') && lid.endsWith('@s.whatsapp.net')) rememberLid(id, lid);
+    // Nombre de perfil: en chats que llegan como LID (número oculto) es lo único
+    // que identifica a la persona; antes se descartaba y se veía el código.
+    const name = String(c.notify ?? c.verifiedName ?? c.name ?? '').trim();
+    if (name && id && !id.endsWith('@g.us') && !id.endsWith('@broadcast') && !id.endsWith('@newsletter')) {
+      this.emit('contact-name', { chatId: resolveChatId(id), name });
+    }
   }
 
   private async mapInbound(raw: WAMessage, opts: { downloadMedia?: boolean } = {}): Promise<InboundMessage | null> {
@@ -815,6 +825,20 @@ export class WaSession extends EventEmitter {
       content?.stickerMessage?.contextInfo ??
       null;
     const quotedWaId: string | null = context?.stanzaId ?? null;
+    // Quién escribió el mensaje citado y su texto: en grupos permite mostrar a
+    // quién se responde aunque el original no esté guardado.
+    let quotedSender: string | null = null;
+    let quotedBody: string | null = null;
+    if (quotedWaId) {
+      const qp = context?.participant ? String(context.participant) : null;
+      quotedSender = qp ? resolveChatId(qp) : null;
+      try {
+        const qd = context?.quotedMessage ? describe(context.quotedMessage) : null;
+        quotedBody = qd?.body ? String(qd.body).slice(0, 500) : qd?.type ? `[${qd.type}]` : null;
+      } catch {
+        quotedBody = null;
+      }
+    }
 
     // Reaccion entrante: apunta a un wamid con el emoji (vacio = se retiro).
     const reactionMessage = content?.reactionMessage;
@@ -851,6 +875,8 @@ export class WaSession extends EventEmitter {
       raw,
       senderJid,
       quotedWaId,
+      quotedSender,
+      quotedBody,
       reaction,
       mediaRef: hasMedia ? mediaRefFor(raw) : null,
     };

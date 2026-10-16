@@ -90,6 +90,19 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
     return get<SessionRow>("SELECT * FROM sessions WHERE status = 'ready' ORDER BY created_at LIMIT 1") ?? primary;
   };
 
+  /** Lote y línea desde la que ya salió hoy alguno de estos mensajes (para explicar el duplicado). */
+  const duplicateInfo = (items: Array<{ external_ref?: string | null }>): { batchId: number; line: string } | null => {
+    const ref = items.map((i) => i.external_ref).find((r) => !!r);
+    if (!ref) return null;
+    const row = get<{ batch_id: number; owner_name: string | null; phone: string | null; expected_phone: string | null; name: string }>(
+      `SELECT bi.batch_id, s.owner_name, s.phone, s.expected_phone, s.name FROM batch_items bi
+         JOIN batches b ON b.id = bi.batch_id LEFT JOIN sessions s ON s.id = b.session_id
+        WHERE bi.external_ref = ? AND bi.status IN ('pending','sent') ORDER BY bi.id DESC LIMIT 1`,
+      String(ref),
+    );
+    return row ? { batchId: row.batch_id, line: `${row.owner_name ?? row.name} · ${row.phone ?? row.expected_phone ?? '—'}` } : null;
+  };
+
   /**
    * Sin línea conectada el lote quedaría esperando sin enviar nada: se avisa en
    * el acto (salvo envíos programados o de prueba). Devuelve el mensaje o null.
@@ -405,6 +418,18 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
         });
         return;
       }
+      // La línea debe tener vinculado el número del propio usuario: si en esa
+      // sesión quedó escaneado otro teléfono, no se envía desde un número ajeno.
+      if (body.account && session.phone && session.expected_phone) {
+        const linked = String(session.phone).replace(/\D+/g, '');
+        const expected = String(session.expected_phone).replace(/\D+/g, '');
+        if (linked && expected && linked !== expected) {
+          res.status(422).json({
+            message: `Tu línea tiene vinculado el número ${linked}, que no es el tuyo (${expected}). Desvinculalo en Seguimiento ESAM › Conexión y escaneá el QR con tu teléfono.`,
+          });
+          return;
+        }
+      }
       // Programación con confirmación: se crea sin enviar y espera que el dueño
       // de la línea (o el Super Admin) la confirme desde la notificación.
       const needsConfirm = !!body.require_confirmation;
@@ -426,6 +451,8 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
             defaultMedia: body.default_media ?? null,
             meta: { source: 'integration', account: body.account ?? null, ...(body.meta ?? {}), category: body.category ?? null },
             dryRun: !!body.dry_run,
+            // Reenvío intencional (el usuario confirmó repetir lo ya enviado hoy).
+            allowResend: !!body.allow_resend,
             // Con confirmación se crea como programado (sin encolar) y enseguida pasa a «esperando confirmación».
             // (siempre la fecha de reserva: si la hora pedida ya pasó, createBatch lo encolaría sin confirmar)
             scheduledAt: needsConfirm ? '9999-12-31T00:00:00.000Z' : body.scheduled_at ?? null,
@@ -435,6 +462,20 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
 
         if (result.dryRun) {
           res.json({ dry_run: true, total: result.total, skipped: result.skipped });
+          return;
+        }
+        // No se creó nada: todos eran repetidos de hoy. Antes respondía 201 con
+        // batch_id null y cronogramas mostraba «Encolados… Lote #null».
+        if (!result.batchId) {
+          const prev = duplicateInfo(items);
+          res.status(409).json({
+            duplicate: true,
+            skipped: result.skipped,
+            message:
+              `No se envió: ${result.skipped} mensaje(s) ya se habían enviado hoy` +
+              (prev ? ` (lote #${prev.batchId}, desde ${prev.line})` : '') +
+              '. Para evitar duplicados no se repiten.',
+          });
           return;
         }
         if (needsConfirm && result.batchId) {

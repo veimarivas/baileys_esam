@@ -25,6 +25,8 @@ export interface CreateBatchOptions {
   meta?: Record<string, unknown>;
   dryRun?: boolean;
   scheduledAt?: string | null;
+  /** Reenvío intencional: no descarta lo ya enviado con la misma referencia. */
+  allowResend?: boolean;
 }
 
 export interface CreateBatchResult {
@@ -63,7 +65,9 @@ export function createBatch(opts: CreateBatchOptions, runner: BatchRunner): Crea
 
   for (const item of opts.items) {
     const chatId = String(item.chat_id ?? '');
-    const ref = item.external_ref ? String(item.external_ref) : null;
+    let ref = item.external_ref ? String(item.external_ref) : null;
+    // Reenvío intencional: referencia nueva para no chocar con la del envío anterior.
+    if (ref && opts.allowResend && runCheck(ref)) ref = `${ref}:r${Date.now()}`;
 
     if (ref) {
       const exists = runCheck(ref);

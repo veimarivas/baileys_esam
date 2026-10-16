@@ -1348,6 +1348,27 @@ nuevo `src/panel/admin-views.ts`.
 - Después de actualizar conviene vincular de nuevo cada línea («Empezar de cero»
   en Conexión) para que arranque con claves nuevas.
 
+## 36. Envíos desde un número ajeno, «Lote #null» y detalle de lotes (2026-10-15)
+
+- **Número ajeno:** en cronogramas, `SenderAccount` enviaba «sin cuenta» (por la
+  línea principal, que es el número de otra persona) cuando el usuario tenía
+  número pero no estaba autorizado, o era administrador sin número. Ahora
+  siempre se usa la cuenta propia; sin número o sin autorización, no se envía y
+  se explica por qué.
+- **Verificación en baileys:** si en la línea del usuario quedó escaneado otro
+  teléfono (el vinculado no coincide con el suyo), el envío se rechaza (422).
+- **«Encolados… Lote #null»:** pasaba cuando todos los mensajes ya se habían
+  enviado ese día (misma referencia). Baileys no creaba el lote pero respondía
+  201. Ahora responde **409** explicando desde qué lote y línea salieron.
+  cronogramas pregunta si se quiere **reenviar igual desde tu línea**
+  (`allow_resend`). Los controladores devuelven 409/422 con el mensaje (`errorEsam`).
+- **Lotes con quién y desde dónde:**
+  - cada tarjeta muestra la línea que envía (número y dueño) y quién lo pidió;
+  - el detalle tiene la ficha completa: línea y estado, solicitante, origen,
+    programa, tipo, fechas y confirmación;
+  - por destinatario: número, mensaje, estado, hora de envío y detalle.
+  - cronogramas manda `solicitado_por` en cada envío.
+
 ---
 
 ## Notas de operación

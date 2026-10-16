@@ -779,6 +779,15 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     }),
   );
 
+  /** Nombre de quien pidió cada lote (meta.account = id de cronogramas → usuario del panel). */
+  const withRequester = <T extends { meta?: string | null }>(rows: T[]): Array<T & { requester_name: string | null }> =>
+    rows.map((r) => {
+      const meta = r.meta ? (safeJson(r.meta) as Record<string, unknown>) : {};
+      const acc = meta?.account ? String(meta.account) : null;
+      const u = acc ? get<{ name: string | null; username: string | null }>('SELECT name, username FROM users WHERE source_uid = ?', acc) : undefined;
+      return { ...r, requester_name: (meta?.solicitado_por as string) ?? u?.name ?? u?.username ?? (meta?.source === 'panel' ? 'Panel' : null) };
+    });
+
   // Botón de emergencia: cancela todo envío masivo en curso, programado, en pausa o por confirmar.
   app.post(
     '/batches/stop-all',
@@ -803,7 +812,12 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     requireUser,
     requireSection('batches'),
     ah(async (req: AuthedRequest, res) => {
-      const rows = all<any>('SELECT * FROM batches ORDER BY id DESC LIMIT 100');
+      const rows = withRequester(
+        all<any>(
+          `SELECT b.*, s.owner_name AS line_owner, s.name AS line_name, COALESCE(s.phone, s.expected_phone) AS line_phone
+             FROM batches b LEFT JOIN sessions s ON s.id = b.session_id ORDER BY b.id DESC LIMIT 100`,
+        ),
+      );
       const pending = pendingGroupsFor(req.user!);
       const pendingCard = pending.length
         ? `<div class="alert alert-warning d-flex flex-column gap-1">
@@ -848,18 +862,43 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     requireUser,
     requireSection('batches'),
     ah(async (req: AuthedRequest, res) => {
-      const b = get<any>('SELECT * FROM batches WHERE id = ?', Number(req.params.id));
-      if (!b) return res.status(404).send(renderPlain('Lote', 'No encontrado'));
+      const raw = get<any>(
+        `SELECT b.*, s.owner_name AS line_owner, s.name AS line_name, s.status AS line_status,
+                COALESCE(s.phone, s.expected_phone) AS line_phone, s.expected_phone AS line_expected
+           FROM batches b LEFT JOIN sessions s ON s.id = b.session_id WHERE b.id = ?`,
+        Number(req.params.id),
+      );
+      if (!raw) return res.status(404).send(renderPlain('Lote', 'No encontrado'));
+      const b = withRequester([raw])[0];
       const items = all<any>('SELECT * FROM batch_items WHERE batch_id = ? ORDER BY id LIMIT 500', b.id);
       const meta = safeJson(b.meta ?? '{}') as any;
       const progress = b.total > 0 ? Math.round(((b.sent + b.failed + b.skipped) / b.total) * 100) : 0;
+      const origen = meta.origen === 'recordatorio_automatico'
+        ? 'Recordatorio automático de cronogramas'
+        : meta.origen_sistema === 'cronogramas' || meta.source === 'integration'
+          ? 'Cronogramas'
+          : meta.source === 'csv' ? 'Importación CSV' : 'Panel';
+      const ficha = kvList([
+        ['Línea que envía', `<span class="ff-monospace">${esc(b.line_phone ?? '—')}</span> · ${esc(b.line_owner ?? b.line_name ?? '—')} ${statusBadge(b.line_status)}`],
+        ['Pedido por', esc(b.requester_name ?? '—')],
+        ['Origen', esc(origen)],
+        ['Programa', esc(meta.programa ?? '—')],
+        ['Tipo', esc(meta.tipo ?? meta.category ?? '—') + (meta.modo ? ` · ${esc(meta.modo)}` : '')],
+        ['Creado', esc(fmtDate(b.created_at))],
+        ['Inició', b.started_at ? esc(fmtDate(b.started_at)) : '—'],
+        ['Terminó', b.finished_at ? esc(fmtDate(b.finished_at)) : '—'],
+        ...(b.scheduled_at && !String(b.scheduled_at).startsWith('9999') ? [['Programado para', esc(fmtDate(b.scheduled_at))] as [string, string]] : []),
+        ...(meta.confirm_group
+          ? [['Confirmación', `<a href="/batches/confirm/${encodeURIComponent(meta.confirm_group)}">${b.status === 'awaiting_confirmation' ? 'Esperando confirmación →' : 'Ver programación →'}</a>`] as [string, string]]
+          : []),
+      ]);
       const body = `
         <div class="card" data-batch="${b.id}">
           <div class="card-header d-flex align-items-center gap-2">
-            <h5 class="card-title mb-0 flex-grow-1">${esc(b.name ?? 'Lote')}</h5>${statusBadge(b.status)}
+            <h5 class="card-title mb-0 flex-grow-1">#${b.id} · ${esc(b.name ?? 'Lote')}</h5>${statusBadge(b.status)}
           </div>
           <div class="card-body">
-            <p class="text-muted mb-3"><i class="ri-graduation-cap-line me-1"></i>${esc(meta.programa ?? '—')} · ${esc(meta.tipo ?? meta.category ?? '')}</p>
+            <div class="mb-3">${ficha}</div>
             ${b.status === 'paused' && meta.anti_ban_pause
               ? `<div class="alert alert-warning d-flex gap-2 align-items-start" role="status"><i class="ri-shield-star-line fs-5"></i><div><b>Pausado por el anti-baneo.</b> ${esc(meta.anti_ban_pause)}</div></div>`
               : ''}
@@ -886,13 +925,15 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
           </div>
         </div>
         <div class="card"><div class="card-body pt-0">${table(
-          ['#', 'Destinatario', 'Mensaje', 'Estado', 'Error'],
+          ['#', 'Destinatario', 'Número', 'Mensaje', 'Estado', 'Enviado', 'Detalle'],
           items.map((it) => [
             String(it.id),
-            esc(it.contact_name ?? it.chat_id),
-            `<span class="text-muted">${esc((it.body ?? '').slice(0, 60))}</span>`,
+            esc(it.contact_name ?? '—'),
+            `<span class="ff-monospace">${esc(String(it.chat_id ?? '').replace(/@.*$/, ''))}</span>`,
+            `<span class="text-muted" title="${esc(it.body ?? '')}">${esc((it.body ?? '').slice(0, 80))}${(it.body ?? '').length > 80 ? '…' : ''}</span>`,
             statusBadge(it.status),
-            `<span class="text-muted">${esc((it.error ?? '').slice(0, 60))}</span>`,
+            it.status === 'sent' && it.updated_at ? `<span class="text-muted">${esc(fmtDate(it.updated_at))}</span>` : '—',
+            `<span class="text-muted">${esc((it.error ?? '').slice(0, 80))}</span>`,
           ]),
         )}</div></div>`;
       res.send(

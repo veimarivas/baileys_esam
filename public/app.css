@@ -3786,6 +3786,13 @@ html[data-bs-theme="dark"] .tpl-phone { background: #0b141a; }
 .pl-dialog-sub { font-size: 0.78rem; color: var(--ib-ink-mute, #98a2b3); margin: 0.2rem 0 0.6rem; }
 .pl-dialog-actions { display: flex; justify-content: flex-end; gap: 0.4rem; margin-top: 0.6rem; }
 
+/* Lotes: línea que envía y quién lo pidió */
+.batch-who { display: flex; flex-direction: column; gap: 0.15rem; padding: 0.45rem 0.6rem; border-radius: 10px; background: var(--vz-light, #f6f8fb); }
+.batch-line { font-size: 0.78rem; display: flex; align-items: center; gap: 0.3rem; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.batch-line i { color: #25a35a; }
+.batch-line .ri-user-line { color: var(--vz-primary, #045474); }
+html[data-bs-theme="dark"] .batch-who { background: rgba(255, 255, 255, 0.05); }
+
 /* Foto de quien escribe en un grupo */
 .bubble-row.in .bubble-avatar { align-self: flex-end; flex-shrink: 0; margin-right: 0.4rem; cursor: pointer; }
 .bubble-row.in .bubble-avatar .avatar-xs { width: 28px; height: 28px; font-size: 0.62rem; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; }

@@ -325,6 +325,16 @@ export function batchList(rows: BatchRow[]): string {
       const progress = b.total > 0 ? Math.round(((b.sent + b.failed + b.skipped) / b.total) * 100) : 0;
       const meta = b.meta ? safeJson(b.meta) : {};
       const programa = (meta as any)?.programa ? String((meta as any).programa) : '';
+      // Desde qué línea (número y dueño) sale y quién lo pidió.
+      const x = b as any;
+      const linea = x.line_phone || x.line_owner || x.line_name
+        ? `<div class="batch-line" title="Línea de WhatsApp desde la que se envía"><i class="ri-whatsapp-line"></i>
+             <span class="ff-monospace">${esc(x.line_phone ?? '—')}</span> · ${esc(x.line_owner ?? x.line_name ?? '')}</div>`
+        : '';
+      const pide = (meta as any)?.solicitado_por ?? x.requester_name ?? null;
+      const solicitante = pide
+        ? `<div class="batch-line" title="Quién pidió el envío"><i class="ri-user-line"></i> ${esc(String(pide))}${(meta as any)?.origen_sistema ? ` <span class="text-muted">· ${esc(String((meta as any).origen_sistema))}</span>` : ''}</div>`
+        : '';
       return `<div class="col-xxl-4 col-md-6" data-batch="${b.id}">
         <div class="card card-hover card-height-100">
           <div class="card-header d-flex align-items-center gap-2">
@@ -336,6 +346,7 @@ export function batchList(rows: BatchRow[]): string {
             ${statusBadge(b.status)}
           </div>
           <div class="card-body">
+            ${linea || solicitante ? `<div class="batch-who mb-2">${linea}${solicitante}</div>` : ''}
             <div class="d-flex justify-content-between align-items-baseline mb-2">
               <span class="stat-label">Progreso</span>
               <span class="fw-bold">${progress}%</span>

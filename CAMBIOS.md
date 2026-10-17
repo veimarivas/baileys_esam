@@ -1443,6 +1443,23 @@ sin tocar backend.
 
 ---
 
+## 39. Notas por área, columnas con desplazamiento y fotos de miembros (2026-10-17)
+
+- **Notas › Áreas:** barra de áreas (Todas, Académico, Contabilidad, Marketing,
+  Administración, Consulta, Sin área) con su cantidad, que filtra la lista y el
+  pipeline.
+  - Cada nota pertenece al área de su responsable (si está derivada) o de quien
+    la registró (`author_area`).
+  - Las tarjetas muestran su área cuando se ven todas, y se recuerda el área
+    elegida.
+- **Pipeline:** cada columna tiene su propio desplazamiento vertical cuando hay
+  muchas notas (alto máximo según la pantalla) y el encabezado queda fijo.
+  Compatible con el arrastre SortableJS de la sección 37.
+- **Ficha del grupo:** la lista de miembros muestra la foto de perfil de cada uno
+  (se pide al verse en pantalla; sin foto, las iniciales).
+
+---
+
 ## Notas de operación
 
 - En producción usar `start-baileys.bat` / pm2 / systemd (no `npm run dev`).

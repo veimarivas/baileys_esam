@@ -114,6 +114,8 @@ export interface ContactNoteWithAuthor extends ContactNoteRow {
   done_by_name: string | null;
   assigned_name: string | null;
   assigned_area: string | null;
+  /** Área de quien registró la nota (para ordenar /notes por área). */
+  author_area?: string | null;
   assigned_by_name: string | null;
   contacted_by_name: string | null;
   /** Línea (sesión) desde la que se registró la nota. */
@@ -125,7 +127,7 @@ export interface ContactNoteWithAuthor extends ContactNoteRow {
 
 /** Columnas comunes de una nota con su autor, quién la completó y su línea de origen. */
 const NOTE_SELECT = `SELECT n.*, u.name AS author_name, d.name AS done_by_name, a.name AS assigned_name,
-    a.esam_area AS assigned_area, ab.name AS assigned_by_name, cb.name AS contacted_by_name,
+    a.esam_area AS assigned_area, u.esam_area AS author_area, ab.name AS assigned_by_name, cb.name AS contacted_by_name,
     ct.session_id AS session_id, s.name AS session_name, COALESCE(s.phone, s.expected_phone) AS session_phone
   FROM contact_notes n
   JOIN contacts ct ON ct.id = n.contact_id
@@ -792,7 +794,7 @@ export function listAllNotes(opts: {
       : 'ORDER BY n.created_at DESC, n.id DESC';
   const rows = all<GlobalNote>(
     `SELECT n.*, u.name AS author_name, d.name AS done_by_name, x.name AS deleted_by_name, a.name AS assigned_name,
-            a.esam_area AS assigned_area, ab.name AS assigned_by_name, cb.name AS contacted_by_name,
+            a.esam_area AS assigned_area, u.esam_area AS author_area, ab.name AS assigned_by_name, cb.name AS contacted_by_name,
             COALESCE(
               (SELECT pn.full_name FROM person_names pn WHERE pn.phone_key = COALESCE(ct.phone_key, ct.chat_id)),
               (SELECT pp.full_name FROM person_programs pp WHERE pp.phone_key = ct.phone_key AND pp.full_name IS NOT NULL

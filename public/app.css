@@ -3985,6 +3985,35 @@ html[data-bs-theme="dark"] .pl-dialog textarea:focus { border-color: var(--brand
   .np-stat:hover, .np-stat.on, .np-cards .nk-card:hover, .pl-card:hover { transform: none !important; }
 }
 
+/* Notas: áreas (filtro de lista y pipeline) */
+.np-areas { display: flex; gap: 0.4rem; overflow-x: auto; padding: 0.15rem 0 0.6rem; margin-bottom: 0.4rem; scrollbar-width: thin; }
+.np-area {
+  flex-shrink: 0; display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.38rem 0.75rem;
+  border: 1px solid var(--nk-line, #e6ebf1); border-radius: 999px; background: var(--nk-surface, #fff);
+  color: var(--esam-ink, #1f2937); font-size: 0.8rem; font-weight: 600; transition: all 0.15s ease;
+}
+.np-area:hover { border-color: var(--area); color: var(--area); }
+.np-area .np-area-ic { color: var(--area); font-size: 0.95rem; }
+.np-area .np-area-n { min-width: 1.4rem; padding: 0 0.4rem; border-radius: 999px; font-size: 0.7rem; text-align: center; background: color-mix(in srgb, var(--area) 12%, transparent); color: var(--area); }
+.np-area.on { background: var(--area); border-color: var(--area); color: #fff; box-shadow: 0 6px 14px -8px var(--area); }
+.np-area.on .np-area-ic { color: #fff; }
+.np-area.on .np-area-n { background: rgba(255, 255, 255, 0.25); color: #fff; }
+.np-area-badge {
+  display: inline-flex; align-items: center; gap: 0.2rem; padding: 0.05rem 0.5rem; border-radius: 999px;
+  font-size: 0.66rem; font-weight: 700; color: var(--area); background: color-mix(in srgb, var(--area) 12%, transparent); white-space: nowrap;
+}
+.nk-contact .np-area-badge { margin-left: auto; }
+.pl-area-row { margin-top: 0.35rem; }
+html[data-bs-theme="dark"] .np-area { background: #1d2125; border-color: #2a2f34; color: #ced4da; }
+
+/* Pipeline: columnas con desplazamiento vertical propio cuando hay muchas notas */
+.notes-page .np-board { align-items: stretch; }
+.notes-page .pl-col { max-height: calc(100dvh - 250px); min-height: 260px; }
+.notes-page .pl-col-body { overflow-y: auto; min-height: 0; padding-right: 0.2rem; margin-right: -0.2rem; scrollbar-width: thin; overscroll-behavior: contain; }
+.notes-page .pl-col-body::-webkit-scrollbar { width: 6px; }
+.notes-page .pl-col-body::-webkit-scrollbar-thumb { background: rgba(100, 116, 139, 0.35); border-radius: 6px; }
+.notes-page .pl-col-head { position: sticky; top: 0; }
+
 /* Lotes: línea que envía y quién lo pidió */
 .batch-who { display: flex; flex-direction: column; gap: 0.15rem; padding: 0.45rem 0.6rem; border-radius: 10px; background: var(--vz-light, #f6f8fb); }
 .batch-line { font-size: 0.78rem; display: flex; align-items: center; gap: 0.3rem; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

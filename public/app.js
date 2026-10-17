@@ -1079,6 +1079,7 @@
         ? '<div class="nk-contact">' + avatarHtml(name, 'avatar-xs') +
             '<a href="/conversations/' + encodeURIComponent(n.chat_id) + '" class="nk-contact-name" title="Abrir la conversación">' + escapeHtml(name) + '</a>' +
             (n.contact_phone && n.contact_phone !== name ? '<span class="nk-contact-phone">' + escapeHtml(n.contact_phone) + '</span>' : '') +
+            (opts.areaBadge ? opts.areaBadge(n) : '') +
           '</div>'
         : '';
       var due = n.due_at
@@ -2991,7 +2992,10 @@
         var primary = nm || num || String(p.id || '').split('@')[0];
         var initialsName = memberLabel(p);
         return '<button type="button" class="member-item" data-jid="' + escapeHtml(p.id) + '" title="Iniciar conversación">' +
-          '<span class="avatar-xs ' + avClass(initialsName) + '">' + escapeHtml(initials(initialsName)) + '</span>' +
+          // Foto de perfil de cada miembro (si es privada o no hay, quedan las iniciales).
+          avatarHtml(initialsName, 'avatar-xs', p.id && state.selectedSession
+            ? '/inbox/participant-avatar/' + encodeURIComponent(state.selectedSession) + '/' + encodeURIComponent(p.id)
+            : null) +
           '<span class="member-main">' +
             '<span class="member-name">' + escapeHtml(primary) + '</span>' +
             (nm && num ? '<span class="member-num">' + escapeHtml(num) + '</span>' : '') +
@@ -3203,9 +3207,63 @@
       tagColors: root.querySelector('#tag-colors'),
       tagSave: root.querySelector('#tag-save'),
     };
-    var st = { status: 'pending', tag: null, tags: [], colors: ['#045474'], color: '#045474', notes: [], stats: null, managing: false, view: 'list' };
+    var st = { status: 'pending', tag: null, tags: [], colors: ['#045474'], color: '#045474', notes: [], stats: null, managing: false, view: 'list', area: 'all' };
     try { if (localStorage.getItem('notes-view') === 'board') st.view = 'board'; } catch (_) {}
+    try { st.area = localStorage.getItem('notes-area') || 'all'; } catch (_) {}
     els.board = root.querySelector('#np-board');
+    els.areas = root.querySelector('#np-areas');
+
+    /* ── Áreas: la nota pertenece al área de su responsable (o de quien la registró) ── */
+    var AREA_INFO = {
+      academico: { label: 'Académico', icon: 'ri-graduation-cap-line', color: '#2563eb' },
+      contabilidad: { label: 'Contabilidad', icon: 'ri-money-dollar-circle-line', color: '#0e9f6e' },
+      marketing: { label: 'Marketing', icon: 'ri-megaphone-line', color: '#d97706' },
+      admin: { label: 'Administración', icon: 'ri-shield-user-line', color: '#7c3aed' },
+      consulta: { label: 'Consulta', icon: 'ri-question-answer-line', color: '#0891b2' },
+      '': { label: 'Sin área', icon: 'ri-inbox-line', color: '#64748b' },
+    };
+    var AREA_ORDER = ['academico', 'contabilidad', 'marketing', 'admin', 'consulta', ''];
+
+    function areaOf(n) { return String(n.assigned_area || n.author_area || '').toLowerCase(); }
+    function areaInfo(key) {
+      return AREA_INFO[key] || { label: key.charAt(0).toUpperCase() + key.slice(1), icon: 'ri-team-line', color: '#475569' };
+    }
+    function visibleNotes() {
+      return st.area === 'all' ? st.notes : st.notes.filter(function (n) { return areaOf(n) === st.area; });
+    }
+
+    function renderAreas() {
+      if (!els.areas) return;
+      var base = st.notes.filter(function (n) { return !n.deleted_at || st.status === 'trash'; });
+      var counts = {};
+      base.forEach(function (n) { var k = areaOf(n); counts[k] = (counts[k] || 0) + 1; });
+      var keys = AREA_ORDER.filter(function (k) { return counts[k]; })
+        .concat(Object.keys(counts).filter(function (k) { return AREA_ORDER.indexOf(k) === -1; }));
+      // Si el área elegida quedó sin notas, se vuelve a «Todas».
+      if (st.area !== 'all' && !counts[st.area]) st.area = 'all';
+      var chip = function (key, label, icon, color, n) {
+        var on = st.area === key;
+        return '<button type="button" class="np-area' + (on ? ' on' : '') + '" role="tab" aria-selected="' + on + '" data-area="' + escapeHtml(key) + '" style="--area:' + color + '">' +
+          '<span class="np-area-ic ' + icon + '" aria-hidden="true"></span><span class="np-area-name">' + escapeHtml(label) + '</span>' +
+          '<span class="np-area-n">' + n + '</span></button>';
+      };
+      els.areas.innerHTML = chip('all', 'Todas las áreas', 'ri-apps-2-line', '#045474', base.length) +
+        keys.map(function (k) { var i = areaInfo(k); return chip(k, i.label, i.icon, i.color, counts[k]); }).join('');
+      els.areas.hidden = base.length === 0;
+      Array.prototype.forEach.call(els.areas.querySelectorAll('.np-area'), function (b) {
+        b.addEventListener('click', function () {
+          st.area = b.getAttribute('data-area');
+          try { localStorage.setItem('notes-area', st.area); } catch (_) {}
+          renderAreas();
+          if (st.view === 'board') renderBoard(); else renderNotes();
+        });
+      });
+    }
+
+    function areaBadge(n) {
+      var i = areaInfo(areaOf(n));
+      return '<span class="np-area-badge" style="--area:' + i.color + '" title="Área"><span class="' + i.icon + '" aria-hidden="true"></span>' + escapeHtml(i.label) + '</span>';
+    }
 
     function loadTags() {
       return api('/notes/tags').then(function (d) {
@@ -3233,6 +3291,7 @@
         st.notes = (d && d.notes) || [];
         st.stats = d && d.stats;
         renderStats();
+        renderAreas();
         if (st.view === 'board') renderBoard(); else renderNotes();
         markSeen();
       }).catch(function (e) { toast(e.message, true); })
@@ -3298,7 +3357,7 @@
     }
 
     function renderNotes() {
-      var notes = st.notes;
+      var notes = visibleNotes();
       if (!notes.length) {
         var msg = {
           overdue: '¡Al día! No hay seguimientos vencidos.',
@@ -3311,7 +3370,7 @@
           done: 'Todavía no se marcó ninguna nota como resuelta.',
           all: 'Todavía no hay notas.',
         }[st.status];
-        var filtered = els.search.value.trim() || st.tag || els.mine.checked || (els.assigned && els.assigned.checked);
+        var filtered = els.search.value.trim() || st.tag || st.area !== 'all' || els.mine.checked || (els.assigned && els.assigned.checked);
         els.list.innerHTML = '<div class="np-empty"><span class="' + (st.status === 'overdue' ? 'ri-checkbox-circle-line' : 'ri-sticky-note-line') + '" aria-hidden="true"></span>' +
           '<p>' + (filtered ? 'No hay notas para los filtros elegidos.' : msg) + '</p>' +
           '<span class="np-empty-sub">Las notas se registran desde la ficha del contacto, dentro de cada conversación.</span></div>';
@@ -3340,7 +3399,7 @@
         var label = byDue ? GROUP_LABELS[k] : k;
         return '<section class="np-group np-group-' + (byDue ? k : 'time') + '">' +
           '<h6 class="np-group-title">' + escapeHtml(label) + ' <span>' + groups[k].length + '</span></h6>' +
-          '<div class="np-cards">' + groups[k].map(function (n) { return NoteKit.cardHtml(n, { showContact: true }); }).join('') + '</div>' +
+          '<div class="np-cards">' + groups[k].map(function (n) { return NoteKit.cardHtml(n, { showContact: true, areaBadge: st.area === 'all' ? areaBadge : null }); }).join('') + '</div>' +
         '</section>';
       }).join('');
       var clearFocus = els.list.querySelector('#np-focus-clear');
@@ -3425,6 +3484,7 @@
         (text ? '<div class="pl-text">' + escapeHtml(text.slice(0, 220)) + '</div>' : '') +
         (n.contact_result && n.contacted_at ? '<div class="pl-result"><span class="ri-chat-check-line"></span> ' + escapeHtml(n.contact_result.slice(0, 140)) + '</div>' : '') +
         (tags ? '<div class="pl-tags">' + tags + '</div>' : '') +
+        (st.area === 'all' ? '<div class="pl-area-row">' + areaBadge(n) + '</div>' : '') +
         '<div class="pl-foot">' +
           (n.due_at ? '<span class="pl-due pl-due-' + (n.done_at ? 'done' : due) + '"><span class="ri-calendar-event-line"></span> ' + escapeHtml(NoteKit.dueLabel(n)) + '</span>' : '') +
           (n.assigned_name ? '<span class="pl-who" title="Responsable"><span class="ri-user-received-2-line"></span> ' + escapeHtml(n.assigned_name) + '</span>'
@@ -3445,7 +3505,7 @@
       var cutoff = Date.now() - 14 * 86400000;
       var cols = {};
       STAGE_KEYS.forEach(function (k) { cols[k] = []; });
-      st.notes.forEach(function (n) {
+      visibleNotes().forEach(function (n) {
         if (n.deleted_at) return;
         var k = stageOf(n);
         if (k === 'done' && new Date(n.done_at).getTime() < cutoff) return;

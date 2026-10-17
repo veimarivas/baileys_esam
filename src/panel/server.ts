@@ -137,6 +137,7 @@ export function renderNotesPage(): string {
           <button type="button" id="notes-trash" class="np-trash-btn" aria-pressed="false" title="Notas eliminadas (se pueden restaurar)">
             <span class="ri-delete-bin-6-line" aria-hidden="true"></span> Papelera <span class="np-trash-count"></span></button>
         </div>
+        <div id="np-areas" class="np-areas" role="tablist" aria-label="Área"></div>
         <div id="np-active" class="np-active"></div>
         <div id="notes-list" class="np-list" aria-live="polite"></div>
         <div id="np-board" class="np-board" hidden aria-live="polite"></div>

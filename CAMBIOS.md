@@ -1369,6 +1369,47 @@ nuevo `src/panel/admin-views.ts`.
   - por destinatario: número, mensaje, estado, hora de envío y detalle.
   - cronogramas manda `solicitado_por` en cada envío.
 
+## 37. Notas: arrastre real en el Pipeline y rediseño de la vista (2026-10-16)
+
+- **Arrastre y soltar en el Pipeline** (`public/app.js`): se reemplaza el arrastre
+  nativo HTML5 (que no iniciaba en varios navegadores y en táctil) por
+  **SortableJS 1.15.2**, ya vendorizado en
+  `public/assets/libs/sortablejs/Sortable.min.js` y cargado **solo** la primera
+  vez que se abre el tablero (inyección desde `initNotes()`).
+  - `forceFallback` + puntero: funciona con mouse y táctil (retardo de 180 ms en
+    táctil para poder scrollear antes de arrastrar) y no depende de `dragstart`.
+  - Se arrastra desde cualquier punto de la tarjeta; **no** desde links ni
+    botones (`filter: 'a, button, input'` con `preventOnFilter: false`, así el
+    link de contacto sigue navegando). Aparece un ícono de agarre al pasar el
+    cursor.
+  - Las notas sin permiso quedan `is-locked` y no se pueden arrastrar; siguen
+    disponibles los botones de etapa.
+  - Al soltar se reutiliza `moveNote()`: mismo `POST /inbox/notes/:id/stage`,
+    mismo diálogo «Contactado» y mismo toast. Si se cancela o falla la API,
+    `renderBoard()` devuelve la tarjeta a su etapa; si no cambió de etapa se
+    redibuja igual para respetar el orden del servidor.
+  - El refresco en vivo (SSE `note`) se pausa mientras hay un arrastre y se
+    retoma al soltar (con tope de ~9 s), para que no se corte a mitad de drag.
+  - Las instancias se destruyen en cada `renderBoard()` (token de render) y si
+    Sortable no llegara a cargar sigue funcionando el respaldo nativo anterior.
+- **Rediseño visual de `/notes`** (`public/app.css`, solo clases `np-*` / `pl-*`,
+  con tokens `--nk-*`, en claro y oscuro; no se toca `NoteKit`):
+  - indicadores de estado con barra de acento, tinte y estados hover/focus;
+  - barra de herramientas: buscador, orden, filtros como píldoras y papelera;
+  - títulos de grupo con filete y contador; tarjetas con elevación al hover;
+  - barra lateral: etiquetas con contadores, plantillas y tips destacados;
+  - Pipeline: control Lista/Pipeline segmentado, columnas de igual altura con
+    cintillo de color por etapa, columna destino resaltada, estados de arrastre
+    (clon flotante, hueco punteado, tarjeta elevada) y estado vacío con ícono;
+  - diálogo «¿Cómo fue la comunicación?» pulido, responsive móvil (búsqueda a
+    ancho completo, columnas con scroll-snap) y `prefers-reduced-motion`.
+- **Sin cambios de backend**: mismos ids, endpoints, permisos y flujos.
+- **Verificación:** `npm run typecheck`, `node --check public/app.js` y pruebas
+  en Chrome headless con un mock estático de la vista: capturas en claro,
+  oscuro y móvil, simulación del arrastre (confirma `onEnd → moveNote(id, etapa)`
+  con la tarjeta en la columna destino y las clases de arrastre) y comprobación
+  de que el link de contacto **no** inicia arrastre.
+
 ---
 
 ## Notas de operación

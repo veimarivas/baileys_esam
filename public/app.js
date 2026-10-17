@@ -3364,6 +3364,29 @@
       { key: 'done', label: 'Resuelta', icon: 'ri-check-double-line', hint: 'Cerradas en los últimos 14 días.' },
     ];
     var STAGE_KEYS = STAGES.map(function (s) { return s.key; });
+    // Estado del tablero: instancias activas, token de render y si hay un
+    // arrastre en curso (mientras arrastra no se refresca desde el servidor).
+    var boardSortables = [];
+    var boardToken = 0;
+    var draggingNote = false;
+    var sortableLoading = null;
+
+    // SortableJS ya viene en el repo (vendor) y se pide solo la primera vez que
+    // se abre el Pipeline: no carga en las demás páginas. Si no llegara a
+    // cargar, sigue funcionando el arrastre nativo de siempre.
+    function loadSortable() {
+      if (window.Sortable) return Promise.resolve(true);
+      if (sortableLoading) return sortableLoading;
+      sortableLoading = new Promise(function (resolve) {
+        var s = document.createElement('script');
+        s.src = '/assets/libs/sortablejs/Sortable.min.js?v=1.15.2';
+        s.async = true;
+        s.onload = function () { resolve(!!window.Sortable); };
+        s.onerror = function () { sortableLoading = null; resolve(false); };
+        document.head.appendChild(s);
+      });
+      return sortableLoading;
+    }
 
     function stageOf(n) {
       if (n.done_at) return 'done';
@@ -3381,12 +3404,16 @@
       var tags = (n.tags || []).map(function (t) { return '<span class="pl-tag" style="--tag:' + t.color + '" title="' + escapeHtml(t.name) + '">' + escapeHtml(t.name) + '</span>'; }).join('');
       var movable = canMove(n);
       var idx = STAGE_KEYS.indexOf(stageOf(n));
-      return '<article class="pl-card' + (due === 'overdue' && !n.done_at ? ' is-overdue' : '') + (NoteKit.isPinned(n) && !n.done_at ? ' is-pinned' : '') + '"' +
-          ' data-id="' + n.id + '"' + (movable ? ' draggable="true"' : '') + ' tabindex="0">' +
+      return '<article class="pl-card' + (due === 'overdue' && !n.done_at ? ' is-overdue' : '') + (NoteKit.isPinned(n) && !n.done_at ? ' is-pinned' : '') +
+          (movable ? '' : ' is-locked') + '"' +
+          ' data-id="' + n.id + '" tabindex="0">' +
         '<div class="pl-top">' +
           '<a class="pl-contact" href="/conversations/' + encodeURIComponent(n.chat_id) + '" title="Abrir la conversación">' +
             '<span class="ri-whatsapp-line" aria-hidden="true"></span>' + escapeHtml(contact) + '</a>' +
-          (NoteKit.isPinned(n) && !n.done_at ? '<span class="pl-pin ri-pushpin-2-fill" title="Importante"></span>' : '') +
+          '<span class="pl-tools">' +
+            (NoteKit.isPinned(n) && !n.done_at ? '<span class="pl-pin ri-pushpin-2-fill" title="Importante"></span>' : '') +
+            (movable ? '<span class="pl-grip ri-draggable" title="Arrastrá la tarjeta para moverla de etapa" aria-hidden="true"></span>' : '') +
+          '</span>' +
         '</div>' +
         (text ? '<div class="pl-text">' + escapeHtml(text.slice(0, 220)) + '</div>' : '') +
         (n.contact_result && n.contacted_at ? '<div class="pl-result"><span class="ri-chat-check-line"></span> ' + escapeHtml(n.contact_result.slice(0, 140)) + '</div>' : '') +
@@ -3406,6 +3433,8 @@
     }
 
     function renderBoard() {
+      killBoardDrag();
+      var token = ++boardToken;
       var cutoff = Date.now() - 14 * 86400000;
       var cols = {};
       STAGE_KEYS.forEach(function (k) { cols[k] = []; });
@@ -3429,10 +3458,11 @@
           '<header class="pl-col-head"><span class="pl-col-ic ' + s.icon + '" aria-hidden="true"></span>' +
             '<span class="pl-col-title">' + s.label + '</span><span class="pl-col-count">' + list.length + '</span></header>' +
           '<p class="pl-col-hint">' + s.hint + '</p>' +
-          '<div class="pl-col-body">' + (list.length ? list.map(boardCard).join('') : '<div class="pl-empty">Arrastrá una nota aquí</div>') + '</div>' +
+          '<div class="pl-col-body">' + (list.length ? list.map(boardCard).join('')
+            : '<div class="pl-empty"><span class="ri-drag-drop-line" aria-hidden="true"></span><b>Arrastrá una nota aquí</b></div>') + '</div>' +
         '</section>';
       }).join('');
-      bindBoard();
+      bindBoard(token);
     }
 
     function moveNote(id, to) {
@@ -3474,9 +3504,75 @@
       ta.addEventListener('keydown', function (e) { if (e.key === 'Escape') close(); });
     }
 
-    function bindBoard() {
+    // Destruye las instancias antes de volver a dibujar (si no, quedan
+    // escuchando elementos viejos y el arrastre se rompe).
+    function killBoardDrag() {
+      boardSortables.forEach(function (inst) { try { inst.destroy(); } catch (_) {} });
+      boardSortables = [];
+      draggingNote = false;
+      document.body.classList.remove('pl-dragging-on');
+    }
+
+    function bindMoveButtons() {
+      Array.prototype.forEach.call(els.board.querySelectorAll('.pl-mv'), function (b) {
+        b.addEventListener('click', function () {
+          var id = Number(b.closest('.pl-card').getAttribute('data-id'));
+          moveNote(id, b.getAttribute('data-to'));
+        });
+      });
+    }
+
+    // Arrastre principal: SortableJS con puntero (mouse y táctil), que no
+    // depende del arrastre nativo del navegador. Al soltar se usa la misma
+    // `moveNote()` de siempre (misma API, mismo diálogo, mismo toast).
+    function bindSortableBoard() {
+      Array.prototype.forEach.call(els.board.querySelectorAll('.pl-col-body'), function (body) {
+        boardSortables.push(window.Sortable.create(body, {
+          group: 'notes-pipeline',
+          draggable: '.pl-card:not(.is-locked)',
+          animation: 180,
+          forceFallback: true,
+          fallbackClass: 'pl-fallback',
+          fallbackOnBody: true,
+          ghostClass: 'pl-ghost',
+          chosenClass: 'pl-chosen',
+          // Links y botones siguen siendo clickeables (no inician arrastre).
+          filter: 'a, button, input',
+          preventOnFilter: false,
+          // Táctil: mantener un instante para arrastrar; antes se puede scrollear.
+          delay: 180,
+          delayOnTouchOnly: true,
+          touchStartThreshold: 6,
+          scroll: true,
+          scrollSensitivity: 90,
+          scrollSpeed: 14,
+          onStart: function () {
+            draggingNote = true;
+            document.body.classList.add('pl-dragging-on');
+          },
+          onEnd: function (evt) {
+            draggingNote = false;
+            document.body.classList.remove('pl-dragging-on');
+            var id = Number((evt.item || {}).getAttribute ? evt.item.getAttribute('data-id') : 0);
+            var toCol = evt.to && evt.to.closest ? evt.to.closest('.pl-col') : null;
+            var to = toCol ? toCol.getAttribute('data-stage') : '';
+            var note = st.notes.filter(function (x) { return x.id === id; })[0];
+            // Si no cambió de etapa (o faltan datos), redibujamos para dejar el
+            // tablero tal como está en el servidor. Diferido: no se destruye la
+            // instancia Sortable en el medio de su propio evento.
+            if (!note || !to || stageOf(note) === to) { setTimeout(renderBoard, 0); return; }
+            moveNote(id, to);
+          },
+        }));
+      });
+    }
+
+    // Respaldo: si Sortable no llegara a cargar, el arrastre nativo HTML5.
+    function bindNativeBoard() {
       var dragId = null;
-      Array.prototype.forEach.call(els.board.querySelectorAll('.pl-card[draggable="true"]'), function (c) {
+      Array.prototype.forEach.call(els.board.querySelectorAll('.pl-card'), function (c) {
+        if (c.classList.contains('is-locked')) return;
+        c.setAttribute('draggable', 'true');
         c.addEventListener('dragstart', function (e) {
           dragId = Number(c.getAttribute('data-id'));
           c.classList.add('dragging');
@@ -3494,11 +3590,14 @@
           dragId = null;
         });
       });
-      Array.prototype.forEach.call(els.board.querySelectorAll('.pl-mv'), function (b) {
-        b.addEventListener('click', function () {
-          var id = Number(b.closest('.pl-card').getAttribute('data-id'));
-          moveNote(id, b.getAttribute('data-to'));
-        });
+    }
+
+    function bindBoard(token) {
+      bindMoveButtons();
+      if (window.Sortable) { bindSortableBoard(); return; }
+      loadSortable().then(function (ok) {
+        if (token !== boardToken) return;   // el tablero se volvió a dibujar
+        if (ok) bindSortableBoard(); else bindNativeBoard();
       });
     }
 
@@ -3624,11 +3723,17 @@
       loadNotes();
     });
     // En vivo: lo que el equipo registra o completa aparece sin recargar.
+    // Si llega un aviso con un arrastre activo, se espera: redibujar el
+    // tablero a mitad de drag lo cortaría.
     if (liveSource()) {
       var liveTimer = null;
       liveSource().addEventListener('note', function () {
         clearTimeout(liveTimer);
-        liveTimer = setTimeout(refresh, 600);
+        var tries = 12; // a lo sumo ~9 s esperando a que termine el arrastre
+        liveTimer = setTimeout(function retry() {
+          if (draggingNote && tries-- > 0) { liveTimer = setTimeout(retry, 700); return; }
+          refresh();
+        }, 600);
       });
     }
     els.search.addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(loadNotes, 250); });

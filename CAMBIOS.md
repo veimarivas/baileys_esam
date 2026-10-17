@@ -1412,6 +1412,37 @@ nuevo `src/panel/admin-views.ts`.
 
 ---
 
+## 38. Pipeline: modal «Contactado» con fondo y etapa que sigue a la columna
+
+Dos correcciones sobre el tablero del Pipeline (`public/app.js`, `public/app.css`),
+sin tocar backend.
+
+- **Diálogo «¿Cómo fue la comunicación?» sin fondo.** El modal se monta en
+  `<body>`, fuera de `.notes-page`, pero sus reglas usaban los tokens `--nk-*`,
+  que solo existen dentro de esa página: al no resolver, el panel salía
+  transparente (solo texto flotando sobre la capa oscura). Ahora usa los tokens
+  globales `--esam-*` (definidos en `:root` y redefinidos en el modo oscuro), por
+  lo que respeta claro/oscuro. Se añadieron además fondos diferenciados para la
+  capa y la caja de texto según el tema. (También se corrigió un `*/` que, dentro
+  del comentario explicativo, cerraba el bloque CSS antes de tiempo.)
+- **La tarjeta no quedaba en la columna soltada.** `stageOf()` calculaba la etapa
+  ignorando la marca `pipeline_stage` que guarda el servidor y adivinando por
+  «asignada y vista ⇒ En gestión». Resultado: al mover una nota a «Por hacer» (o
+  a cualquier etapa cuyo valor no fuera `doing`) la tarjeta volvía a «En
+  gestión»/etapa anterior tras refrescar. Ahora la etapa la define lo que guardó
+  el servidor (`pipeline_stage`, más `contacted_at`/`done_at` para las etapas
+  Contactado y Resuelta); solo las notas antiguas sin etapa guardada se infieren
+  como antes. Además `moveNote()` aplica de inmediato la nota devuelta por la
+  API y redibuja el tablero.
+- **Verificación:** `node --check public/app.js`, balance de llaves del CSS y
+  una batería de 72 transiciones de etapa (6 perfiles de nota × de → a) que
+  compara `stageOf()` real contra el espejo de `setNoteStage()` del servidor:
+  todas quedan en la columna soltada (con la lógica anterior, la nota derivada
+  vista movida a «Por hacer» caía en «En gestión»). El modal se comprobó en
+  Chrome headless con el CSS real, en claro y oscuro.
+
+---
+
 ## Notas de operación
 
 - En producción usar `start-baileys.bat` / pm2 / systemd (no `npm run dev`).

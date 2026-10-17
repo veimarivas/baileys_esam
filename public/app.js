@@ -3388,11 +3388,18 @@
       return sortableLoading;
     }
 
+    // Etapa de la nota para el tablero. El servidor guarda la etapa manual en
+    // `pipeline_stage` (todo/doing) y la evidencia de las otras dos en
+    // contacted_at / done_at: esa marca es la que manda, así una nota movida
+    // queda siempre en la columna donde se la soltó. Solo las notas sin etapa
+    // guardada (las antiguas) se infieren, como siempre: derivación vista = en
+    // gestión.
     function stageOf(n) {
       if (n.done_at) return 'done';
       if (n.contacted_at) return 'contacted';
-      if (n.pipeline_stage === 'doing' || (n.assigned_to && n.seen_at)) return 'doing';
-      return 'todo';
+      if (n.pipeline_stage === 'todo' || n.pipeline_stage === 'doing' ||
+          n.pipeline_stage === 'contacted' || n.pipeline_stage === 'done') return n.pipeline_stage;
+      return (n.assigned_to && n.seen_at) ? 'doing' : 'todo';
     }
 
     function canMove(n) { return !!(n.can_edit || n.assigned_to_me); }
@@ -3470,7 +3477,13 @@
       if (!n || stageOf(n) === to) return;
       var send = function (result) {
         jsonApi('/inbox/notes/' + id + '/stage', 'POST', { stage: to, result: result || '' })
-          .then(function () {
+          .then(function (updated) {
+            // El servidor devuelve la nota ya guardada: la tomamos para dejar
+            // la tarjeta en su etapa al instante (y el refresco de fondo
+            // termina de confirmarlo con el resto del tablero).
+            var i = st.notes.indexOf(n);
+            if (updated && updated.id === id && i > -1) st.notes[i] = updated;
+            renderBoard();
             toast('Nota movida a «' + STAGES[STAGE_KEYS.indexOf(to)].label + '»');
             loadNotes();
           })

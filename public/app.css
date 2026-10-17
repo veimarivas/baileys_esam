@@ -3943,23 +3943,38 @@ body.pl-dragging-on .pl-card, body.pl-dragging-on .pl-col { cursor: grabbing; }
 .pl-mv:focus-visible { outline: 2px solid var(--nk-brand); outline-offset: 2px; }
 .pl-mv-next { border-color: color-mix(in srgb, var(--nk-brand) 45%, var(--nk-line)); color: var(--nk-brand); background: var(--nk-brand-soft); }
 
-/* Aviso «¿Cómo fue la comunicación?» */
+/* Aviso «¿Cómo fue la comunicación?». Se monta en <body> (fuera de
+   .notes-page), así que sus colores salen de los tokens globales --esam-*
+   (viven en :root y en el modo oscuro), nunca de --nk- ni --ib-, que solo
+   existen dentro de su página: con esos el panel quedaba sin fondo. */
 .pl-dialog-backdrop {
-  position: fixed; inset: 0; background: rgba(15, 23, 42, 0.5); z-index: 1080;
+  position: fixed; inset: 0; z-index: 1080;
+  background: rgba(15, 23, 42, 0.45);
   display: flex; align-items: center; justify-content: center; padding: 16px;
+  animation: pl-fade 0.16s var(--esam-ease);
 }
+html[data-bs-theme="dark"] .pl-dialog-backdrop { background: rgba(2, 6, 14, 0.66); }
 .pl-dialog {
-  background: var(--nk-surface); color: var(--nk-ink); border: 1px solid var(--nk-line);
+  background: var(--esam-surface); color: var(--esam-ink);
+  border: 1px solid var(--esam-line);
   border-radius: 16px; padding: 1.1rem 1.15rem; width: 100%; max-width: 420px;
-  box-shadow: var(--esam-shadow-lg, 0 24px 48px -20px rgba(14, 26, 43, 0.3));
+  box-shadow: var(--esam-shadow-lg);
   animation: pl-pop 0.18s var(--esam-ease);
 }
+@keyframes pl-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes pl-pop { from { opacity: 0; transform: translateY(8px) scale(0.98); } to { opacity: 1; transform: none; } }
-.pl-dialog h6 { font-weight: 800; margin: 0; display: flex; align-items: center; gap: 0.4rem; font-size: 0.95rem; }
-.pl-dialog h6 .ri-phone-line { color: var(--nk-brand); }
-.pl-dialog-sub { font-size: 0.78rem; color: var(--nk-mute); margin: 0.25rem 0 0.6rem; }
-.pl-dialog textarea { border-radius: 10px; font-size: 0.85rem; }
-.pl-dialog textarea:focus { border-color: var(--nk-brand); box-shadow: var(--esam-ring, 0 0 0 3px rgba(4, 84, 116, 0.16)); }
+.pl-dialog h6 { font-weight: 800; margin: 0; display: flex; align-items: center; gap: 0.4rem; font-size: 0.95rem; color: var(--esam-ink); }
+.pl-dialog h6 .ri-phone-line { color: var(--brand); }
+html[data-bs-theme="dark"] .pl-dialog h6 .ri-phone-line { color: var(--brand-300); }
+.pl-dialog-sub { font-size: 0.78rem; color: var(--esam-muted); margin: 0.25rem 0 0.6rem; }
+.pl-dialog textarea {
+  border-radius: 10px; font-size: 0.85rem;
+  background: var(--esam-surface-2); color: var(--esam-ink); border-color: var(--esam-line-strong);
+}
+.pl-dialog textarea::placeholder { color: var(--esam-muted); }
+.pl-dialog textarea:focus { background: var(--esam-surface); border-color: var(--brand); box-shadow: var(--esam-ring); }
+html[data-bs-theme="dark"] .pl-dialog textarea { border-color: var(--esam-line-strong); }
+html[data-bs-theme="dark"] .pl-dialog textarea:focus { border-color: var(--brand-400); box-shadow: 0 0 0 3px rgba(79, 179, 214, 0.2); }
 .pl-dialog-actions { display: flex; justify-content: flex-end; gap: 0.4rem; margin-top: 0.7rem; }
 
 /* Respeto por quien prefieren menos movimiento */

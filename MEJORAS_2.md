@@ -88,6 +88,11 @@ el bloque A (red de seguridad) va primero.
   detecte un cuelgue.
 - **Esfuerzo**: S · **Riesgo**: Bajo · **Aceptación**: los logs rotan y `/healthz`
   responde JSON.
+- **✅ Hecho (2026-10-18)**: `GET /healthz` en el panel y en el gateway (JSON con
+  líneas por estado, base, logs, cola de webhooks y `warnings`; sin rutas de
+  archivos). Rotación `npm run logs:rotate` al arrancar (en Windows no se puede
+  renombrar un log abierto: verificado) y aviso en `/healthz` si igual crece. Con
+  pm2 queda documentado `pm2-logrotate`.
 
 ### A4. Mantenimiento de la base de datos
 - **Qué**: ejecutar **`ANALYZE`/`PRAGMA optimize`** periódico (nunca se hizo) y
@@ -97,6 +102,10 @@ el bloque A (red de seguridad) va primero.
   puede elegir planes malos; y las tablas de log crecen para siempre.
 - **Esfuerzo**: S · **Riesgo**: Bajo (solo toca filas antiguas) · **Aceptación**: la
   BD deja de crecer por logs y las consultas del inbox siguen igual de rápidas.
+- **✅ Hecho (2026-10-18)**: `PRAGMA optimize` 5 min después de arrancar y a diario
+  (nunca se había ejecutado); poda diaria de `webhook_logs`/`audit_logs` (90 días),
+  avisos de campana **ya leídos** (30 días) y webhooks descartados; índices por
+  `created_at`. Los avisos sin leer se conservan.
 
 ---
 

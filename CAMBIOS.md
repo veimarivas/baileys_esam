@@ -1608,6 +1608,58 @@ línea se cae.
 
 ---
 
+## 45. Rotación de logs, `/healthz` y mantenimiento de la base (2026-10-18)
+
+Segundo bloque de la segunda etapa (`MEJORAS_2.md`, ítems **A3 + A4**): que el
+servicio se pueda monitorear solo y que nada crezca sin límite.
+
+- **`/healthz` (estado del proceso):** devuelve JSON con versión/arranque, líneas
+  por estado, tamaño de la base y del WAL, tamaño del log más grande, cola de
+  webhooks (pendientes y descartados), memoria, tiempo encendido y una lista de
+  `warnings` (ninguna línea conectada, log grande, WAL grande, compilación sin
+  aplicar, webhooks descartados).
+  - Disponible en el **panel** (`http://127.0.0.1:8030/healthz`) y en el
+    **gateway** (`:2785/health` y `:2785/healthz`, sin API key).
+  - Es una ruta **pública a propósito** y no expone rutas de archivos ni datos de
+    conversaciones: solo tamaños y contadores (`src/core/system-health.ts`, una
+    sola fuente para las dos rutas).
+  - `ok` responde por la vida del proceso, no por la salud de las líneas: un
+    gestor de procesos no debe reiniciar un servicio que funciona solo porque
+    WhatsApp se desconectó. Lo que hay que mirar va en `warnings`.
+  - El `/health` del gateway conserva sus claves anteriores (`runtime`, `backup`,
+    `sessions`), así que `scripts/restart.cjs` sigue funcionando igual.
+
+- **Rotación de logs:** `npm run logs:rotate` (`scripts/rotate-logs.cjs`) renombra
+  `x.log` → `x.log.1` cuando supera `LOG_MAX_MB` (10 por defecto) y conserva
+  `LOG_KEEP` copias (5). Los lanzadores la corren **al arrancar**, antes de abrir
+  el log: en Windows no se puede renombrar un archivo que otro proceso mantiene
+  abierto (se verificó), así que la rotación ocurre cuando todavía nadie lo abrió
+  (`start-baileys.bat`, `scripts/autostart.ps1` y `scripts/restart.cjs`).
+  - Con **pm2** los logs los maneja pm2: queda documentado en `ecosystem.config.cjs`
+    (`pm2 install pm2-logrotate` + `max_size`/`retain`).
+  - Si el log igual crece, `/healthz` lo delata (`logs.overLimit` + warning).
+
+- **Mantenimiento de la base (antes nunca se hacía):**
+  - **`PRAGMA optimize`** se ejecuta 5 minutos después de arrancar y luego a diario:
+    sin estadísticas (`sqlite_stat1` no existía) SQLite podía elegir un plan malo
+    para las consultas del inbox.
+  - **Poda por retención** (`cleanupLogs`, a diario y 5 min después de arrancar):
+    `webhook_logs` y `audit_logs` más viejos que `LOG_RETENTION_DAYS` (90) y los
+    **avisos ya leídos** más viejos que `NOTIFICATION_RETENTION_DAYS` (30). Los
+    avisos **sin leer se conservan**: son los que esperan que alguien los mire.
+  - También se podan los **webhooks descartados** (agotaron reintentos) con la misma
+    antigüedad; quedan un tiempo para inspección.
+  - Índices nuevos por `created_at` en `webhook_logs` y `audit_logs` para que la
+    poda sea barata (`src/db/index.ts`).
+  - Variables nuevas: `LOG_RETENTION_DAYS`, `NOTIFICATION_RETENTION_DAYS`,
+    `LOG_MAX_MB`, `LOG_KEEP`, `LOGS_DIR`.
+
+- **Pruebas:** 86 en total. Se sumaron `test/retention.test.ts` (qué se poda y qué
+  no) y `test/system-health.test.ts` (contadores, avisos y que el JSON **no** filtre
+  rutas).
+
+---
+
 ## Notas de operación
 
 - En producción usar `start-baileys.bat` / pm2 / systemd (no `npm run dev`).
@@ -1617,3 +1669,8 @@ línea se cae.
 - Los mensajes anteriores a la introducción de `messages.origin` no se cuentan como “Bandeja ESAM”.
 - Un `@lid` sin mapeo se mostrará como número cuando WhatsApp comparta el par LID↔número
   (al escribir o al sincronizar los grupos).
+- **Estado del servicio:** `http://127.0.0.1:8030/healthz` (panel) y
+  `http://127.0.0.1:2785/health` (gateway) devuelven JSON con líneas conectadas,
+  tamaño de la base y avisos pendientes. No requieren sesión ni API key.
+- **Logs:** se rotan al arrancar (`npm run logs:rotate`); el límite es `LOG_MAX_MB`
+  (10 MB) y se conservan `LOG_KEEP` copias (5). Con pm2, instalar `pm2-logrotate`.

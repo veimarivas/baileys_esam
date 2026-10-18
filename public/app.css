@@ -4003,6 +4003,10 @@ html[data-bs-theme="dark"] .tpl-phone { background: #0b141a; }
 }
 .notif-item.k-derived_to_you .notif-ic { color: #fff; background: var(--ib-brand, #045474); }
 .notif-item.k-contacted .notif-ic, .notif-item.k-resolved .notif-ic { color: var(--esam-success, #0f7a52); background: rgba(15, 122, 82, 0.1); }
+/* Línea caída: se ve como alerta, no como aviso común. */
+.notif-item.k-session_down .notif-ic { color: #fff; background: var(--esam-danger, #bb3b3b); }
+.notif-item.k-session_down.unread { background: color-mix(in srgb, var(--esam-danger, #bb3b3b) 8%, transparent); }
+.notif-item.k-session_down.unread .notif-title::before { background: var(--esam-danger, #bb3b3b); }
 .notif-body { display: flex; flex-direction: column; min-width: 0; }
 .notif-title { font-size: 0.8rem; font-weight: 600; color: var(--esam-ink, #0e1a2b); line-height: 1.35; }
 .notif-text { font-size: 0.74rem; color: var(--esam-ink-soft, #3b4a5e); margin-top: 0.1rem; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }

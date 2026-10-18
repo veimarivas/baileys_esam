@@ -16,6 +16,7 @@ import { addOptout, isOptoutRequest, looksLikeBlock, markBlocked } from '../core
 import { recomputeHealth } from '../core/health.js';
 import { getPolicy, resetTrust } from '../core/anti-ban.js';
 import { phoneKeyOf, tagPerson } from '../core/person.js';
+import { alertSessionDown } from '../core/notifications.js';
 import { lidForPhone, resolveChatId } from '../core/lid.js';
 import { panelBus } from '../panel/events.js';
 import type { OutboundSender, SessionRow } from '../types.js';
@@ -99,6 +100,8 @@ export class SessionManager implements OutboundSender {
   private mediaInFlight = new Map<number, Promise<{ path: string; mime: string | null } | null>>();
   /** Último aviso de "bajar stickers" por chat (evita repetir en cada vista). */
   private stickerPrefetchAt = new Map<string, number>();
+  /** Avisos de "línea caída" pendientes (se cancela si reconecta antes). */
+  private downAlertTimers = new Map<string, NodeJS.Timeout>();
   /** Fallas de descifrado recientes por sesión (diagnóstico). */
   private decryptFailures = new Map<string, Array<{ at: number; fromMe: boolean; error: string }>>();
 
@@ -538,6 +541,8 @@ export class SessionManager implements OutboundSender {
   // ── Eventos ──────────────────────────────────────────────────────────────────
 
   private async onReady(sessionId: string, phone: string): Promise<void> {
+    // Si había un aviso de caída esperando, la línea ya volvió: no se avisa.
+    this.clearSessionDownAlert(sessionId);
     const row = this.snapshot(sessionId);
     const normalized = normalizePhone(phone);
 
@@ -590,6 +595,55 @@ export class SessionManager implements OutboundSender {
     audit('session.disconnected', { session_id: sessionId, code: info.code, kind: info.kind });
     await dispatchEvent(sessionId, 'session.disconnected', { reason, code: info.code, kind: info.kind });
     recomputeHealth(sessionId, { lastError: reason });
+    this.armSessionDownAlert(sessionId, info);
+  }
+
+  /**
+   * Tipos de caída que dejan la línea inservible: avisan al instante.
+   * - `logged_out`: se desvinculó desde el teléfono.
+   * - `banned`: WhatsApp bloqueó el número.
+   * - `replaced`: la sesión se abrió en otro dispositivo.
+   * - `bad_session`: credenciales rotas (hay que volver a vincular).
+   */
+  private static readonly SERIOUS_DISCONNECT = new Set(['logged_out', 'banned', 'replaced', 'bad_session']);
+
+  /**
+   * Avisa a la campana del panel cuando una línea queda sin conexión. Las caídas
+   * graves avisan ya; las que WhatsApp suele resolver solo (red, reinicio pedido
+   * por WhatsApp) esperan `sessionDownAlertMinutes` y, si reconectó antes, no
+   * avisan. El aviso es al dueño de la línea y al Super Admin, y no se repite
+   * mientras el anterior siga sin leer (ver `alertSessionDown`).
+   */
+  private armSessionDownAlert(sessionId: string, info: DisconnectInfo): void {
+    const row = this.byId(sessionId);
+    const label = row?.name || row?.phone || sessionId;
+    const reason = info.title || info.detail || 'Sin conexión con WhatsApp.';
+    const waitMs = SessionManager.SERIOUS_DISCONNECT.has(info.kind)
+      ? 0
+      : Math.max(0, config.sessionDownAlertMinutes) * 60_000;
+
+    if (waitMs === 0) {
+      alertSessionDown(sessionId, label, reason);
+      return;
+    }
+    this.clearSessionDownAlert(sessionId);
+    const timer = setTimeout(() => {
+      this.downAlertTimers.delete(sessionId);
+      const current = this.byId(sessionId);
+      // Reconectó, se desvinculó o desapareció: no hay nada que avisar.
+      if (!current || current.status === 'ready') return;
+      alertSessionDown(sessionId, label, reason);
+    }, waitMs);
+    // El aviso no debe mantener el proceso despierto por sí solo.
+    timer.unref?.();
+    this.downAlertTimers.set(sessionId, timer);
+  }
+
+  /** Cancela el aviso de caída pendiente: la línea ya volvió. */
+  private clearSessionDownAlert(sessionId: string): void {
+    const timer = this.downAlertTimers.get(sessionId);
+    if (timer) clearTimeout(timer);
+    this.downAlertTimers.delete(sessionId);
   }
 
   /**

@@ -1562,6 +1562,52 @@ sin tocar backend.
 
 ---
 
+## 44. Pruebas automatizadas y avisos de caída de línea (2026-10-18)
+
+Primer bloque de la segunda etapa de mejoras (`MEJORAS_2.md`, ítems **A1 + A2**):
+red de seguridad para no romper lo que ya funciona y aviso al equipo cuando una
+línea se cae.
+
+- **Pruebas automatizadas (`npm test`):** se estrena el runner nativo `node:test`
+  (sin dependencias nuevas) sobre `test/`:
+
+  ```
+  npm test          # 74 pruebas en 23 grupos
+  ```
+
+  - Corren con `tsx` contra el código fuente (`node --import tsx --test
+    "test/*.test.ts"`), así que **no** hace falta compilar antes.
+  - Cada archivo abre una **base temporal** (`test/helpers/temp-env.ts` crea un
+    directorio en el temporal del sistema, fija `DB_PATH`/`STORAGE_DIR`/`BACKUP_DIR`
+    y aplica `migrate()`): las pruebas **nunca** tocan `data/` real. `dotenv` no
+    sobreescribe variables ya definidas, así que un `.env` de producción no las
+    desvía.
+  - Cubierto: normalización de teléfonos y JIDs (`phone.ts`), ritmo anti-baneo y
+    ventana horaria (`pacing.ts`), importación de CSV (`parseCsv` +
+    `importCsvToBatch`: BOM, comillas, filas sin teléfono), bajas y bloqueos
+    (`optout.ts`), `phone_key`/personas (`person.ts`) y los avisos de la campana
+    (`notifications.ts`, incluida la lógica nueva de A2).
+  - `npm run typecheck` ahora también revisa las pruebas (`tsconfig.test.json`);
+    `npm run build` sigue compilando solo `src/` (las pruebas no van a `dist/`).
+  - Pendiente para una próxima pasada: `ftsQuery` (hoy privado en
+    `conversations.ts`) y `waFormatHtml` (vive dentro del IIFE de `public/app.js`,
+    sin módulo propio); las dos quedaron verificadas a mano.
+
+- **Aviso de caída de línea en la campana:** cuando una sesión se desconecta, el
+  panel avisa al **dueño de la línea** y al **Super Admin** (`session_down` en
+  `src/core/notifications.ts`, campanita con ícono propio en rojo):
+  - Las caídas **graves** (`logged_out`, `banned`, `replaced`, `bad_session`) avisan
+    al instante. Las que WhatsApp suele resolver solo (`network`, `restart`) esperan
+    `SESSION_DOWN_ALERT_MINUTES` (3 por defecto) y, si la línea reconectó antes, **no
+    avisan** (`armSessionDownAlert` en `src/baileys/manager.ts`).
+  - **No se repite** el aviso mientras el anterior siga sin leer, y el control es
+    **por línea**: dos números caídos generan dos avisos (columna nueva
+    `notifications.session_id` en `src/db/index.ts`).
+  - El aviso enlaza a **Configuración → Conexión** para volver a vincular o
+    reintentar.
+
+---
+
 ## Notas de operación
 
 - En producción usar `start-baileys.bat` / pm2 / systemd (no `npm run dev`).

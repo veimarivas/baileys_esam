@@ -21,7 +21,9 @@ export type NotificationKind =
   /** Una tarea derivada se marcó como resuelta. */
   | 'resolved'
   /** Hay envíos masivos programados esperando tu confirmación. */
-  | 'batch_confirm';
+  | 'batch_confirm'
+  /** Una línea quedó sin conexión (se desvinculó, la bloquearon o se cayó). */
+  | 'session_down';
 
 export interface NotificationRow {
   id: number;
@@ -30,6 +32,8 @@ export interface NotificationRow {
   note_id: number | null;
   actor_id: number | null;
   actor_name: string | null;
+  /** Línea a la que se refiere el aviso (solo los avisos de sesión la usan). */
+  session_id: string | null;
   title: string;
   body: string | null;
   link: string | null;
@@ -54,19 +58,20 @@ export function unreadCount(userId: number): number {
  */
 export function notify(
   userIds: Array<number | null | undefined>,
-  n: { kind: NotificationKind; noteId?: number | null; actorId?: number | null; title: string; body?: string | null; link?: string | null },
+  n: { kind: NotificationKind; noteId?: number | null; actorId?: number | null; sessionId?: string | null; title: string; body?: string | null; link?: string | null },
 ): void {
   const targets = [...new Set(userIds.filter((id): id is number => !!id && id !== n.actorId))];
   if (!targets.length) return;
   const now = nowIso();
   for (const userId of targets) {
     const created = run(
-      `INSERT INTO notifications (user_id, kind, note_id, actor_id, title, body, link, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO notifications (user_id, kind, note_id, actor_id, session_id, title, body, link, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       userId,
       n.kind,
       n.noteId ?? null,
       n.actorId ?? null,
+      n.sessionId ?? null,
       n.title.slice(0, 200),
       n.body ? n.body.slice(0, 500) : null,
       n.link ?? null,
@@ -84,6 +89,38 @@ export function notify(
       unread: unreadCount(userId),
     });
   }
+}
+
+/**
+ * Avisa que una línea se quedó sin conexión. Va al dueño de la línea y al Super
+ * Admin, y enlaza a Configuración → Conexión.
+ *
+ * No repite el aviso mientras el anterior siga sin leer: una conexión que va y
+ * viene (o un arranque en frío que reconecta) no debe llenar la campana. El
+ * control es por línea, así que dos números caídos generan dos avisos.
+ */
+export function alertSessionDown(sessionId: string, label: string, reason: string): boolean {
+  const pending = get<{ c: number }>(
+    `SELECT COUNT(*) AS c FROM notifications
+      WHERE kind = 'session_down' AND session_id = ? AND read_at IS NULL`,
+    sessionId,
+  )?.c ?? 0;
+  if (pending > 0) return false;
+
+  const owner = get<{ id: number }>(
+    `SELECT u.id FROM users u JOIN sessions s ON s.owner_uid = u.source_uid OR CAST(u.id AS TEXT) = s.owner_uid
+      WHERE s.id = ? LIMIT 1`,
+    sessionId,
+  );
+  const who = (label || '').trim() || 'una línea';
+  notify([owner?.id ?? null, ...supervisorIds()], {
+    kind: 'session_down',
+    sessionId,
+    title: `Se desconectó WhatsApp: ${who}`,
+    body: `${(reason || 'Sin detalle.').trim()} Abrí Configuración → Conexión para volver a vincular o reintentar.`,
+    link: '/settings',
+  });
+  return true;
 }
 
 export function listNotifications(userId: number, limit = 30): NotificationRow[] {

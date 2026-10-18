@@ -58,6 +58,12 @@ el bloque A (red de seguridad) va primero.
   producción; un error en el motor de lotes puede quemar un número.
 - **Esfuerzo**: M · **Riesgo**: Bajo · **Aceptación**: `npm test` corre en verde y
   falla si se rompe una regla crítica.
+- **✅ Hecho (2026-10-18)**: `npm test` con el runner nativo y **74 pruebas** sobre
+  base temporal aislada (nadie toca `data/` real): teléfonos/JIDs, pacing y ventana
+  horaria, CSV, bajas/bloqueos, `phone_key`/personas y campana. `npm run typecheck`
+  también revisa las pruebas. Quedaron fuera `ftsQuery` (privado en
+  `conversations.ts`) y `waFormatHtml` (dentro del IIFE de `public/app.js`); ver
+  `CAMBIOS.md` §44.
 
 ### A2. Avisos de caída de sesión en el panel
 - **Qué**: al recibir `session.disconnected` / cuarentena (`health.ts`), crear una
@@ -67,6 +73,12 @@ el bloque A (red de seguridad) va primero.
   número queda caído sin que el equipo lo sepa.
 - **Esfuerzo**: S · **Riesgo**: Bajo · **Aceptación**: al desconectar una sesión de
   prueba aparece la campanita y el aviso.
+- **✅ Hecho (2026-10-18)**: aviso `session_down` al dueño y al Super Admin con enlace
+  a Configuración → Conexión. Inmediato en caídas graves; demorado
+  (`SESSION_DOWN_ALERT_MINUTES`, 3 por defecto) y cancelable en las transitorias; no
+  se repite mientras el aviso anterior siga sin leer y el control es por línea.
+  Falta (no incluido): aviso por WhatsApp a un número de guardia y el disparo desde
+  cuarentena (`session-pool.ts`).
 
 ### A3. Rotación de logs y `/healthz`
 - **Qué**: rotación de `sout.log`/`serr.log` (o `pm2-logrotate`) y una ruta

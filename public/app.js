@@ -2085,6 +2085,7 @@
       note_created: 'ri-sticky-note-line', derived_to_you: 'ri-share-forward-line', derived: 'ri-share-forward-line',
       contacted: 'ri-phone-line', resolved: 'ri-check-double-line',
       batch_confirm: 'ri-calendar-schedule-line',
+      session_down: 'ri-wifi-off-line',
     };
     function setBadge(n) {
       n = Number(n) || 0;

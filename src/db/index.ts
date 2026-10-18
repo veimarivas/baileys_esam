@@ -159,6 +159,9 @@ export function migrate(): void {
     read_at    TEXT
   )`);
   db.exec('CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, read_at, id)');
+  // Línea a la que se refiere el aviso (p. ej. "se desconectó WhatsApp"): sirve
+  // para no repetir el mismo aviso mientras siga sin leer.
+  addColumnIfMissing('notifications', 'session_id', 'TEXT');
   setupPersonPrograms();
   // Plantillas de tareas (pasos que se repiten, p. ej. una inscripción).
   db.exec(`CREATE TABLE IF NOT EXISTS note_templates (

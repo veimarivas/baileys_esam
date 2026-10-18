@@ -114,6 +114,14 @@ export const config = {
     downloadTimeoutMs: int(process.env.MEDIA_DOWNLOAD_TIMEOUT, 20) * 1000,
   },
 
+  /**
+   * Aviso a la campana cuando una línea queda sin conexión. Para las caídas que
+   * suelen resolverse solas (red, reinicio pedido por WhatsApp) se espera este
+   * tiempo antes de avisar; si reconecta antes, no se avisa. Las graves
+   * (desvinculada, bloqueada, sesión reemplazada) avisan al instante.
+   */
+  sessionDownAlertMinutes: int(process.env.SESSION_DOWN_ALERT_MINUTES, 3),
+
   /** Respaldo diario de la base y de las credenciales de WhatsApp. */
   backup: {
     enabled: bool(process.env.BACKUP_ENABLED, true),

@@ -1,5 +1,11 @@
 // Configuración de pm2 para baileys_esam (opcional).
 // Uso: npm run build && pm2 start ecosystem.config.cjs && pm2 save
+//
+// Logs: pm2 escribe pm2-out.log / pm2-error.log y no los rota solo. Para que no
+// crezcan sin límite, instalá el módulo de rotación (una vez):
+//   pm2 install pm2-logrotate
+//   pm2 set pm2-logrotate:max_size 10M
+//   pm2 set pm2-logrotate:retain 5
 module.exports = {
   apps: [
     {

@@ -26,6 +26,10 @@ if (-not $node) { exit 1 }
 $logs = Join-Path $root 'storage\logs'
 New-Item -ItemType Directory -Path $logs -Force | Out-Null
 
+# Rota los logs antes de que el servicio los abra (en Windows no se pueden
+# renombrar mientras estan abiertos).
+& $node (Join-Path $root 'scripts\rotate-logs.cjs')
+
 Start-Process -FilePath $node `
   -ArgumentList 'scripts\run-forever.cjs' `
   -WorkingDirectory $root `

@@ -18,6 +18,10 @@ if not exist ".env" (
 
 if not exist "storage\logs" mkdir "storage\logs"
 
+REM Rota los logs que superen el limite ANTES de que el servicio los abra:
+REM en Windows no se pueden renombrar mientras estan abiertos.
+node scripts\rotate-logs.cjs
+
 where pm2 >nul 2>&1
 if %errorlevel%==0 (
   echo Arrancando con pm2 (reinicio automatico)...

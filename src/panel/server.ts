@@ -36,6 +36,7 @@ import { getConfig, setConfig } from '../core/config-store.js';
 import { monitoringData, activityData } from '../core/monitoring.js';
 import { attentionData, deliveryStats, notesFollowup, pendingReplies, previousPeriod, protectionStats, resolvePeriod, sessionActivity, userPerformance } from '../core/followup.js';
 import { getHealth } from '../core/health.js';
+import { systemHealth } from '../core/system-health.js';
 import { renderMonitoring, renderReports, reportsCsv, type MonitoringTab, type ReportsTab } from './followup-views.js';
 import { recount } from '../core/batches.js';
 import type { BatchRunner } from '../core/batches.js';
@@ -186,6 +187,12 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
   // Estáticos: Velzon vive en public/assets; los propios (app.css/js) en public/.
   app.use('/assets', express.static(path.resolve('public', 'assets')));
   app.use(express.static(path.resolve('public'), { index: false }));
+
+  // Estado del proceso para el gestor de procesos y el monitoreo. Ruta pública a
+  // propósito (no expone datos de conversaciones ni rutas de archivos).
+  app.get('/healthz', (_req, res) => {
+    res.json(systemHealth(manager.list()));
+  });
 
   type AuthedRequest = Request & { user?: UserRow };
 

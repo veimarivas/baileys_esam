@@ -37,6 +37,8 @@ export const config = {
   dbPath: process.env.DB_PATH ?? './data/baileys_esam.sqlite',
   authDir: process.env.BAILEYS_AUTH_DIR ?? './data/baileys',
   storageDir: process.env.STORAGE_DIR ?? './data/media',
+  /** Carpeta de logs del servicio (la usan los lanzadores y `scripts/rotate-logs.cjs`). */
+  logsDir: process.env.LOGS_DIR ?? './storage/logs',
   logLevel: process.env.LOG_LEVEL ?? 'info',
 
   // Reconecta al arrancar las líneas ya vinculadas. Apagado, tras un reinicio
@@ -104,6 +106,19 @@ export const config = {
 
   /** Días de retención de archivos en `data/media` antes de borrarlos. */
   mediaRetentionDays: int(process.env.MEDIA_RETENTION_DAYS, 30),
+
+  /** Días de retención de las tablas de diagnóstico (`webhook_logs`, `audit_logs`). */
+  logRetentionDays: int(process.env.LOG_RETENTION_DAYS, 90),
+
+  /** Días de retención de los avisos de la campana **ya leídos**. */
+  notificationRetentionDays: int(process.env.NOTIFICATION_RETENTION_DAYS, 30),
+
+  /**
+   * Tamaño máximo de cada archivo de `storage/logs` antes de rotar (MB). La
+   * rotación corre al arrancar (`scripts/rotate-logs.cjs`); en Windows no se puede
+   * renombrar un log que el proceso en marcha tiene abierto.
+   */
+  logMaxMb: int(process.env.LOG_MAX_MB, 10),
 
   /**
    * Descarga de media de mensajes que no llegaron en vivo (offline/historial).

@@ -90,6 +90,8 @@ function startDetached() {
   log('arrancando en segundo plano (scripts/run-forever.cjs)…');
   const logs = path.join(root, 'storage', 'logs');
   fs.mkdirSync(logs, { recursive: true });
+  // Rota antes de abrir el log (acá este script es el dueño del archivo).
+  spawnSync(process.execPath, [path.join(root, 'scripts', 'rotate-logs.cjs')], { stdio: 'ignore' });
   const out = fs.openSync(path.join(logs, 'service.out.log'), 'a');
   spawn(process.execPath, [path.join(root, 'scripts', 'run-forever.cjs')], {
     cwd: root,

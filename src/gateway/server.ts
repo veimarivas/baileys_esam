@@ -6,8 +6,7 @@ import { logger } from '../logger.js';
 import { SessionManager } from '../baileys/manager.js';
 import { registerWebhook } from '../core/webhooks.js';
 import { typeForMime } from '../core/phone.js';
-import { runtimeInfo } from '../core/runtime.js';
-import { lastBackup } from '../core/backup.js';
+import { systemHealth } from '../core/system-health.js';
 
 /** Envuelve un handler async para capturar errores. */
 function ah(fn: (req: Request, res: Response) => Promise<unknown>) {
@@ -26,27 +25,20 @@ export function createGatewayApp(manager: SessionManager) {
 
   // Auth por X-API-Key (si API_KEY está vacío, se permite en desarrollo).
   app.use((req, res, next) => {
-    if (req.path === '/health') return next();
+    if (req.path === '/health' || req.path === '/healthz') return next();
     if (!config.apiKey) return next();
     if (req.header('X-API-Key') === config.apiKey) return next();
     res.status(401).json({ message: 'API key inválida.' });
   });
 
-  app.get('/health', (_req, res) => {
-    // Versión, arranque y compilación pendiente: permite detectar un servicio
-    // que quedó corriendo código viejo. Sin datos sensibles (ruta pública).
-    res.json({
-      ok: true,
-      engine: 'baileys',
-      app: 'baileys_esam',
-      runtime: runtimeInfo(),
-      backup: lastBackup(),
-      sessions: {
-        total: manager.list().length,
-        ready: manager.list().filter((s) => s.status === 'ready').length,
-      },
-    });
-  });
+  // Estado del proceso (sin datos sensibles): lo usan el gestor de procesos,
+  // `scripts/restart.cjs` y el monitoreo. Versión, arranque, salud de las líneas,
+  // tamaño de la base y de los logs, y cola de webhooks.
+  const healthHandler = (_req: Request, res: Response): void => {
+    res.json(systemHealth(manager.list()));
+  };
+  app.get('/health', healthHandler);
+  app.get('/healthz', healthHandler);
 
   // ── Sesiones ───────────────────────────────────────────────────────────────
 

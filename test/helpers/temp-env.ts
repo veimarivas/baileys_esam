@@ -19,6 +19,10 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'baileys-esam-test-'));
 process.env.DB_PATH = path.join(dir, 'test.sqlite');
 process.env.STORAGE_DIR = path.join(dir, 'media');
 process.env.BAILEYS_AUTH_DIR = path.join(dir, 'baileys');
+process.env.LOGS_DIR = path.join(dir, 'logs');
+// Límite chico para poder probar el aviso de "log demasiado grande" sin escribir
+// 10 MB en cada corrida.
+process.env.LOG_MAX_MB = '1';
 process.env.BACKUP_ENABLED = 'false';
 process.env.BACKUP_DIR = path.join(dir, 'backups');
 process.env.DEBUG_DUMP_MESSAGES = 'false';
@@ -30,6 +34,8 @@ process.env.LOG_LEVEL = 'silent';
 // módulo (en producción lo llama `src/index.ts`), así que se aplica acá.
 const { migrate } = await import('../../src/db/index.js');
 migrate();
+
+fs.mkdirSync(process.env.LOGS_DIR, { recursive: true });
 
 process.on('exit', () => {
   try {

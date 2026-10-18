@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { all, run } from '../db/index.js';
+import { all, get, run } from '../db/index.js';
 import { nowIso } from '../util/async.js';
 import { logger } from '../logger.js';
 import { config } from '../config.js';
@@ -128,6 +128,22 @@ export function pendingWebhooks(limit = 100): WebhookQueueRow[] {
     DEAD,
     limit,
   );
+}
+
+/** Resumen de la cola para `/healthz`: pendientes y descartados. */
+export function webhookQueueStats(): { pending: number; dead: number } {
+  const pending =
+    get<{ c: number }>('SELECT COUNT(*) AS c FROM webhook_queue WHERE next_try_at <> ?', DEAD)?.c ?? 0;
+  const dead = get<{ c: number }>('SELECT COUNT(*) AS c FROM webhook_queue WHERE next_try_at = ?', DEAD)?.c ?? 0;
+  return { pending, dead };
+}
+
+/**
+ * Borra los webhooks ya descartados (agotaron los reintentos) anteriores a
+ * `beforeIso`. Quedan un tiempo para inspección y después se podan.
+ */
+export function pruneDeadWebhooks(beforeIso: string): number {
+  return run('DELETE FROM webhook_queue WHERE next_try_at = ? AND created_at < ?', DEAD, beforeIso).changes;
 }
 
 /** Arranca el worker que reintenta webhooks periódicamente. */

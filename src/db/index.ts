@@ -162,6 +162,9 @@ export function migrate(): void {
   // Línea a la que se refiere el aviso (p. ej. "se desconectó WhatsApp"): sirve
   // para no repetir el mismo aviso mientras siga sin leer.
   addColumnIfMissing('notifications', 'session_id', 'TEXT');
+  // Poda periódica por fecha de las tablas de diagnóstico (retención).
+  db.exec('CREATE INDEX IF NOT EXISTS idx_webhook_logs_created ON webhook_logs(created_at)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at)');
   setupPersonPrograms();
   // Plantillas de tareas (pasos que se repiten, p. ej. una inscripción).
   db.exec(`CREATE TABLE IF NOT EXISTS note_templates (

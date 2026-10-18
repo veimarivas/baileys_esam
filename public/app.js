@@ -217,6 +217,181 @@
     setTimeout(function () { el.remove(); }, action ? 6000 : 3200);
   }
 
+  /* ── Aviso de mensaje nuevo (estilo WhatsApp) ───────────────────────────────
+     Cuando entra un mensaje: suena un «pop» y aparece una tarjeta en la esquina
+     inferior derecha con remitente y texto. Se silencia si el chat ya está
+     abierto y la ventana a la vista (el mensaje se ve en el hilo), y las
+     ráfagas —p. ej. cientos de mensajes offline al reconectar— se agrupan en un
+     único aviso para no inundar la pantalla. La consume initMessageAlerts(). */
+  var msgAlert = {
+    stack: null,
+    cards: [],
+    recent: [],
+    lastSound: 0,
+    burstTimer: null,
+    max: 3,
+    isOpen: null,    // lo define initInbox: ¿es el chat abierto y a la vista?
+    enrich: null,    // lo define initInbox: nombre y foto reales de la conversación
+    openChat: null,  // lo define initInbox: abre el chat sin recargar la página
+  };
+
+  // Contenedor de la esquina inferior derecha, compartido con los recordatorios
+  // para que ambos no se solapen.
+  function alertStack() {
+    if (msgAlert.stack && document.body.contains(msgAlert.stack)) return msgAlert.stack;
+    var el = document.getElementById('alert-stack');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'alert-stack';
+      el.className = 'rem-stack msg-stack';
+      el.setAttribute('aria-live', 'polite');
+      document.body.appendChild(el);
+    }
+    msgAlert.stack = el;
+    return el;
+  }
+
+  /* Sonido: dos notas cortas generadas con Web Audio (sin archivos extra). */
+  var soundState = { ctx: null };
+
+  function soundContext() {
+    var Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    if (!soundState.ctx) { try { soundState.ctx = new Ctx(); } catch (e) { return null; } }
+    return soundState.ctx;
+  }
+
+  // Un gesto del usuario habilita el audio del navegador (política de autoplay).
+  function unlockSound() {
+    var ctx = soundContext();
+    if (ctx && ctx.state === 'suspended') ctx.resume().catch(function () {});
+  }
+  document.addEventListener('pointerdown', unlockSound, { passive: true });
+  document.addEventListener('keydown', unlockSound);
+
+  function tone(ctx, freq, at, dur, vol) {
+    var osc = ctx.createOscillator();
+    var gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(freq, at);
+    gain.gain.setValueAtTime(0.0001, at);
+    gain.gain.exponentialRampToValueAtTime(vol, at + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start(at); osc.stop(at + dur + 0.03);
+  }
+
+  function playMessageSound() {
+    var now = Date.now();
+    if (now - msgAlert.lastSound < 2500) return; // una ráfaga suena una sola vez
+    var ctx = soundContext();
+    if (!ctx) return;
+    msgAlert.lastSound = now;
+    var play = function () {
+      var t0 = ctx.currentTime + 0.01;
+      tone(ctx, 659.25, t0, 0.13, 0.16);
+      tone(ctx, 987.77, t0 + 0.085, 0.20, 0.20);
+    };
+    if (ctx.state === 'running') play();
+    else ctx.resume().then(play).catch(function () {});
+  }
+
+  var ALERT_PREVIEW = {
+    image: '📷 Foto', video: '🎬 Video', audio: '🎙 Nota de voz',
+    document: '📄 Documento', sticker: '🌟 Sticker',
+  };
+
+  function alertText(d) {
+    var body = String(d.body || '').replace(/\s+/g, ' ').trim();
+    if (body) return body.length > 140 ? body.slice(0, 140) + '…' : body;
+    return ALERT_PREVIEW[d.content_type] || 'Mensaje nuevo';
+  }
+
+  function showMessageAlert(d) {
+    var info = (msgAlert.enrich && msgAlert.enrich(d)) || {};
+    var name = info.name || d.contact_name || fmtPhone(String(d.chatId || '').split('@')[0]) || 'Contacto';
+    var card = document.createElement('div');
+    card.className = 'msg-alert';
+    card.innerHTML =
+      '<button type="button" class="ma-open" title="Abrir la conversación">' +
+        avatarHtml(name, 'avatar-sm', info.photo || null) +
+        '<span class="ma-body">' +
+          '<span class="ma-head"><span class="ma-name">' + escapeHtml(name) + '</span>' +
+            '<span class="ma-time">' + escapeHtml(fmtTime(d.occurred_at || new Date().toISOString())) + '</span></span>' +
+          '<span class="ma-text">' + escapeHtml(alertText(d)) + '</span>' +
+        '</span>' +
+      '</button>' +
+      '<button type="button" class="ma-x" aria-label="Cerrar aviso" title="Cerrar"><span class="ri-close-line"></span></button>';
+    var close = function () {
+      card.remove();
+      msgAlert.cards = msgAlert.cards.filter(function (c) { return c !== card; });
+    };
+    card.querySelector('.ma-x').addEventListener('click', close);
+    card.querySelector('.ma-open').addEventListener('click', function () {
+      close();
+      if (!msgAlert.openChat || !msgAlert.openChat(d.sessionId, d.chatId)) {
+        location.href = '/conversations/' + encodeURIComponent(d.chatId);
+      }
+    });
+    alertStack().appendChild(card);
+    msgAlert.cards.push(card);
+    while (msgAlert.cards.length > msgAlert.max) msgAlert.cards.shift().remove();
+    setTimeout(close, 8000);
+    return card;
+  }
+
+  // Ráfaga (sincronización de muchos mensajes): un solo aviso con el total.
+  function showBurstAlert(n) {
+    msgAlert.cards.forEach(function (c) { c.remove(); });
+    msgAlert.cards = [];
+    var card = document.getElementById('msg-alert-burst');
+    if (!card) {
+      card = document.createElement('div');
+      card.id = 'msg-alert-burst';
+      card.className = 'msg-alert ma-burst';
+      card.innerHTML =
+        '<button type="button" class="ma-open" title="Ver las conversaciones">' +
+          '<span class="ma-ico ri-notification-3-fill" aria-hidden="true"></span>' +
+          '<span class="ma-body"><span class="ma-name"></span>' +
+            '<span class="ma-text">Tocá para ver tus conversaciones</span></span>' +
+        '</button>' +
+        '<button type="button" class="ma-x" aria-label="Cerrar aviso" title="Cerrar"><span class="ri-close-line"></span></button>';
+      card.querySelector('.ma-x').addEventListener('click', function () { card.remove(); });
+      card.querySelector('.ma-open').addEventListener('click', function () { location.href = '/conversations'; });
+      alertStack().appendChild(card);
+    }
+    card.querySelector('.ma-name').textContent = n + ' mensajes nuevos';
+    clearTimeout(msgAlert.burstTimer);
+    msgAlert.burstTimer = setTimeout(function () {
+      var c = document.getElementById('msg-alert-burst');
+      if (c) c.remove();
+      msgAlert.recent = [];
+    }, 6000);
+    return card;
+  }
+
+  function pushMessageAlert(d) {
+    if (msgAlert.isOpen && msgAlert.isOpen(d.sessionId, d.chatId)) return; // ya se ve en el hilo
+    var now = Date.now();
+    msgAlert.recent = msgAlert.recent.filter(function (t) { return now - t < 3000; });
+    msgAlert.recent.push(now);
+    playMessageSound();
+    // Más de 5 mensajes en 3 s: es una sincronización, no una conversación.
+    if (msgAlert.recent.length > 5) { showBurstAlert(msgAlert.recent.length); return; }
+    showMessageAlert(d);
+  }
+
+  // Alerta de mensajes entrantes (cualquier página del panel con SSE activo).
+  function initMessageAlerts() {
+    var es = liveSource();
+    if (!es) return;
+    es.addEventListener('message', function (e) {
+      var d; try { d = JSON.parse(e.data); } catch (_) { return; }
+      if (!d || d.direction !== 'in' || d.history) return; // el historial no avisa
+      pushMessageAlert(d);
+    });
+  }
+
   function api(url, options) {
     return fetch(url, Object.assign({
       headers: { 'Accept': 'application/json' },
@@ -440,7 +615,7 @@
     return node;
   }
 
-  function buildMediaNode(msg, type) {
+  function buildMediaNode(msg, type, ctx) {
     var murl = '/media/' + msg.id;
     if (msg.media_status === 'missing' || msg.media_status === 'unfetched') return mediaUnavailable(msg, type);
     if (type === 'image' || type === 'sticker') {
@@ -457,13 +632,27 @@
       a.appendChild(img);
       return guardMedia(a, img, msg, type);
     }
-    if (type === 'video' || type === 'audio') {
-      var el = document.createElement(type);
+    if (type === 'video') {
+      var el = document.createElement('video');
       el.controls = true; el.preload = msg.media_status === 'pending' ? 'none' : 'metadata';
       el.src = murl;
       return guardMedia(el, el, msg, type);
     }
+    if (type === 'audio') {
+      // Reproductor propio (persistente al cambiar de conversación).
+      if (msg.media_status === 'pending') return buildPendingAudio(msg);
+      return buildAudioNode(msg, ctx);
+    }
     return null;
+  }
+
+  // Audio aún descargándose: se muestra el aviso y se reintenta al pulsar.
+  function buildPendingAudio(msg) {
+    var el = document.createElement('audio');
+    el.controls = true;
+    el.preload = 'none';
+    el.src = '/media/' + msg.id;
+    return guardMedia(el, el, msg, 'audio');
   }
 
   function buildContent(msg, ctx) {
@@ -476,10 +665,10 @@
       frag.appendChild(mediaUnavailable(msg, type));
       if (msg.body && type !== 'sticker') frag.appendChild(paragraph(msg.body, ctx));
     } else if ((type === 'image' || type === 'sticker' || type === 'video') && hasMedia) {
-      frag.appendChild(buildMediaNode(msg, type));
+      frag.appendChild(buildMediaNode(msg, type, ctx));
       if (msg.body && type !== 'sticker') frag.appendChild(paragraph(msg.body, ctx));
     } else if (type === 'audio' && hasMedia) {
-      frag.appendChild(buildMediaNode(msg, type));
+      frag.appendChild(buildMediaNode(msg, type, ctx));
       if (msg.transcription) {
         var tr = document.createElement('div');
         tr.className = 'transcript';
@@ -613,6 +802,7 @@
     p.className = 'bubble-text';
     p.innerHTML = linkifyHtml(escapeHtml(text));
     if (ctx && ctx.onOpenContact) linkifyPhones(p, ctx);
+    enhanceYoutube(p);
     return p;
   }
 
@@ -737,6 +927,302 @@
     ev.preventDefault();
     openLightbox(img.getAttribute('src'));
   });
+
+  /* ── Enlaces de YouTube: vista previa con miniatura y reproductor ── */
+  // Acepta youtube.com/watch?v=, youtu.be/, /shorts/, /live/ y /embed/.
+  var YT_URL_RE = /(?:youtube\.com\/(?:watch\?(?:[^\s<]*&)?v=|shorts\/|live\/|embed\/)|youtu\.be\/)([A-Za-z0-9_-]{6,20})/i;
+
+  function youtubeId(url) {
+    var m = String(url || '').match(YT_URL_RE);
+    return m ? m[1] : null;
+  }
+
+  var ytMeta = {};        // id → { title, author } ya resuelto (una consulta por video)
+  var ytMetaPending = {}; // id → consulta en curso
+
+  // El título se pide al servidor (oEmbed de YouTube); si falla, queda el
+  // rótulo genérico y la miniatura, nunca se rompe la burbuja.
+  function loadYoutubeMeta(id) {
+    if (ytMeta[id]) return Promise.resolve(ytMeta[id]);
+    if (ytMetaPending[id]) return ytMetaPending[id];
+    var p = api('/inbox/youtube/' + encodeURIComponent(id))
+      .then(function (d) {
+        ytMeta[id] = { title: (d && d.title) || '', author: (d && d.author) || '' };
+        return ytMeta[id];
+      })
+      .catch(function () {
+        ytMeta[id] = { title: '', author: '' };
+        return ytMeta[id];
+      })
+      .finally(function () { delete ytMetaPending[id]; });
+    ytMetaPending[id] = p;
+    return p;
+  }
+
+  function buildYoutubeCard(id) {
+    var card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'yt-card';
+    card.title = 'Reproducir el video aquí';
+    card.innerHTML =
+      '<span class="yt-thumb">' +
+        '<img loading="lazy" decoding="async" alt="" src="https://i.ytimg.com/vi/' + id + '/hqdefault.jpg" />' +
+        '<span class="yt-play" aria-hidden="true"><span class="ri-play-fill"></span></span>' +
+      '</span>' +
+      '<span class="yt-meta">' +
+        '<span class="yt-title">Video de YouTube</span>' +
+        '<span class="yt-sub"><span class="ri-youtube-fill" aria-hidden="true"></span> youtube.com</span>' +
+      '</span>';
+    var titleEl = card.querySelector('.yt-title');
+    var img = card.querySelector('img');
+    img.addEventListener('error', function () { card.classList.add('yt-no-thumb'); img.remove(); });
+    var apply = function (m) {
+      if (!m || !m.title || !document.body.contains(card)) return;
+      titleEl.textContent = m.title;
+      if (m.author) card.querySelector('.yt-sub').innerHTML =
+        '<span class="ri-youtube-fill" aria-hidden="true"></span> ' + escapeHtml(m.author);
+    };
+    var cached = ytMeta[id];
+    if (cached && cached.title) apply(cached);
+    else loadYoutubeMeta(id).then(apply).catch(function () {});
+    card.addEventListener('click', function () { openYoutubePlayer(id, ytMeta[id] && ytMeta[id].title); });
+    return card;
+  }
+
+  // Agrega la tarjeta de vista previa debajo del texto (una por mensaje).
+  function enhanceYoutube(container) {
+    var links = container.querySelectorAll('a[href]');
+    for (var i = 0; i < links.length; i++) {
+      var id = youtubeId(links[i].getAttribute('href'));
+      if (!id) continue;
+      container.appendChild(buildYoutubeCard(id));
+      return;
+    }
+  }
+
+  function openYoutubePlayer(id, title) {
+    var box = document.getElementById('yt-player');
+    if (!box) {
+      box = document.createElement('div');
+      box.id = 'yt-player';
+      box.className = 'yt-player';
+      box.innerHTML =
+        '<div class="ytp-inner">' +
+          '<div class="ytp-head"><span class="ytp-title">YouTube</span>' +
+            '<a class="ytp-link" href="https://www.youtube.com/watch?v=' + id + '" target="_blank" rel="noopener noreferrer" title="Abrir en YouTube">' +
+              '<span class="ri-external-link-line"></span></a>' +
+            '<button type="button" class="ytp-close" aria-label="Cerrar"><span class="ri-close-line"></span></button></div>' +
+          '<div class="ytp-frame"><iframe title="Reproductor de YouTube" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>' +
+        '</div>';
+      box.addEventListener('click', function (ev) { if (ev.target === box) closeYoutubePlayer(); });
+      box.querySelector('.ytp-close').addEventListener('click', closeYoutubePlayer);
+      document.body.appendChild(box);
+    }
+    box.querySelector('.ytp-title').textContent = title || 'YouTube';
+    // youtube-nocookie: no deja rastro de cookies hasta que se reproduce.
+    box.querySelector('iframe').src = 'https://www.youtube-nocookie.com/embed/' + encodeURIComponent(id) + '?autoplay=1&rel=0';
+    box.classList.add('open');
+  }
+
+  function closeYoutubePlayer() {
+    var box = document.getElementById('yt-player');
+    if (!box) return;
+    box.classList.remove('open');
+    // Vaciar el iframe detiene el video (si no, sigue sonando oculto).
+    box.querySelector('iframe').src = 'about:blank';
+  }
+
+  document.addEventListener('keydown', function (ev) {
+    if (ev.key !== 'Escape') return;
+    var box = document.getElementById('yt-player');
+    if (box && box.classList.contains('open')) closeYoutubePlayer();
+  });
+
+  /* ── Reproductor de audio persistente ───────────────────────────────────────
+     Un único <audio> vive fuera del hilo: al cambiar de conversación el hilo se
+     redibuja y sus controles se recrean, pero el sonido sigue (como WhatsApp).
+     Cada mensaje dibuja sus propios controles y se sincroniza con este estado. */
+  var audioPlay = {
+    el: null,
+    id: null,            // id del mensaje cargado en el reproductor
+    msg: null,           // mensaje (para reintentos)
+    label: '',           // nombre de la conversación a la que pertenece
+    sessionId: '',       // conversación dueña del audio
+    chatId: '',
+    scope: { sessionId: '', chatId: '' }, // conversación abierta ahora
+    onOpen: null,        // «ir al mensaje» (lo define initInbox)
+  };
+
+  function audioEl() {
+    if (audioPlay.el) return audioPlay.el;
+    var el = new Audio();
+    el.preload = 'metadata';
+    // Fuera del hilo (y oculto): el mismo reproductor sobrevive a los redibujados.
+    el.style.display = 'none';
+    if (document.body) document.body.appendChild(el);
+    el.addEventListener('timeupdate', syncAudioUI);
+    el.addEventListener('play', syncAudioUI);
+    el.addEventListener('pause', syncAudioUI);
+    el.addEventListener('ended', syncAudioUI);
+    el.addEventListener('loadedmetadata', syncAudioUI);
+    el.addEventListener('durationchange', syncAudioUI);
+    el.addEventListener('error', onAudioError);
+    audioPlay.el = el;
+    return el;
+  }
+
+  function onAudioError() {
+    var el = audioPlay.el;
+    var msg = audioPlay.msg;
+    audioPlay.id = null;
+    audioPlay.msg = null;
+    try { el.removeAttribute('src'); el.load(); } catch (e) { /* ya detenido */ }
+    if (msg) {
+      var node = document.querySelector('.audio-msg[data-audio-id="' + msg.id + '"]');
+      if (node && node.parentNode) node.parentNode.replaceChild(mediaUnavailable(msg, 'audio'), node);
+    }
+    syncAudioUI();
+  }
+
+  function fmtDur(sec) {
+    sec = Math.max(0, Math.round(Number(sec) || 0));
+    return Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0');
+  }
+
+  function audioState() {
+    var el = audioPlay.el;
+    return {
+      id: audioPlay.id,
+      loaded: !!(el && el.getAttribute('src')),
+      playing: !!(el && !el.paused && !el.ended),
+      ended: !!(el && el.ended),
+      currentTime: el ? el.currentTime || 0 : 0,
+      duration: el && isFinite(el.duration) && el.duration > 0 ? el.duration : 0,
+    };
+  }
+
+  function stopAudio() {
+    var el = audioPlay.el;
+    audioPlay.id = null;
+    audioPlay.msg = null;
+    if (el) { try { el.pause(); el.removeAttribute('src'); el.load(); } catch (e) { /* ya detenido */ } }
+    syncAudioUI();
+  }
+
+  // Reproduce o pausa la nota de voz del mensaje. `owner` identifica el chat de
+  // la burbuja pulsada (para poder volver a él desde la barra flotante).
+  function toggleAudio(msg, owner) {
+    var el = audioEl();
+    var st = audioState();
+    if (audioPlay.id === msg.id && st.loaded) {
+      if (st.playing) el.pause(); else el.play().catch(function () {});
+      syncAudioUI();
+      return;
+    }
+    owner = owner || {};
+    audioPlay.id = msg.id;
+    audioPlay.msg = msg;
+    audioPlay.label = owner.label || '';
+    audioPlay.sessionId = owner.sessionId || audioPlay.scope.sessionId;
+    audioPlay.chatId = owner.chatId || audioPlay.scope.chatId;
+    el.src = '/media/' + msg.id;
+    el.currentTime = 0;
+    el.play().catch(function () {});
+    syncAudioUI();
+  }
+
+  function buildAudioNode(msg, ctx) {
+    var wrap = document.createElement('div');
+    wrap.className = 'audio-msg';
+    wrap.setAttribute('data-audio-id', String(msg.id));
+    var seconds = Number(msg.media_seconds) || 0;
+    wrap.setAttribute('data-seconds', seconds ? String(seconds) : '');
+    wrap.innerHTML =
+      '<button type="button" class="am-play" title="Reproducir" aria-label="Reproducir nota de voz"><span class="ri-play-fill" aria-hidden="true"></span></button>' +
+      '<span class="am-body">' +
+        '<span class="am-track"><span class="am-bar"></span></span>' +
+        '<span class="am-info"><span class="am-label">Mensaje de voz</span><span class="am-time">' +
+          (seconds ? fmtDur(seconds) : '') + '</span></span>' +
+      '</span>';
+    var owner = function () {
+      return {
+        sessionId: ctx && ctx.sessionId ? ctx.sessionId() : '',
+        chatId: ctx && ctx.chatId ? ctx.chatId() : '',
+        label: ctx && ctx.chatName ? ctx.chatName() : '',
+      };
+    };
+    wrap.querySelector('.am-play').addEventListener('click', function () { toggleAudio(msg, owner()); });
+    wrap.querySelector('.am-track').addEventListener('click', function (ev) {
+      var el = audioPlay.el;
+      if (audioPlay.id !== msg.id || !el || !isFinite(el.duration) || el.duration <= 0) return;
+      var r = ev.currentTarget.getBoundingClientRect();
+      el.currentTime = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width)) * el.duration;
+      syncAudioUI();
+    });
+    syncAudioNode(wrap);
+    return wrap;
+  }
+
+  function syncAudioNode(node) {
+    var st = audioState();
+    var mine = audioPlay.id != null && Number(node.getAttribute('data-audio-id')) === audioPlay.id;
+    var playing = mine && st.playing;
+    node.classList.toggle('active', mine && st.loaded);
+    node.classList.toggle('playing', playing);
+    var btn = node.querySelector('.am-play');
+    if (btn) {
+      btn.querySelector('span').className = playing ? 'ri-pause-fill' : 'ri-play-fill';
+      btn.title = playing ? 'Pausar' : 'Reproducir';
+    }
+    var bar = node.querySelector('.am-bar');
+    if (bar) bar.style.width = (mine && st.duration ? Math.min(100, (st.currentTime / st.duration) * 100) : 0) + '%';
+    var time = node.querySelector('.am-time');
+    if (time) {
+      var known = mine && st.duration ? st.duration : Number(node.getAttribute('data-seconds')) || 0;
+      time.textContent = playing ? fmtDur(st.currentTime) : (known ? fmtDur(known) : '');
+    }
+  }
+
+  // Barra flotante para controlar el audio desde otra conversación.
+  function audioDock() {
+    var dock = document.getElementById('audio-dock');
+    if (dock) return dock;
+    dock = document.createElement('div');
+    dock.id = 'audio-dock';
+    dock.className = 'audio-dock';
+    dock.hidden = true;
+    dock.innerHTML =
+      '<button type="button" class="ad-toggle" title="Reproducir" aria-label="Reproducir o pausar"><span class="ri-play-fill"></span></button>' +
+      '<button type="button" class="ad-open" title="Ir al mensaje de voz">' +
+        '<span class="ad-title">Mensaje de voz</span><span class="ad-sub"></span></button>' +
+      '<button type="button" class="ad-close" title="Detener" aria-label="Detener audio"><span class="ri-close-line"></span></button>';
+    dock.querySelector('.ad-toggle').addEventListener('click', function () {
+      var el = audioPlay.el;
+      if (!el) return;
+      if (el.paused || el.ended) el.play().catch(function () {}); else el.pause();
+      syncAudioUI();
+    });
+    dock.querySelector('.ad-close').addEventListener('click', stopAudio);
+    dock.querySelector('.ad-open').addEventListener('click', function () {
+      if (audioPlay.onOpen) audioPlay.onOpen();
+    });
+    document.body.appendChild(dock);
+    return dock;
+  }
+
+  function syncAudioUI() {
+    var st = audioState();
+    Array.prototype.forEach.call(document.querySelectorAll('.audio-msg'), syncAudioNode);
+    var dock = audioDock();
+    var other = !!(audioPlay.id != null && st.loaded && !st.ended &&
+      (audioPlay.scope.sessionId !== audioPlay.sessionId || audioPlay.scope.chatId !== audioPlay.chatId));
+    dock.hidden = !other;
+    if (!other) return;
+    dock.classList.toggle('playing', st.playing);
+    dock.querySelector('.ad-toggle span').className = st.playing ? 'ri-pause-fill' : 'ri-play-fill';
+    var dur = st.duration ? (st.playing ? fmtDur(st.currentTime) + ' de ' + fmtDur(st.duration) : fmtDur(st.duration)) : '';
+    dock.querySelector('.ad-sub').textContent = [audioPlay.label, dur].filter(Boolean).join(' · ') || 'Audio';
+  }
 
   /* ── TTS ── */
   var ttsState = { current: null };
@@ -1486,16 +1972,8 @@
   function initReminders() {
     var es = liveSource();
     if (!es) return;
-    var stack = null;
-    function getStack() {
-      if (!stack) {
-        stack = document.createElement('div');
-        stack.className = 'rem-stack';
-        stack.setAttribute('aria-live', 'polite');
-        document.body.appendChild(stack);
-      }
-      return stack;
-    }
+    // Mismo contenedor que los avisos de mensajes nuevos, así no se solapan.
+    function getStack() { return alertStack(); }
     function ymd(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
     function minutesUntilTomorrow9() {
       var t = new Date(); t.setDate(t.getDate() + 1); t.setHours(9, 0, 0, 0);
@@ -2137,6 +2615,7 @@
       body.innerHTML = '';
       if (!state.messages.length) {
         body.innerHTML = '<div class="chat-empty-col"><span class="ri-chat-smile-2-line"></span><p>Sin mensajes.</p></div>';
+        syncAudioScope();
         return;
       }
       var lastDay = '';
@@ -2156,10 +2635,46 @@
       } else if (mode === 'bottom' || (mode === 'auto' && atBottom)) {
         body.scrollTop = body.scrollHeight;
       }
+      syncAudioScope();
+      revealPendingAudio();
     }
+
+    // El audio sigue sonando al cambiar de conversación: solo se actualiza a qué
+    // chat corresponde lo que se está viendo (para la barra flotante).
+    function syncAudioScope() {
+      audioPlay.scope.sessionId = state.selectedSession;
+      audioPlay.scope.chatId = state.selectedChat;
+      syncAudioUI();
+    }
+
+    // Si se pidió «ir al mensaje de voz» desde la barra flotante, se desplaza
+    // hasta él una vez cargado el hilo.
+    function revealPendingAudio() {
+      if (!pendingAudioReveal) return;
+      var target = pendingAudioReveal;
+      var body = els.pane.querySelector('.chat-body');
+      if (!body || !body.querySelector('.bubble-row[data-id="' + target + '"]')) return;
+      pendingAudioReveal = null;
+      goToMessage(target);
+    }
+
+    // Barra flotante: lleva a la conversación (y al mensaje) del audio en curso.
+    audioPlay.onOpen = function () {
+      if (audioPlay.id == null) return;
+      if (audioPlay.sessionId === state.selectedSession && audioPlay.chatId === state.selectedChat) {
+        goToMessage(audioPlay.id);
+        return;
+      }
+      pendingAudioReveal = audioPlay.id;
+      openChat(audioPlay.sessionId, audioPlay.chatId, true);
+    };
+
+    var pendingAudioReveal = null;
 
     var bubbleCtx = {
       sessionId: function () { return state.selectedSession; },
+      chatId: function () { return state.selectedChat; },
+      chatName: function () { var c = selectedConversation(); return c ? convoName(c) : ''; },
       onReply: function (msg) { state.replyTo = msg; renderPane(); focusComposer(); },
       onGoto: function (id) { goToMessage(id); },
       onOpenContact: function (chatId) { if (chatId) openContactChat(chatId); },
@@ -2173,6 +2688,25 @@
         if (text) speakText(text);
       },
       onNote: function (msg) { noteFromMessage(msg); },
+    };
+
+    // Avisos de mensaje nuevo: se silencian si el chat ya está abierto a la
+    // vista y, al pulsar el aviso, se abre la conversación sin recargar.
+    msgAlert.isOpen = function (sessionId, chatId) {
+      return document.visibilityState === 'visible' && document.hasFocus() &&
+        sessionId === state.selectedSession && chatId === state.selectedChat;
+    };
+    msgAlert.enrich = function (d) {
+      var c = state.conversations.filter(function (x) { return x.session_id === d.sessionId && x.chat_id === d.chatId; })[0];
+      if (!c) return {};
+      return { name: convoName(c), photo: convoPhoto(c) };
+    };
+    msgAlert.openChat = function (sessionId, chatId) {
+      var known = state.conversations.some(function (x) { return x.session_id === sessionId && x.chat_id === chatId; }) ||
+        (state.syntheticConv && state.syntheticConv.session_id === sessionId && state.syntheticConv.chat_id === chatId);
+      if (!known) return false;
+      openChat(sessionId, chatId, true);
+      return true;
     };
 
     // Abre el compositor de notas con el mensaje citado y enlazado.
@@ -2226,6 +2760,7 @@
       renderContact();
       var body = els.pane.querySelector('.chat-body');
       body.innerHTML = '<div class="text-muted text-center p-3">Cargando mensajes…</div>';
+      syncAudioScope();
     }
 
     function chatHeaderHtml(c) {
@@ -4072,6 +4607,7 @@
   initNotes();
   initReminders();
   initNotifications();
+  initMessageAlerts();
   initTemplatesManager();
   initActivity();
   initOnceForms();

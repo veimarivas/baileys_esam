@@ -390,6 +390,45 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
     }),
   );
 
+  // ── Vista previa de enlaces de YouTube ──────────────────────────────────────
+  // El título y el autor salen del oEmbed público de YouTube. Solo se acepta el
+  // id del video (validado): nunca se pide al servidor una URL arbitraria del
+  // cliente. Si YouTube no responde se devuelve vacío y la vista previa queda
+  // con la miniatura, sin romper el chat.
+  const ytCache = new Map<string, { at: number; data: { title: string; author: string } }>();
+  const YT_ID_RE = /^[A-Za-z0-9_-]{6,20}$/;
+
+  app.get(
+    '/inbox/youtube/:id',
+    ...auth,
+    ah(async (req, res) => {
+      const id = String(req.params.id);
+      if (!YT_ID_RE.test(id)) return res.status(422).json({ error: 'Enlace de YouTube no válido.' });
+      const hit = ytCache.get(id);
+      if (hit && Date.now() - hit.at < 6 * 60 * 60 * 1000) return res.json(hit.data);
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5000);
+      try {
+        const target = encodeURIComponent(`https://www.youtube.com/watch?v=${id}`);
+        const r = await fetch(`https://www.youtube.com/oembed?url=${target}&format=json`, {
+          signal: controller.signal,
+          headers: { Accept: 'application/json' },
+        });
+        if (!r.ok) throw new Error(`YouTube respondió ${r.status}`);
+        const j = (await r.json()) as { title?: string; author_name?: string };
+        const data = { title: String(j.title ?? '').slice(0, 300), author: String(j.author_name ?? '').slice(0, 200) };
+        if (ytCache.size > 500) ytCache.clear();
+        ytCache.set(id, { at: Date.now(), data });
+        res.json(data);
+      } catch (err) {
+        logger.warn({ err: (err as Error).message, video: id }, 'No se pudo obtener la vista previa de YouTube');
+        res.json({ title: '', author: '' });
+      } finally {
+        clearTimeout(timer);
+      }
+    }),
+  );
+
   app.get(
     '/inbox/:session/:chat/messages',
     ...auth,

@@ -1175,7 +1175,9 @@ export class SessionManager implements OutboundSender {
       new Date(msg.timestamp * 1000).toISOString(),
     );
     if (msg.isGroup && convName) setContactGroup(sessionId, msg.chatId, convName);
-    panelBus.publish('message', { sessionId, chatId: msg.chatId, direction: msg.fromMe ? 'out' : 'in', content_type: msg.type, occurred_at: new Date(msg.timestamp * 1000).toISOString() });
+    // Historial (no un mensaje en vivo): el panel refresca el hilo, pero no debe
+    // sonar ni avisar como si acabara de llegar.
+    panelBus.publish('message', { sessionId, chatId: msg.chatId, direction: msg.fromMe ? 'out' : 'in', history: true, content_type: msg.type, occurred_at: new Date(msg.timestamp * 1000).toISOString() });
   }
 
   /**

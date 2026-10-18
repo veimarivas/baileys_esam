@@ -1460,6 +1460,57 @@ sin tocar backend.
 
 ---
 
+## 40. Vista previa de YouTube y audio continuo entre conversaciones (2026-10-18)
+
+- **Enlaces de YouTube en el chat:** al escribir un enlace de YouTube
+  (`youtube.com/watch?v=`, `youtu.be`, `/shorts`, `/live`, `/embed`) el mensaje
+  muestra una tarjeta con la miniatura, el título y el autor del video.
+  - El título/autor salen de `GET /inbox/youtube/:id` (`src/panel/inbox.ts`), que
+    consulta el oEmbed público de YouTube con caché de 6 h y timeout de 5 s. Solo
+    se acepta el **id** del video (validado), nunca una URL arbitraria.
+  - Si YouTube no responde (o el servidor aún no tiene la ruta), la tarjeta queda
+    con la miniatura y el rótulo genérico: nunca rompe el hilo.
+  - Al pulsarla, el video se reproduce en una ventana dentro del panel
+    (`youtube-nocookie`) y el enlace sigue abriendo YouTube en otra pestaña.
+- **Audio continuo (como WhatsApp):** las notas de voz ya no usan el `<audio>`
+  nativo dentro del hilo, sino controles propios enlazados a un **único**
+  reproductor que vive fuera del hilo (`public/app.js`, sección «Reproductor de
+  audio persistente»).
+  - Al cambiar de conversación el hilo se redibuja pero el sonido continúa; al
+    volver al chat original los controles muestran el estado real.
+  - Barra flotante (solo cuando el audio pertenece a otra conversación) para
+    pausar/reanudar, ver el avance y **volver al mensaje** de voz.
+  - Si el archivo falla, se reemplaza por el aviso de «Adjunto no disponible» con
+    su botón de reintento, igual que el resto de los medios.
+
+---
+
+## 41. Aviso de mensaje nuevo: sonido y tarjeta inferior derecha (2026-10-18)
+
+- **Sonido y aviso:** al entrar un mensaje (`message` con `direction: 'in'` por SSE)
+  suena un «pop» breve y aparece una **tarjeta abajo a la derecha** con el avatar,
+  el nombre del contacto y el texto (o el tipo: foto, video, nota de voz,
+  documento, sticker), en cualquier página del panel con SSE activo
+  (`public/app.js`, «Aviso de mensaje nuevo» + `initMessageAlerts()`).
+  - El sonido se genera con **Web Audio** (dos notas), sin archivos nuevos; se
+    habilita con el primer gesto del usuario (política de autoplay) y se limita a
+    **un sonido cada 2,5 s**.
+  - Al pulsar la tarjeta se abre la conversación **sin recargar** si el inbox está
+    a la vista; si no, se navega a `/conversations/<chatId>`.
+- **Comportamiento tipo WhatsApp:** se silencia si el chat ya está abierto **y** la
+  ventana está a la vista y con foco (el mensaje se ve en el hilo); si la pestaña
+  está oculta o en segundo plano, siempre avisa.
+- **Ráfagas:** más de 5 mensajes en 3 s (p. ej. cientos de mensajes offline al
+  reconectar) se agrupan en un único aviso «N mensajes nuevos» para no inundar la
+  pantalla; se muestran como máximo 3 tarjetas a la vez y se autodescartan a los 8 s.
+- El **historial** que llega por «Sincronizar historial» (`messaging-history.set`)
+  refresca el hilo pero **no** suena ni avisa: se marca `history: true` en el evento
+  (`src/baileys/manager.ts`).
+- La tarjeta comparte el contenedor de la esquina inferior derecha con los
+  recordatorios (`#alert-stack`), así no se solapan.
+
+---
+
 ## Notas de operación
 
 - En producción usar `start-baileys.bat` / pm2 / systemd (no `npm run dev`).

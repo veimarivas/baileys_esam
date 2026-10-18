@@ -1,5 +1,8 @@
 # Plan de Mejora Funcional y Estrategia Anti-Baneo para `baileys_esam`
 
+> Este documento cubre **anti-baneo**. La segunda etapa de mejoras (pruebas, avisos
+> operativos, acciones del inbox, rendimiento) está en **`MEJORAS_2.md`**.
+
 ## 1. Introducción y Objetivos
 
 El objetivo de este documento es definir la hoja de ruta para mejorar el funcionamiento general de `baileys_esam` e implementar un **Sistema Anti-Baneo Inteligente y Administrable**.

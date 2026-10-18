@@ -13,7 +13,9 @@ import { nowIso } from '../util/async.js';
 import { esc, renderLayout, renderLogin, renderPlain } from './layout.js';
 import { sessionCookieHeader, sessionStore, clearCookieHeader } from '../auth/sessions.js';
 import { verifySsoToken, safeNext } from '../auth/sso.js';
+import { unreadCount } from '../core/notifications.js';
 import {
+  esamAreaLabel,
   esamEsAdmin,
   esamHome,
   esamPuede,
@@ -196,24 +198,48 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
 
   type AuthedRequest = Request & { user?: UserRow };
 
+  /**
+   * Token de la sesión: la cookie del navegador o, para la app móvil, el header
+   * `Authorization: Bearer <token>` (mismo valor firmado que la cookie).
+   */
+  const sessionToken = (req: Request): string | undefined => {
+    const auth = req.headers.authorization;
+    if (auth && /^Bearer\s+/i.test(auth)) return auth.replace(/^Bearer\s+/i, '').trim();
+    return cookie(req, config.sessionCookie);
+  };
+
   const currentUser = (req: Request): UserRow | undefined => {
-    const id = sessionStore.userId(cookie(req, config.sessionCookie));
+    const id = sessionStore.userId(sessionToken(req));
     return id ? findById(id) : undefined;
   };
 
+  /** Pedido de la app (o de una llamada JSON): se responde JSON, nunca una redirección. */
+  const wantsJson = (req: Request): boolean =>
+    !!req.headers.authorization ||
+    /application\/json/i.test(String(req.headers.accept ?? '')) ||
+    /^\/(api|inbox|notifications)\//.test(req.path) ||
+    /^\/notes\/(all|tags|assignees|templates|my-day)/.test(req.path);
+
   const requireUser = (req: AuthedRequest, res: Response, next: NextFunction) => {
     const user = currentUser(req);
-    if (!user) return res.redirect('/login');
+    if (!user) {
+      if (wantsJson(req)) return res.status(401).json({ error: 'Tu sesión venció. Volvé a ingresar.', code: 'unauthenticated' });
+      return res.redirect('/login');
+    }
     req.user = user;
     next();
   };
 
   const requireSection = (section: string) => (req: AuthedRequest, res: Response, next: NextFunction) => {
     if (!req.user || !esamPuede(req.user, section)) {
+      if (wantsJson(req)) return res.status(403).json({ error: 'No tenés permiso para esta sección.', code: 'forbidden' });
       return res.status(403).send(renderPlain('Acceso denegado', 'No tenés permiso para acceder a esta sección.'));
     }
     // Sin número vinculado, el usuario solo puede usar Conexión.
     if (section !== 'settings' && !isConnected(req.user)) {
+      if (wantsJson(req)) {
+        return res.status(409).json({ error: 'Tu número de WhatsApp no está vinculado. Vinculalo en Conexión.', code: 'not_connected' });
+      }
       return res.redirect('/settings');
     }
     next();
@@ -812,6 +838,115 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
       res.redirect('/batches');
     }),
   );
+
+  // ── App móvil (Flutter) ──────────────────────────────────────────────────────
+  // Autenticación por token (Bearer) y versiones JSON de lo que el panel hace
+  // con formularios. El resto de la app usa las mismas rutas JSON del panel
+  // (/inbox/*, /notes/*, /notifications, /events, /media/:id).
+
+  const mobileUser = (user: UserRow) => {
+    const session = sessionForUser(user);
+    return {
+      user: {
+        id: user.id,
+        name: user.name ?? user.username,
+        username: user.username,
+        email: user.email,
+        area: user.esam_area,
+        area_label: esamAreaLabel(user),
+        admin: esamEsAdmin(user),
+      },
+      session: session
+        ? { id: session.id, name: session.name, status: session.status, phone: session.phone ?? session.expected_phone ?? null, connected: session.status === 'ready' }
+        : null,
+    };
+  };
+
+  const loginLimiter = rateLimit(10, 60_000);
+
+  app.post('/api/mobile/login', loginLimiter, (req, res) => {
+    const login = String(req.body?.login ?? '').trim();
+    const password = String(req.body?.password ?? '');
+    const user = findByLogin(login);
+    if (!user || !verifyPassword(user, password)) {
+      return res.status(401).json({ error: 'Usuario o contraseña incorrectos.' });
+    }
+    if (user.source === 'cronogramas' && !user.esam_autorizado) {
+      return res.status(403).json({ error: 'Tu cuenta no tiene permiso para acceder a Seguimiento ESAM.' });
+    }
+    ensureUserSession(user);
+    const { cookie: token, expiresAt } = sessionStore.create(user.id);
+    registerLogin(user.id, req.ip ?? null);
+    audit('mobile.login', { user_id: user.id, device: String(req.body?.device ?? '').slice(0, 80) || null });
+    res.json({ token, expires_at: expiresAt.toISOString(), ...mobileUser(user) });
+  });
+
+  app.post('/api/mobile/logout', (req, res) => {
+    sessionStore.destroy(sessionToken(req));
+    res.json({ ok: true });
+  });
+
+  app.get('/api/mobile/me', requireUser, (req: AuthedRequest, res) => {
+    res.json({ ...mobileUser(req.user!), unread_notifications: unreadCount(req.user!.id) });
+  });
+
+  // Conexión: diagnóstico completo (estado, último cierre explicado, anti-baneo).
+  app.get(
+    '/api/mobile/connection',
+    requireUser,
+    requireSection('settings'),
+    ah(async (req: AuthedRequest, res) => {
+      const session = sessionForUser(req.user!) ?? (esamEsAdmin(req.user!) ? manager.primary() : undefined);
+      if (!session) return res.json({ session: null, diagnosis: null });
+      res.json({
+        session: { id: session.id, name: session.name, status: session.status, phone: session.phone ?? session.expected_phone ?? null },
+        diagnosis: await diagnosisFor(session),
+      });
+    }),
+  );
+
+  for (const action of ['reconnect', 'repair', 'reset'] as const) {
+    app.post(
+      `/api/mobile/connection/${action}`,
+      requireUser,
+      requireSection('settings'),
+      ah(async (req: AuthedRequest, res) => {
+        const session = sessionForUser(req.user!) ?? (esamEsAdmin(req.user!) ? manager.primary() : undefined);
+        if (!session) return res.status(404).json({ error: 'No tenés una línea de WhatsApp.' });
+        try {
+          if (action === 'reconnect') {
+            await manager.reconnect(session.id);
+            res.json({ ok: true, message: 'Reconectando con WhatsApp…' });
+          } else if (action === 'repair') {
+            const n = await manager.repairEncryption(session.id);
+            res.json({ ok: true, message: `Cifrado reparado (${n} claves regeneradas).` });
+          } else {
+            await manager.logout(session.id);
+            run('UPDATE sessions SET disconnect_info = NULL WHERE id = ?', session.id);
+            res.json({ ok: true, message: 'Listo para vincular de nuevo: mostrá el QR y escanealo.' });
+          }
+          audit(`session.${action}`, { session_id: session.id, by: req.user!.id, via: 'mobile' });
+        } catch (err) {
+          res.status(500).json({ error: (err as Error).message });
+        }
+      }),
+    );
+  }
+
+  // Envíos programados que esperan confirmación (para la app).
+  app.get('/api/mobile/confirmations', requireUser, (req: AuthedRequest, res) => {
+    res.json({ groups: pendingGroupsFor(req.user!) });
+  });
+
+  app.post('/api/mobile/confirmations/:group', requireUser, (req: AuthedRequest, res) => {
+    const group = String(req.params.group);
+    const g = getGroup(group);
+    if (!g) return res.status(404).json({ error: 'Programación no encontrada.' });
+    if (!canDecide(req.user!, g)) return res.status(403).json({ error: 'Solo el dueño de la línea o el Super Admin puede decidir.' });
+    const confirm = String(req.body?.action ?? '') === 'confirm';
+    const n = confirm ? confirmGroup(group, req.user!) : cancelGroup(group, req.user!);
+    res.json({ ok: true, batches: n, group: getGroup(group) });
+  });
 
   // ── Lotes ────────────────────────────────────────────────────────────────────
 

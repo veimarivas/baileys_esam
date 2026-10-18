@@ -1660,6 +1660,33 @@ servicio se pueda monitorear solo y que nada crezca sin límite.
 
 ---
 
+## 46. API para la app móvil (Flutter) (2026-10-18)
+
+The app (`C:\xampp_82_12\htdocs\baileys_esam_app`, see its `PLAN.md`) uses the same JSON routes as the panel. Two additions make that possible:
+
+- **Bearer token:**
+  - `sessionToken(req)` accepts `Authorization: Bearer <token>` in addition to the cookie. It is the same signed value with the same expiry, and "Cerrar sesión" invalidates it on the server.
+  - The browser keeps working exactly as before.
+- **JSON errors instead of redirects** (`wantsJson`: requests with a Bearer token, `Accept: application/json`, or the `/api/`, `/inbox/`, `/notifications/` and JSON `/notes/*` routes):
+  - `401 {code:'unauthenticated'}`;
+  - `403 {code:'forbidden'}`;
+  - `409 {code:'not_connected'}` when the line is not linked. The app then shows only Conexión, same as the web.
+- **New routes (`/api/mobile/*`):**
+  - `login` (`{login,password,device}` → token + user + line; rate limit 10/min; audited as `mobile.login`);
+  - `logout`;
+  - `me` (adds the unread notices);
+  - `connection` (diagnosis);
+  - `connection/{reconnect,repair,reset}`;
+  - `confirmations`;
+  - `confirmations/:group` (`confirm`/`cancel` for scheduled sends).
+- The existing permissions do not change: each route applies `requireSection`, the user's line and notes by owner.
+- **Verified:**
+  - test on a copy of the database: 11/11 (wrong password, token, `/me`, 401 JSON without a token, conversations, notes, notices, diagnosis, confirmations, logout);
+  - `npm test` 86/86;
+  - `tsc` clean.
+
+---
+
 ## Notas de operación
 
 - En producción usar `start-baileys.bat` / pm2 / systemd (no `npm run dev`).

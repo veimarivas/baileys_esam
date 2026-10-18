@@ -1274,7 +1274,9 @@ export class SessionManager implements OutboundSender {
     );
     if (!target) return;
     const actorType = msg.fromMe ? 'agent' : 'customer';
-    const actorId = msg.fromMe ? '' : msg.chatId;
+    // En grupos el reactor es un participante concreto, no el grupo: sin esto
+    // todos aparecían como una sola reacción sin saber quién la puso.
+    const actorId = msg.fromMe ? '' : msg.senderJid ? resolveChatId(msg.senderJid) : msg.chatId;
     setReaction(target.id, sessionId, msg.chatId, actorType, actorId, emoji);
     panelBus.publish('reaction', { sessionId, chatId: msg.chatId, messageId: target.id });
   }

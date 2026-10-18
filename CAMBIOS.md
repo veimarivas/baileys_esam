@@ -1511,6 +1511,28 @@ sin tocar backend.
 
 ---
 
+## 42. Reacciones con autor, más emojis y foto al abrir desde un grupo (2026-10-18)
+
+- **Quién reaccionó:** al pulsar una reacción en la burbuja se abre un globito con
+  el emoji y **el nombre de cada persona** que reaccionó (tipo WhatsApp). Si varias
+  personas pusieron el mismo emoji, la reacción muestra el número (`🙏 2`).
+  - El servidor resuelve el autor (`users.name` para agentes, el nombre de la ficha
+    o el registrado a mano para contactos, y el número si no hay nombre) y lo manda
+    en cada reacción (`src/core/conversations.ts`).
+  - En **grupos** ya se distingue a cada participante: antes toda reacción quedaba
+    guardada con el JID del grupo y no se sabía quién la puso
+    (`handleReaction` usa ahora el `senderJid` del participante, `src/baileys/manager.ts`).
+- **Más emojis:** el selector de reacciones tiene los rápidos + un botón **«+»** que
+  abre un catálogo amplio (más de 200, en tres tandas: caras, corazones/objetos y
+  gestos), y el selector del compositor usa ese mismo catálogo con desplazamiento
+  (`EMOJI_GROUPS`/`REACTION_EMOJIS` en `public/app.js`, estilos en `public/app.css`).
+- **Foto del contacto al abrir desde un grupo:** al pulsar un miembro del grupo se
+  abre su conversación y ahora la cabecera y la ficha piden la foto del contacto a
+  WhatsApp (una sola vez) si todavía no estaba guardada, en lugar de mostrar solo las
+  iniciales (`chatPhoto()` en `public/app.js`).
+
+---
+
 ## Notas de operación
 
 - En producción usar `start-baileys.bat` / pm2 / systemd (no `npm run dev`).

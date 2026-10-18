@@ -185,8 +185,23 @@
   }
 
   var TICKS = { sending: '🕓', sent: '✓', delivered: '✓✓', read: '✓✓', failed: '⚠', received: '' };
-  var QUICK_EMOJIS = ['👍', '❤️', '😂', '😮', '🙏', '🔥', '😊', '👏'];
-  var EMOJI_LIST = ['😀','😁','😂','🤣','😊','😍','🤔','😎','😢','😡','👍','👎','❤️','🔥','🎉','🙏','👏','💯','✅','❌'];
+  // Reacciones rápidas (las que WhatsApp muestra en la barra de reaccionar).
+  var QUICK_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏', '🔥', '👏'];
+  // Catálogo amplio (igual que WhatsApp) para reaccionar y para el compositor:
+  // se arma por grupos y se quitan repetidos.
+  var EMOJI_GROUPS = [
+    ['😀','😃','😄','😁','😆','😅','🤣','😂','🙂','🙃','😉','😊','😇','🥰','😍','🤩','😘','😗','😚','😙','🥲','😋','😛','😜','🤪','😝','🤑','🤗','🤭','🤫','🤔','🤐','🤨','😐','😑','😶','😏','😒','🙄','😬','🤥','😌','😔','😪','🤤','😴','😷','🤒','🤕','🤢','🤮','🤧','🥵','🥶','🥴','😵','🤯','🤠','🥳','🥺','😎','🤓','🧐','😕','😟','🙁','☹️','😮','😯','😲','😳','🥱','😦','😧','😨','😰','😥','😢','😭','😱','😖','😣','😞','😓','😩','😫','😤','😡','😠','🤬','😈','👿','💀','☠️','🤡','👻','👽','🤖','💩','😺','🙈','🙉','🙊','🥹','🫠','🫡','🫢','🫣','🫤','🫥','🤌','🫰','🫵'],
+    ['❤️','🧡','💛','💚','💙','💜','🖤','🤍','🤎','💔','❣️','💕','💞','💓','💗','💖','💘','💝','💟','❤️🔥','💯','🔥','✨','⭐','🌟','💫','💥','💢','💤','💬','👀','🎉','🎊','🎈','🎁','🏆','🥇','🥈','🥉','💐','🌹','🌸','🌼','🌷','🌻','🍀','🌈','☀️','⛅','🌧️','⚡','❄️','💧','🍕','🍔','🍟','🌭','🍿','🍦','🍰','🎂','🍫','☕','🍺','🍻','🥂','⚽','🏀','🏈','🎾','🏐','🎮','🎲','🎵','🎶','🎤','🎧','📌','📍','📷','🚀','💡','🧠','🎯'],
+    ['👍','👎','👌','✌️','🤞','🤟','🤘','🤙','👈','👉','👆','👇','☝️','✋','🤚','🖐️','🖖','👋','🤝','🙏','👏','🙌','🤲','💪','🫶','🤛','🤜','👊','✊','👐','🤗','🫂'],
+  ];
+  var EMOJI_LIST = (function () {
+    var seen = {}, out = [];
+    EMOJI_GROUPS.forEach(function (g) {
+      g.forEach(function (e) { if (!seen[e]) { seen[e] = 1; out.push(e); } });
+    });
+    return out;
+  })();
+  var REACTION_EMOJIS = EMOJI_LIST;
 
   // Una sola conexión SSE por página, compartida por el inbox, /notes y los
   // recordatorios. Solo en páginas del panel con acceso a Conversaciones.
@@ -431,6 +446,49 @@
     return c && c.contact && c.contact.avatar && c.contact.id ? '/inbox/avatar/' + c.contact.id : null;
   }
 
+  // Foto para la cabecera y la ficha: la guardada o, si todavía no hay, la del
+  // contacto pedida a WhatsApp (una sola vez). Así al abrir a alguien desde un
+  // grupo no queda solo con las iniciales.
+  function chatPhoto(c) {
+    var own = convoPhoto(c);
+    if (own) return own;
+    if (!c || !c.chat_id || !c.session_id) return null;
+    if (/@g\.us$/.test(c.chat_id)) return null;
+    return '/inbox/participant-avatar/' + encodeURIComponent(c.session_id) + '/' + encodeURIComponent(c.chat_id);
+  }
+
+  // Popover «quién reaccionó»: lista emoji + nombres, arriba del chip.
+  function toggleReactionPop(chip, group) {
+    var open = document.querySelector('.rx-pop');
+    if (open) {
+      var same = open.__chip === chip;
+      open.remove();
+      if (same) return;
+    }
+    var pop = document.createElement('div');
+    pop.className = 'rx-pop';
+    pop.__chip = chip;
+    pop.innerHTML = '<div class="rx-pop-title">' + escapeHtml(group.emoji) + ' ' +
+        (group.names.length > 1 ? group.names.length + ' reacciones' : '1 reacción') + '</div>' +
+      group.names.map(function (n) {
+        return '<div class="rx-pop-row"><span class="rx-pop-av">' + escapeHtml(initials(n)) + '</span>' +
+          '<span class="rx-pop-name">' + escapeHtml(n) + '</span></div>';
+      }).join('');
+    document.body.appendChild(pop);
+    pop.addEventListener('click', function (ev) { ev.stopPropagation(); });
+    var r = chip.getBoundingClientRect();
+    var pr = pop.getBoundingClientRect();
+    var top = r.top - pr.height - 8;
+    if (top < 8) top = Math.min(r.bottom + 8, window.innerHeight - pr.height - 8);
+    var left = Math.max(8, Math.min(r.left + r.width / 2 - pr.width / 2, window.innerWidth - pr.width - 8));
+    pop.style.top = top + 'px';
+    pop.style.left = left + 'px';
+  }
+  document.addEventListener('click', function () {
+    var p = document.querySelector('.rx-pop');
+    if (p) p.remove();
+  });
+
   /* ── Construcción de una burbuja ── */
   function buildBubble(msg, ctx) {
     var isOut = msg.direction === 'out';
@@ -529,7 +587,23 @@
     if (msg.reactions && msg.reactions.length) {
       var rx = document.createElement('span');
       rx.className = 'reactions';
-      rx.textContent = msg.reactions.map(function (r) { return r.emoji; }).join('');
+      // Agrupa por emoji (tipo WhatsApp): al pulsar se ve quién reaccionó.
+      var rxGroups = [], rxIndex = {};
+      msg.reactions.forEach(function (r) {
+        var g = rxIndex[r.emoji];
+        if (!g) { g = { emoji: r.emoji, names: [] }; rxIndex[r.emoji] = g; rxGroups.push(g); }
+        g.names.push(r.name || (r.actor_type === 'agent' ? 'Agente' : 'Contacto'));
+      });
+      rxGroups.forEach(function (g) {
+        var chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'rx-chip';
+        chip.title = g.names.join(', ') + (g.names.length > 1 ? ' reaccionaron con ' : ' reaccionó con ') + g.emoji;
+        chip.innerHTML = '<span class="rx-emoji">' + escapeHtml(g.emoji) + '</span>' +
+          (g.names.length > 1 ? '<span class="rx-num">' + g.names.length + '</span>' : '');
+        chip.addEventListener('click', function (ev) { ev.stopPropagation(); toggleReactionPop(chip, g); });
+        rx.appendChild(chip);
+      });
       meta.appendChild(rx);
     }
     bubble.appendChild(meta);
@@ -887,18 +961,51 @@
         if (existing) { existing.remove(); return; }
         var pop = document.createElement('div');
         pop.className = 'emoji-pop';
+        var pick = function (e) { ctx.onReact(msg, e); pop.remove(); };
+        var row = document.createElement('div');
+        row.className = 'emoji-row';
         QUICK_EMOJIS.forEach(function (e) {
           var b = document.createElement('button');
-          b.type = 'button'; b.textContent = e;
-          b.addEventListener('click', function () { ctx.onReact(msg, e); pop.remove(); });
-          pop.appendChild(b);
+          b.type = 'button'; b.textContent = e; b.title = e;
+          b.addEventListener('click', function (ev2) { ev2.stopPropagation(); pick(e); });
+          row.appendChild(b);
         });
+        // «Más emojis»: abre el catálogo completo (igual que WhatsApp).
+        var more = document.createElement('button');
+        more.type = 'button'; more.className = 'emoji-more'; more.title = 'Más emojis';
+        more.innerHTML = '<span class="ri-add-line"></span>';
+        more.addEventListener('click', function (ev2) {
+          ev2.stopPropagation();
+          if (pop.classList.toggle('wide')) fillEmojiGrid(pop, pick);
+        });
+        row.appendChild(more);
+        pop.appendChild(row);
+        pop.addEventListener('click', function (ev2) { ev2.stopPropagation(); });
         box.appendChild(pop);
       });
       return box;
     }
     return { left: make('in'), right: make('out') };
   }
+
+  // Catálogo completo de emojis para reaccionar (se construye una sola vez por
+  // popover y se reutiliza mientras esté abierto).
+  function fillEmojiGrid(pop, pick) {
+    if (pop.querySelector('.emoji-grid')) return;
+    var grid = document.createElement('div');
+    grid.className = 'emoji-grid';
+    REACTION_EMOJIS.forEach(function (e) {
+      var b = document.createElement('button');
+      b.type = 'button'; b.textContent = e; b.title = e;
+      b.addEventListener('click', function (ev) { ev.stopPropagation(); pick(e); });
+      grid.appendChild(b);
+    });
+    pop.appendChild(grid);
+  }
+  document.addEventListener('click', function (ev) {
+    if (ev.target.closest && ev.target.closest('.act-react')) return;
+    Array.prototype.forEach.call(document.querySelectorAll('.emoji-pop'), function (p) { p.remove(); });
+  });
 
   /* ── Visor de imágenes ── */
   function openLightbox(src) {
@@ -2770,7 +2877,7 @@
       return '<div class="chat-header">' +
         '<button type="button" class="btn btn-icon btn-soft-secondary" id="toggle-list" title="Conversaciones" aria-label="Volver a las conversaciones">' +
           '<span class="ri-menu-line tl-desk" aria-hidden="true"></span><span class="ri-arrow-left-line tl-mob" aria-hidden="true"></span></button>' +
-        avatarHtml(name, 'avatar-sm', convoPhoto(c)) +
+        avatarHtml(name, 'avatar-sm', chatPhoto(c)) +
         '<div class="chat-id">' +
           (c.team ? '<div class="chat-progs"><span class="chat-team" title="Usuario del sistema"><span class="ri-team-line" aria-hidden="true"></span> ' + escapeHtml(c.team.area) + '</span></div>' : '') +
           ((c.person && c.person.programas || []).length
@@ -3375,7 +3482,7 @@
 
       els.contact.innerHTML =
         '<button type="button" class="contact-close" id="contact-close" aria-label="Cerrar la ficha"><span class="ri-close-line"></span></button>' +
-        '<div class="contact-head">' + avatarHtml(name, 'avatar-xl', convoPhoto(c)) +
+        '<div class="contact-head">' + avatarHtml(name, 'avatar-xl', chatPhoto(c)) +
           ((c.person && c.person.programas || []).length
             ? '<div class="contact-progs">' + c.person.programas.map(function (p) { return '<span class="pf-prog">' + escapeHtml(p) + '</span>'; }).join('') + '</div>'
             : '') +

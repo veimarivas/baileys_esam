@@ -1523,14 +1523,56 @@ html[data-bs-theme="dark"] .bubble-row.out .bubble { background: #123243; border
 .bubble-row.out .bubble .meta { color: #5b7a86; }
 .bubble .reactions {
   display: inline-flex;
-  gap: 0.1rem;
+  align-items: center;
+  gap: 0.05rem;
   margin-left: 0.3rem;
   background: var(--ib-surface);
   border-radius: 999px;
-  padding: 0.02rem 0.32rem;
+  padding: 0.02rem 0.24rem;
   font-size: 0.76rem;
   box-shadow: 0 1px 2px rgba(16, 24, 40, 0.1);
 }
+.bubble .reactions .rx-chip {
+  border: 0;
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.12rem;
+  padding: 0.06rem 0.16rem;
+  border-radius: 999px;
+  line-height: 1;
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+.bubble .reactions .rx-chip:hover { background: var(--ib-brand-soft); }
+.bubble .reactions .rx-num { font-size: 0.6rem; font-weight: 700; color: var(--ib-ink-mute); }
+
+/* Quién reaccionó (se abre al pulsar una reacción) */
+.rx-pop {
+  position: fixed;
+  z-index: 1085;
+  min-width: 170px;
+  max-width: 260px;
+  padding: 0.5rem 0.6rem;
+  border-radius: 12px;
+  background: var(--ib-surface);
+  border: 1px solid var(--ib-line);
+  box-shadow: 0 16px 40px -14px rgba(6, 32, 63, 0.5);
+  font-size: 0.74rem;
+}
+.rx-pop-title { font-weight: 600; color: var(--ib-ink-soft); margin-bottom: 0.3rem; }
+.rx-pop-row { display: flex; align-items: center; gap: 0.4rem; padding: 0.16rem 0; }
+.rx-pop-av {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--ib-brand-soft);
+  color: var(--ib-brand);
+  font-size: 0.58rem; font-weight: 700;
+  flex: 0 0 auto;
+}
+.rx-pop-name { color: var(--ib-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html[data-bs-theme="dark"] .rx-pop .rx-pop-av { color: #cfe4ff; }
 
 /* Cita */
 .quote {
@@ -1620,8 +1662,6 @@ html[data-bs-theme="dark"] .bubble .doc-card { background: rgba(120, 190, 220, 0
 .bubble-actions .emoji-pop {
   position: absolute;
   bottom: 32px;
-  display: flex;
-  gap: 0.15rem;
   padding: 0.28rem 0.42rem;
   border-radius: 999px;
   background: var(--ib-surface);
@@ -1629,9 +1669,23 @@ html[data-bs-theme="dark"] .bubble .doc-card { background: rgba(120, 190, 220, 0
   box-shadow: 0 12px 28px -12px rgba(6, 32, 63, 0.45);
   z-index: 12;
 }
+.bubble-actions .emoji-pop .emoji-row { display: flex; gap: 0.15rem; align-items: center; }
 .bubble-actions.out .emoji-pop { right: 0; }
 .bubble-actions.in .emoji-pop { left: 0; }
-.bubble-actions .emoji-pop button { box-shadow: none; font-size: 1rem; width: 27px; height: 27px; }
+.bubble-actions .emoji-pop button { box-shadow: none; font-size: 1rem; width: 27px; height: 27px; padding: 0; border: 0; background: transparent; border-radius: 8px; cursor: pointer; line-height: 1; }
+.bubble-actions .emoji-pop button:hover { background: var(--ib-brand-soft); }
+.bubble-actions .emoji-pop .emoji-more { color: var(--ib-brand); display: grid; place-items: center; }
+.bubble-actions .emoji-pop .emoji-grid { display: none; }
+.bubble-actions .emoji-pop.wide { border-radius: 16px; }
+.bubble-actions .emoji-pop.wide .emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  justify-items: center;
+  gap: 0.14rem;
+  max-height: 196px;
+  overflow-y: auto;
+  margin-top: 0.34rem;
+}
 
 /* Medios */
 .bubble img.media { max-width: 280px; max-height: 340px; border-radius: 10px; display: block; cursor: zoom-in; }
@@ -2004,7 +2058,7 @@ html[data-bs-theme="dark"] .bubble .media-missing .mm-retry { color: #8fd0ea; }
   box-shadow: 0 18px 40px -20px rgba(6, 32, 63, 0.5);
   padding: 0.4rem;
 }
-.composer .emoji-pop2 { left: auto; right: 0; width: 244px; display: flex; flex-wrap: wrap; gap: 0.15rem; }
+.composer .emoji-pop2 { left: auto; right: 0; width: 244px; display: flex; flex-wrap: wrap; gap: 0.15rem; max-height: 224px; overflow-y: auto; }
 .composer .quick-item { display: block; width: 100%; text-align: left; border: 0; background: transparent; padding: 0.45rem 0.55rem; border-radius: 8px; cursor: pointer; }
 .composer .quick-item:hover { background: var(--ib-brand-soft); }
 .composer .quick-item code { background: rgba(4, 84, 116, 0.12); color: var(--ib-brand); border-radius: 6px; padding: 0.05rem 0.38rem; font-size: 0.68rem; font-weight: 700; }

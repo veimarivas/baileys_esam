@@ -702,7 +702,7 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
         chatId: resolved.chatId,
         messageId,
       });
-      res.json({ ok: true, reactions: conversations.reactionsFor(messageId) });
+      res.json({ ok: true, reactions: conversations.reactionsFor(messageId, resolved.session.id) });
     }),
   );
 

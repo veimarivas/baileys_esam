@@ -91,7 +91,8 @@ export interface MessageDTO {
     sender_phone: string | null;
     sender_chat_id: string | null;
   } | null;
-  reactions: Array<{ emoji: string; actor_type: string; actor_id: string | null }>;
+  /** Reacciones: emoji + quién la puso (nombre legible para mostrar en el chat). */
+  reactions: Array<{ emoji: string; actor_type: string; actor_id: string | null; name: string | null }>;
 }
 
 interface Scope {
@@ -290,7 +291,7 @@ export function listConversations(
   return mapConversations(rows);
 }
 
-function messageReactions(messageIds: number[]): Map<number, MessageDTO['reactions']> {
+function messageReactions(messageIds: number[], sessionId: string): Map<number, MessageDTO['reactions']> {
   const map = new Map<number, MessageDTO['reactions']>();
   if (!messageIds.length) return map;
   const placeholders = messageIds.map(() => '?').join(',');
@@ -298,12 +299,61 @@ function messageReactions(messageIds: number[]): Map<number, MessageDTO['reactio
     `SELECT message_id, emoji, actor_type, actor_id FROM message_reactions WHERE message_id IN (${placeholders})`,
     ...messageIds,
   );
+  const cache = new Map<string, string>();
   for (const r of rows) {
     const list = map.get(r.message_id) ?? [];
-    list.push({ emoji: r.emoji, actor_type: r.actor_type, actor_id: r.actor_id });
+    list.push({
+      emoji: r.emoji,
+      actor_type: r.actor_type,
+      actor_id: r.actor_id,
+      name: reactionActorName(sessionId, r.actor_type, r.actor_id, cache),
+    });
     map.set(r.message_id, list);
   }
   return map;
+}
+
+/**
+ * Quién reaccionó, con nombre legible: el compañero del sistema (`users`), el
+ * nombre de la ficha, el registrado a mano para esa persona en cualquier línea
+ * o, si no hay nada, el número. Sin nombre queda "Un participante" (el reactor
+ * de un grupo del que WhatsApp no comparte identidad).
+ */
+function reactionActorName(
+  sessionId: string,
+  actorType: string,
+  actorId: string | null,
+  cache: Map<string, string>,
+): string {
+  const id = String(actorId ?? '').trim();
+  const key = `${actorType}|${id}`;
+  const hit = cache.get(key);
+  if (hit !== undefined) return hit;
+
+  let label: string;
+  if (actorType === 'agent') {
+    if (!id) {
+      label = 'Tu teléfono';
+    } else {
+      const user = get<{ name: string | null }>('SELECT name FROM users WHERE id = ?', Number(id) || -1);
+      label = user?.name || 'Agente';
+    }
+  } else if (!id || id.endsWith('@g.us')) {
+    label = 'Un participante';
+  } else {
+    const chat = resolveChatId(id);
+    const contact = get<{ name: string | null }>(
+      'SELECT name FROM contacts WHERE session_id = ? AND chat_id = ?',
+      sessionId,
+      chat,
+    );
+    const personKey = contact?.name ? null : phoneKeyOf(chat);
+    const tags = personKey ? personTagsByKeys([personKey]).get(personKey) : undefined;
+    const phone = phoneFromChatId(chat);
+    label = contact?.name || tags?.full_name || (phone ? `+${phone}` : chat.split('@')[0] || 'Contacto');
+  }
+  cache.set(key, label);
+  return label;
 }
 
 interface MessageJoinRow extends MessageRow {
@@ -444,7 +494,7 @@ export function listMessages(sessionId: string, chatId: string, query: MessageQu
   }
 
   fillGroupSenderNames(rows);
-  const reactions = messageReactions(rows.map((r) => r.id));
+  const reactions = messageReactions(rows.map((r) => r.id), sessionId);
   return { messages: rows.map((r) => mapMessage(r, reactions.get(r.id) ?? [])), hasMore };
 }
 
@@ -691,11 +741,12 @@ export function setReaction(
 }
 
 /** Reacciones de un mensaje (para devolver el estado tras reaccionar). */
-export function reactionsFor(messageId: number): MessageDTO['reactions'] {
+export function reactionsFor(messageId: number, sessionId: string): MessageDTO['reactions'] {
+  const cache = new Map<string, string>();
   return all<{ emoji: string; actor_type: string; actor_id: string | null }>(
     'SELECT emoji, actor_type, actor_id FROM message_reactions WHERE message_id = ?',
     messageId,
-  );
+  ).map((r) => ({ ...r, name: reactionActorName(sessionId, r.actor_type, r.actor_id, cache) }));
 }
 
 /**

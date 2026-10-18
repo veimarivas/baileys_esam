@@ -97,6 +97,8 @@ export class SessionManager implements OutboundSender {
   private mediaQueue: number[] = [];
   private mediaActive = 0;
   private mediaInFlight = new Map<number, Promise<{ path: string; mime: string | null } | null>>();
+  /** Último aviso de "bajar stickers" por chat (evita repetir en cada vista). */
+  private stickerPrefetchAt = new Map<string, number>();
   /** Fallas de descifrado recientes por sesión (diagnóstico). */
   private decryptFailures = new Map<string, Array<{ at: number; fromMe: boolean; error: string }>>();
 
@@ -956,6 +958,31 @@ export class SessionManager implements OutboundSender {
   }
 
   /**
+   * Al abrir un chat, baja los stickers pendientes (pesan poco) para que se vean
+   * solos, como en WhatsApp, sin que el usuario pulse "Descargar". Se limita por
+   * chat y se repite como mucho cada 90 s; los que ya fallaron quedan marcados
+   * como `missing` y no se vuelven a intentar.
+   */
+  prefetchStickers(sessionId: string, chatId: string, limit = 40): void {
+    const key = `${sessionId}:${chatId}`;
+    const last = this.stickerPrefetchAt.get(key) ?? 0;
+    if (Date.now() - last < 90_000) return;
+    if (this.stickerPrefetchAt.size > 500) this.stickerPrefetchAt.clear();
+    this.stickerPrefetchAt.set(key, Date.now());
+    const rows = all<{ id: number }>(
+      `SELECT id FROM messages
+        WHERE session_id = ? AND chat_id = ? AND content_type = 'sticker'
+          AND media_path IS NULL AND media_state IS NULL
+          AND media_ref IS NOT NULL AND media_ref <> ''
+        ORDER BY id DESC LIMIT ?`,
+      sessionId,
+      chatId,
+      limit,
+    );
+    for (const r of rows) this.queueMediaDownload(r.id);
+  }
+
+  /**
    * Devuelve el archivo de la media de un mensaje, descargándolo de WhatsApp si
    * hace falta (con tiempo máximo). Si WhatsApp ya no lo tiene, lo marca como
    * `missing` para no volver a intentarlo en cada vista (salvo `retry`).
@@ -1277,6 +1304,18 @@ export class SessionManager implements OutboundSender {
     // En grupos el reactor es un participante concreto, no el grupo: sin esto
     // todos aparecían como una sola reacción sin saber quién la puso.
     const actorId = msg.fromMe ? '' : msg.senderJid ? resolveChatId(msg.senderJid) : msg.chatId;
+    // Reacciones guardadas por versiones anteriores en grupos: se les puso el JID
+    // del grupo (no se sabía quién). Si ahora llega la misma reacción con autor,
+    // se borra la vieja para no contarla dos veces.
+    if (!msg.fromMe && msg.chatId.endsWith('@g.us') && actorId !== msg.chatId && emoji) {
+      run(
+        `DELETE FROM message_reactions
+          WHERE message_id = ? AND actor_type = 'customer' AND actor_id = ? AND emoji = ?`,
+        target.id,
+        msg.chatId,
+        emoji,
+      );
+    }
     setReaction(target.id, sessionId, msg.chatId, actorType, actorId, emoji);
     panelBus.publish('reaction', { sessionId, chatId: msg.chatId, messageId: target.id });
   }

@@ -444,6 +444,9 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
         if (occurredAt && Number.isFinite(id)) before = { occurredAt, id };
       }
       const page = conversations.listMessages(resolved.session.id, resolved.chatId, { after, before, limit });
+      // Los stickers pendientes se bajan en segundo plano (son chicos): al abrir
+      // el chat se ven solos, como en WhatsApp.
+      manager.prefetchStickers(resolved.session.id, resolved.chatId);
       res.json({ chatId: resolved.chatId, messages: page.messages, hasMore: page.hasMore });
     }),
   );

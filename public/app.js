@@ -120,6 +120,48 @@
     );
   }
 
+  // Formato de WhatsApp: *negrita*, _cursiva_, ~tachado~ y ```monospace```.
+  // Recibe el texto ya escapado (con escapeHtml) y devuelve HTML.
+  function waFormatHtml(escaped) {
+    var s = String(escaped == null ? '' : escaped);
+    var codes = [];
+    // Monospace primero, y se protege para que los otros formatos no lo toquen.
+    s = s.replace(/```([\s\S]+?)```/g, function (_m, code) {
+      codes.push(code);
+      return '\u0001' + (codes.length - 1) + '\u0001';
+    });
+    // El formato empieza y termina en un límite (inicio, espacio o signo) para
+    // no romper el texto normal que usa * _ ~ sueltos (p. ej. «2 * 3»).
+    var BOUND = '(^|[^0-9A-Za-z\\u00C0-\\u024F])';
+    var END = '(?=$|[^0-9A-Za-z\\u00C0-\\u024F])';
+    s = s.replace(new RegExp(BOUND + '\\*(?!\\s)([^\\s*](?:[^*\\n]*[^\\s*])?)\\*' + END, 'g'), '$1<strong>$2</strong>');
+    s = s.replace(new RegExp(BOUND + '_(?!\\s)([^\\s_](?:[^_\\n]*[^\\s_])?)_' + END, 'g'), '$1<em>$2</em>');
+    s = s.replace(new RegExp(BOUND + '~(?!\\s)([^\\s~](?:[^~\\n]*[^\\s~])?)~' + END, 'g'), '$1<s>$2</s>');
+    // Vuelve el monospace protegido.
+    s = s.replace(/\u0001(\d+)\u0001/g, function (_m, i) { return '<code>' + codes[Number(i)] + '</code>'; });
+    return s;
+  }
+
+  // Texto de WhatsApp con formato + enlaces (lo que va dentro de una burbuja).
+  function waRichHtml(text) {
+    return linkifyHtml(waFormatHtml(escapeHtml(text)));
+  }
+
+  // Quién reaccionó: nombre y número. Se resuelve en el servidor; si el dato es
+  // viejo (solo llegó el JID) se muestra el número del JID como respaldo.
+  function reactionWho(r) {
+    var name = String((r && r.name) || '').trim();
+    var phone = String((r && r.phone) || '').replace(/\D+/g, '');
+    var jid = String((r && r.actor_id) || '');
+    if (!phone && /@(c|s\.whatsapp)\.(us|net)$/.test(jid)) phone = jid.split('@')[0].replace(/\D+/g, '');
+    if (!name && !phone && r && r.actor_type === 'agent') name = 'Agente';
+    return {
+      name: name,
+      phone: phone ? fmtPhone(phone) : '',
+      label: name || (phone ? fmtPhone(phone) : 'Participante'),
+    };
+  }
+
   function fmtTime(iso) {
     if (!iso) return '';
     var d = new Date(iso);
@@ -457,7 +499,7 @@
     return '/inbox/participant-avatar/' + encodeURIComponent(c.session_id) + '/' + encodeURIComponent(c.chat_id);
   }
 
-  // Popover «quién reaccionó»: lista emoji + nombres, arriba del chip.
+  // Popover «quién reaccionó»: nombre y número de cada persona, arriba del chip.
   function toggleReactionPop(chip, group) {
     var open = document.querySelector('.rx-pop');
     if (open) {
@@ -468,11 +510,15 @@
     var pop = document.createElement('div');
     pop.className = 'rx-pop';
     pop.__chip = chip;
-    pop.innerHTML = '<div class="rx-pop-title">' + escapeHtml(group.emoji) + ' ' +
-        (group.names.length > 1 ? group.names.length + ' reacciones' : '1 reacción') + '</div>' +
-      group.names.map(function (n) {
-        return '<div class="rx-pop-row"><span class="rx-pop-av">' + escapeHtml(initials(n)) + '</span>' +
-          '<span class="rx-pop-name">' + escapeHtml(n) + '</span></div>';
+    pop.innerHTML = '<div class="rx-pop-title"><span class="rx-pop-emoji">' + escapeHtml(group.emoji) + '</span> ' +
+        (group.people.length > 1 ? group.people.length + ' reacciones' : '1 reacción') + '</div>' +
+      group.people.map(function (w) {
+        return '<div class="rx-pop-row">' +
+            '<span class="rx-pop-av">' + escapeHtml(initials(w.label)) + '</span>' +
+            '<span class="rx-pop-id"><span class="rx-pop-name">' + escapeHtml(w.label) + '</span>' +
+            (w.name && w.phone ? '<span class="rx-pop-phone">' + escapeHtml(w.phone) + '</span>' : '') +
+            '</span>' +
+          '</div>';
       }).join('');
     document.body.appendChild(pop);
     pop.addEventListener('click', function (ev) { ev.stopPropagation(); });
@@ -524,8 +570,9 @@
     } else {
       sender = null;
     }
+    var author = null;
     if (sender) {
-      var author = document.createElement('span');
+      author = document.createElement('span');
       author.className = 'bubble-author';
       author.textContent = sender;
       // En grupos, el autor es un contacto: clic abre/crea su conversación.
@@ -534,17 +581,25 @@
         author.title = 'Abrir conversación con ‘' + sender + '’';
         author.addEventListener('click', function () { ctx.onOpenContact(msg.sender_chat_id); });
       }
-      wrap.appendChild(author);
     }
 
+    // Tipo de burbuja: los adjuntos van pegados al borde (como WhatsApp) y los
+    // stickers sin fondo, solo la figura.
+    var ctype = msg.content_type || 'text';
+    var cstatus = msg.media_status || (msg.media_path ? 'ok' : null);
+    var cHasMedia = cstatus === 'ok' || cstatus === 'pending';
     var bubble = document.createElement('div');
-    bubble.className = 'bubble';
+    bubble.className = 'bubble' +
+      (cHasMedia && ctype === 'sticker' ? ' has-sticker' : '') +
+      (cHasMedia && (ctype === 'image' || ctype === 'video') ? ' has-media' : '');
+    // El nombre de quien escribe va dentro de la burbuja, como en WhatsApp.
+    if (author) bubble.appendChild(author);
 
     // Cita (clic para ir al mensaje original + contacto para abrir su chat).
     if (msg.reply_to) {
       var q = document.createElement('div');
       q.className = 'quote';
-      var qBody = '<div class="quote-body">' + linkifyHtml(escapeHtml(msg.reply_to.body || '[' + msg.reply_to.content_type + ']')) + '</div>';
+      var qBody = '<div class="quote-body">' + waRichHtml(msg.reply_to.body || '[' + msg.reply_to.content_type + ']') + '</div>';
 
       var qName = msg.reply_to.sender_name || '';
       var qPhone = msg.reply_to.sender_phone || '';
@@ -591,16 +646,17 @@
       var rxGroups = [], rxIndex = {};
       msg.reactions.forEach(function (r) {
         var g = rxIndex[r.emoji];
-        if (!g) { g = { emoji: r.emoji, names: [] }; rxIndex[r.emoji] = g; rxGroups.push(g); }
-        g.names.push(r.name || (r.actor_type === 'agent' ? 'Agente' : 'Contacto'));
+        if (!g) { g = { emoji: r.emoji, people: [] }; rxIndex[r.emoji] = g; rxGroups.push(g); }
+        g.people.push(reactionWho(r));
       });
       rxGroups.forEach(function (g) {
         var chip = document.createElement('button');
         chip.type = 'button';
         chip.className = 'rx-chip';
-        chip.title = g.names.join(', ') + (g.names.length > 1 ? ' reaccionaron con ' : ' reaccionó con ') + g.emoji;
+        var labels = g.people.map(function (w) { return w.label; });
+        chip.title = labels.join(', ') + (labels.length > 1 ? ' reaccionaron con ' : ' reaccionó con ') + g.emoji;
         chip.innerHTML = '<span class="rx-emoji">' + escapeHtml(g.emoji) + '</span>' +
-          (g.names.length > 1 ? '<span class="rx-num">' + g.names.length + '</span>' : '');
+          (g.people.length > 1 ? '<span class="rx-num">' + g.people.length + '</span>' : '');
         chip.addEventListener('click', function (ev) { ev.stopPropagation(); toggleReactionPop(chip, g); });
         rx.appendChild(chip);
       });
@@ -874,7 +930,8 @@
   function paragraph(text, ctx) {
     var p = document.createElement('span');
     p.className = 'bubble-text';
-    p.innerHTML = linkifyHtml(escapeHtml(text));
+    // Formato de WhatsApp (*negrita*, _cursiva_, ~tachado~, ```monospace```).
+    p.innerHTML = waRichHtml(text);
     if (ctx && ctx.onOpenContact) linkifyPhones(p, ctx);
     enhanceYoutube(p);
     return p;
@@ -2900,7 +2957,7 @@
             escapeHtml(state.replyTo.direction === 'out'
               ? 'tu mensaje'
               : (state.replyTo.sender_name || (state.replyTo.sender_phone ? fmtPhone(state.replyTo.sender_phone) : '') || convoName(selectedConversation() || {}))) + '</div>' +
-            '<div class="rp-body">' + escapeHtml(state.replyTo.body || '[' + state.replyTo.content_type + ']') + '</div></div>' +
+            '<div class="rp-body">' + waRichHtml(state.replyTo.body || '[' + state.replyTo.content_type + ']') + '</div></div>' +
             '<button type="button" id="cancel-reply" aria-label="Cancelar respuesta"><span class="ri-close-line"></span></button></div>'
         : '';
       return '<div class="composer">' + reply +

@@ -91,8 +91,16 @@ export interface MessageDTO {
     sender_phone: string | null;
     sender_chat_id: string | null;
   } | null;
-  /** Reacciones: emoji + quién la puso (nombre legible para mostrar en el chat). */
-  reactions: Array<{ emoji: string; actor_type: string; actor_id: string | null; name: string | null }>;
+  /** Reacciones: emoji + quién la puso (nombre y número para mostrar en el chat). */
+  reactions: Array<{
+    emoji: string;
+    actor_type: string;
+    actor_id: string | null;
+    /** Nombre legible de quien reaccionó ('' si no se sabe). */
+    name: string;
+    /** Número de WhatsApp de quien reaccionó (null si no se conoce). */
+    phone: string | null;
+  }>;
 }
 
 interface Scope {
@@ -299,14 +307,16 @@ function messageReactions(messageIds: number[], sessionId: string): Map<number, 
     `SELECT message_id, emoji, actor_type, actor_id FROM message_reactions WHERE message_id IN (${placeholders})`,
     ...messageIds,
   );
-  const cache = new Map<string, string>();
+  const cache = new Map<string, { name: string; phone: string | null }>();
   for (const r of rows) {
     const list = map.get(r.message_id) ?? [];
+    const actor = reactionActor(sessionId, r.actor_type, r.actor_id, cache);
     list.push({
       emoji: r.emoji,
       actor_type: r.actor_type,
       actor_id: r.actor_id,
-      name: reactionActorName(sessionId, r.actor_type, r.actor_id, cache),
+      name: actor.name,
+      phone: actor.phone,
     });
     map.set(r.message_id, list);
   }
@@ -314,46 +324,47 @@ function messageReactions(messageIds: number[], sessionId: string): Map<number, 
 }
 
 /**
- * Quién reaccionó, con nombre legible: el compañero del sistema (`users`), el
+ * Quién reaccionó: nombre y número. El compañero del sistema (`users`), el
  * nombre de la ficha, el registrado a mano para esa persona en cualquier línea
- * o, si no hay nada, el número. Sin nombre queda "Un participante" (el reactor
- * de un grupo del que WhatsApp no comparte identidad).
+ * o su número de WhatsApp. En reacciones guardadas antes de 2026-10-18 en un
+ * grupo queda el JID del grupo (WhatsApp solo informa quién reacciona en vivo)
+ * y no se puede saber: se devuelve vacío y el panel muestra "Participante".
  */
-function reactionActorName(
+function reactionActor(
   sessionId: string,
   actorType: string,
   actorId: string | null,
-  cache: Map<string, string>,
-): string {
+  cache: Map<string, { name: string; phone: string | null }>,
+): { name: string; phone: string | null } {
   const id = String(actorId ?? '').trim();
   const key = `${actorType}|${id}`;
   const hit = cache.get(key);
-  if (hit !== undefined) return hit;
+  if (hit) return hit;
 
-  let label: string;
+  let out: { name: string; phone: string | null };
   if (actorType === 'agent') {
     if (!id) {
-      label = 'Tu teléfono';
+      out = { name: 'Tu teléfono', phone: null };
     } else {
       const user = get<{ name: string | null }>('SELECT name FROM users WHERE id = ?', Number(id) || -1);
-      label = user?.name || 'Agente';
+      out = { name: user?.name || 'Agente', phone: null };
     }
   } else if (!id || id.endsWith('@g.us')) {
-    label = 'Un participante';
+    out = { name: '', phone: null };
   } else {
     const chat = resolveChatId(id);
-    const contact = get<{ name: string | null }>(
-      'SELECT name FROM contacts WHERE session_id = ? AND chat_id = ?',
+    const contact = get<{ name: string | null; phone: string | null }>(
+      'SELECT name, phone FROM contacts WHERE session_id = ? AND chat_id = ?',
       sessionId,
       chat,
     );
-    const personKey = contact?.name ? null : phoneKeyOf(chat);
+    const phone = contact?.phone || phoneFromChatId(chat) || null;
+    const personKey = phoneKeyOf(phone || chat);
     const tags = personKey ? personTagsByKeys([personKey]).get(personKey) : undefined;
-    const phone = phoneFromChatId(chat);
-    label = contact?.name || tags?.full_name || (phone ? `+${phone}` : chat.split('@')[0] || 'Contacto');
+    out = { name: contact?.name || tags?.full_name || '', phone };
   }
-  cache.set(key, label);
-  return label;
+  cache.set(key, out);
+  return out;
 }
 
 interface MessageJoinRow extends MessageRow {
@@ -742,11 +753,14 @@ export function setReaction(
 
 /** Reacciones de un mensaje (para devolver el estado tras reaccionar). */
 export function reactionsFor(messageId: number, sessionId: string): MessageDTO['reactions'] {
-  const cache = new Map<string, string>();
+  const cache = new Map<string, { name: string; phone: string | null }>();
   return all<{ emoji: string; actor_type: string; actor_id: string | null }>(
     'SELECT emoji, actor_type, actor_id FROM message_reactions WHERE message_id = ?',
     messageId,
-  ).map((r) => ({ ...r, name: reactionActorName(sessionId, r.actor_type, r.actor_id, cache) }));
+  ).map((r) => {
+    const actor = reactionActor(sessionId, r.actor_type, r.actor_id, cache);
+    return { emoji: r.emoji, actor_type: r.actor_type, actor_id: r.actor_id, name: actor.name, phone: actor.phone };
+  });
 }
 
 /**

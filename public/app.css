@@ -1510,6 +1510,38 @@ html[data-bs-theme="dark"] .bubble { background: #1c2634; color: #e6edf3; }
 }
 html[data-bs-theme="dark"] .bubble-row.out .bubble { background: #123243; border-color: rgba(120, 190, 220, 0.16); }
 .bubble .bubble-text { display: block; }
+/* Autor dentro de la burbuja (grupos), como en WhatsApp. */
+.bubble .bubble-author { display: block; margin: 0 0 0.18rem; }
+.bubble .bubble-author-link { cursor: pointer; }
+.bubble .bubble-author-link:hover { text-decoration: underline; }
+/* Monospace de WhatsApp (```texto```). */
+.bubble .bubble-text code, .bubble code {
+  font-family: var(--bs-font-monospace, ui-monospace, SFMono-Regular, Menlo, monospace);
+  background: rgba(4, 84, 116, 0.1);
+  border-radius: 4px;
+  padding: 0 0.24rem;
+  font-size: 0.86em;
+}
+html[data-bs-theme="dark"] .bubble code { background: rgba(120, 190, 220, 0.16); }
+/* Adjuntos: la imagen/video van pegados al borde de la burbuja. */
+.bubble.has-media { padding: 0.24rem 0.24rem 0.3rem; }
+.bubble.has-media .bubble-text { margin: 0 0.42rem; }
+.bubble.has-media .meta { margin-right: 0.42rem; }
+/* Stickers: solo la figura, sin caja (como WhatsApp). */
+.bubble-row .bubble.has-sticker { background: transparent; border: 0; box-shadow: none; padding: 0.1rem; position: relative; }
+html[data-bs-theme="dark"] .bubble-row .bubble.has-sticker { background: transparent; }
+.bubble.has-sticker .bubble-author { margin: 0 0.25rem 0.12rem; }
+.bubble.has-sticker .meta {
+  position: absolute;
+  right: 0.35rem;
+  bottom: 0.08rem;
+  margin: 0;
+  background: rgba(6, 32, 63, 0.4);
+  color: #fff;
+  border-radius: 999px;
+  padding: 0.04rem 0.45rem;
+}
+.bubble.has-sticker .reactions { margin-left: 0.2rem; }
 .bubble .meta {
   display: flex;
   align-items: center;
@@ -1551,27 +1583,41 @@ html[data-bs-theme="dark"] .bubble-row.out .bubble { background: #123243; border
 .rx-pop {
   position: fixed;
   z-index: 1085;
-  min-width: 170px;
-  max-width: 260px;
-  padding: 0.5rem 0.6rem;
+  min-width: 180px;
+  max-width: 280px;
+  padding: 0.5rem 0.6rem 0.55rem;
   border-radius: 12px;
-  background: var(--ib-surface);
-  border: 1px solid var(--ib-line);
+  background: var(--ib-surface, #ffffff);
+  color: var(--ib-ink, #101828);
+  border: 1px solid var(--ib-line, #e4e7ec);
   box-shadow: 0 16px 40px -14px rgba(6, 32, 63, 0.5);
   font-size: 0.74rem;
 }
-.rx-pop-title { font-weight: 600; color: var(--ib-ink-soft); margin-bottom: 0.3rem; }
-.rx-pop-row { display: flex; align-items: center; gap: 0.4rem; padding: 0.16rem 0; }
+.rx-pop-title {
+  display: flex;
+  align-items: center;
+  gap: 0.28rem;
+  font-weight: 600;
+  color: var(--ib-ink-soft, #475467);
+  margin-bottom: 0.34rem;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid var(--ib-line, #e4e7ec);
+}
+.rx-pop-title .rx-pop-emoji { font-size: 1rem; line-height: 1; }
+.rx-pop-row { display: flex; align-items: center; gap: 0.45rem; padding: 0.2rem 0; }
 .rx-pop-av {
-  width: 22px; height: 22px;
+  width: 24px; height: 24px;
   border-radius: 50%;
   display: grid; place-items: center;
-  background: var(--ib-brand-soft);
-  color: var(--ib-brand);
-  font-size: 0.58rem; font-weight: 700;
+  background: var(--ib-brand-soft, #e8f2f7);
+  color: var(--ib-brand, #045474);
+  font-size: 0.6rem; font-weight: 700;
   flex: 0 0 auto;
 }
-.rx-pop-name { color: var(--ib-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rx-pop-id { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.rx-pop-name { color: var(--ib-ink, #101828); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rx-pop-phone { color: var(--ib-ink-mute, #98a2b3); font-size: 0.66rem; font-variant-numeric: tabular-nums; }
+html[data-bs-theme="dark"] .rx-pop { background: #1d2a3d; color: #e6edf3; border-color: #2a3a52; }
 html[data-bs-theme="dark"] .rx-pop .rx-pop-av { color: #cfe4ff; }
 
 /* Cita */
@@ -1690,6 +1736,9 @@ html[data-bs-theme="dark"] .bubble .doc-card { background: rgba(120, 190, 220, 0
 /* Medios */
 .bubble img.media { max-width: 280px; max-height: 340px; border-radius: 10px; display: block; cursor: zoom-in; }
 .bubble img.sticker { max-width: 150px; max-height: 150px; display: block; cursor: zoom-in; }
+/* Mientras se baja de WhatsApp: un recuadro suave en vez de un hueco roto. */
+.bubble.has-sticker a.media-pending img { min-width: 116px; min-height: 116px; border-radius: 10px; background: rgba(4, 84, 116, 0.08); }
+.bubble.has-media a.media-pending img { background: rgba(4, 84, 116, 0.08); border-radius: 10px; }
 .bubble video { max-width: 300px; max-height: 360px; border-radius: 10px; display: block; }
 .bubble audio { max-width: 220px; height: 34px; margin-bottom: 0.2rem; }
 

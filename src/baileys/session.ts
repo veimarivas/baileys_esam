@@ -309,11 +309,18 @@ function describe(message: any): { type: string; body: string | null; mime: stri
   if (m.videoMessage) return { type: 'video', body: m.videoMessage.caption ?? null, mime: m.videoMessage.mimetype ?? 'video/mp4', filename: null, seconds: m.videoMessage.seconds ?? null };
   if (m.audioMessage) return { type: 'audio', body: null, mime: m.audioMessage.mimetype ?? 'audio/ogg', filename: null, seconds: m.audioMessage.seconds ?? null };
   if (m.documentMessage) {
+    const mime = m.documentMessage.mimetype ?? 'application/octet-stream';
+    const fileName = m.documentMessage.fileName ?? null;
+    // Algunos clientes mandan el sticker como documento WebP: se muestra como
+    // sticker (sin caja de documento), igual que WhatsApp.
+    if (/^image\/webp/i.test(mime) || (!!fileName && /\.webp$/i.test(fileName))) {
+      return { type: 'sticker', body: null, mime: 'image/webp', filename: null, seconds: null };
+    }
     return {
       type: 'document',
       body: m.documentMessage.caption ?? null,
-      mime: m.documentMessage.mimetype ?? 'application/octet-stream',
-      filename: m.documentMessage.fileName ?? null,
+      mime,
+      filename: fileName,
       seconds: null,
     };
   }

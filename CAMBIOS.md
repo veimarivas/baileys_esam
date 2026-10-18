@@ -1533,6 +1533,35 @@ sin tocar backend.
 
 ---
 
+## 43. Reacciones con autor y número, formato de WhatsApp, stickers y burbujas (2026-10-18)
+
+- **Quién reaccionó (nombre y número):** al pulsar una reacción se abre un globito
+  con fondo (nombre + número de WhatsApp de cada persona). El servidor resuelve el
+  autor con `users.name` (agentes), el nombre de la ficha, el nombre registrado a
+  mano o su número (`src/core/conversations.ts`: `reactionActor`).
+  - Si el dato no alcanza, el panel deriva el número del JID; de último recurso
+    muestra «Participante».
+  - En grupos, las reacciones viejas (guardadas antes de hoy) quedaron con el JID
+    del grupo porque WhatsApp solo informa quién reacciona en vivo: no se puede
+    saber quién fue. Al reenviar WhatsApp esa reacción (p. ej. al sincronizar
+    historial) se guarda con su autor y se **borra la vieja** para no contarla dos
+    veces (`handleReaction`, `src/baileys/manager.ts`).
+- **Formato de WhatsApp en el chat:** `*negrita*`, `_cursiva_`, `~tachado~` y
+  ```monospace``` se muestran con su formato en la burbuja, la cita y la vista
+  previa de la respuesta (`waFormatHtml`/`waRichHtml` en `public/app.js`). Respeta
+  los usos normales de esos signos («2 * 3 = 6», `usuario_1`, `a*b*c`).
+- **Estructura de los mensajes como WhatsApp:** el nombre de quien escribe va
+  **dentro** de la burbuja (en grupos), las imágenes y videos van pegados al borde
+  de la burbuja y los **stickers** se muestran sueltos (sin caja) con la hora
+  superpuesta (`has-media` / `has-sticker` en `public/app.js` + `public/app.css`).
+- **Stickers que no se veían:** al abrir un chat se bajan en segundo plano los
+  stickers pendientes (son chicos), así se ven solos sin pulsar «Descargar»
+  (`prefetchStickers` en `src/baileys/manager.ts`, llamado desde la ruta de
+  mensajes). Además, un sticker que llega como documento WebP se reconoce como
+  sticker (`src/baileys/session.ts`).
+
+---
+
 ## Notas de operación
 
 - En producción usar `start-baileys.bat` / pm2 / systemd (no `npm run dev`).

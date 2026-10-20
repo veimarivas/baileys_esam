@@ -2398,7 +2398,8 @@
         var phone = (c.contact && c.contact.phone) || '';
         var last = c.last_message_text || '';
         var person = c.person || {};
-        var extra = (person.full_name || '') + ' ' + (person.programas || []).join(' ');
+        var extra = (person.full_name || '') + ' ' + (person.programas || []).join(' ') + ' ' +
+          (c.programa || '') + ' ' + ((c.team && c.team.name) || '');
         return (name + ' ' + phone + ' ' + last + ' ' + extra).toLowerCase().indexOf(s) !== -1;
       });
     }
@@ -2605,9 +2606,17 @@
       return d ? '+' + d : '';
     }
 
+    // Programas de la persona (de cualquier línea). En grupos se usa el que
+    // etiquetó cronogramas en la conversación.
+    function convPrograms(c) {
+      if (!c) return [];
+      if (c.person && c.person.programas && c.person.programas.length) return c.person.programas;
+      return c.programa ? [c.programa] : [];
+    }
+
     // Programa(s) de la persona según cronogramas: el más reciente y cuántos más.
     function programaLine(c) {
-      var progs = (c.person && c.person.programas) || [];
+      var progs = convPrograms(c);
       if (!progs.length) return '';
       return '<div class="convo-prog" title="' + escapeHtml(progs.join(' · ')) + '"><span class="ri-graduation-cap-line" aria-hidden="true"></span>' +
         escapeHtml(progs[0]) + (progs.length > 1 ? ' <b>+' + (progs.length - 1) + '</b>' : '') + '</div>';
@@ -2928,6 +2937,15 @@
       syncAudioScope();
     }
 
+    // Datos de la persona sobre el nombre: compañero del sistema y programas.
+    function chatMetaHtml(c) {
+      var progs = convPrograms(c);
+      return (c.team ? '<div class="chat-progs"><span class="chat-team" title="Usuario del sistema"><span class="ri-team-line" aria-hidden="true"></span> ' + escapeHtml(c.team.area) + '</span></div>' : '') +
+        (progs.length
+          ? '<div class="chat-progs">' + progs.map(function (p) { return '<span class="chat-programa" title="Programa según cronogramas">' + escapeHtml(p) + '</span>'; }).join('') + '</div>'
+          : '');
+    }
+
     function chatHeaderHtml(c) {
       var name = convoName(c);
       var isGroup = /@g\.us$/.test(c.chat_id);
@@ -2937,10 +2955,7 @@
           '<span class="ri-menu-line tl-desk" aria-hidden="true"></span><span class="ri-arrow-left-line tl-mob" aria-hidden="true"></span></button>' +
         avatarHtml(name, 'avatar-sm', chatPhoto(c)) +
         '<div class="chat-id">' +
-          (c.team ? '<div class="chat-progs"><span class="chat-team" title="Usuario del sistema"><span class="ri-team-line" aria-hidden="true"></span> ' + escapeHtml(c.team.area) + '</span></div>' : '') +
-          ((c.person && c.person.programas || []).length
-            ? '<div class="chat-progs">' + c.person.programas.map(function (p) { return '<span class="chat-programa" title="Programa según cronogramas">' + escapeHtml(p) + '</span>'; }).join('') + '</div>'
-            : '') +
+          '<div id="chat-meta">' + chatMetaHtml(c) + '</div>' +
           '<div class="name">' + (isGroup ? '<span class="ri-group-line group-ico" title="Grupo"></span>' : '') + escapeHtml(name) + '</div>' +
           '<div class="sub"><span class="font-monospace">' + escapeHtml(isGroup ? phone : isHiddenNumber(c) ? 'Número oculto por WhatsApp' : fmtPhone(phone)) + '</span>' +
             (c.person && c.person.full_name && c.contact && c.contact.name && c.contact.name !== c.person.full_name
@@ -3396,11 +3411,57 @@
 
     // ── La persona en otras líneas (ficha única) ──
     function loadPerson() {
-      if (!state.selectedChat || state.tab === 'group') return;
+      if (!state.selectedChat || state.tab === 'group') return Promise.resolve();
       var token = state.chatToken;
-      api('/inbox/' + encodeURIComponent(state.selectedSession) + '/' + encodeURIComponent(state.selectedChat) + '/person')
-        .then(function (p) { if (token !== state.chatToken) return; state.person = p; renderPerson(); })
+      return api('/inbox/' + encodeURIComponent(state.selectedSession) + '/' + encodeURIComponent(state.selectedChat) + '/person')
+        .then(function (p) {
+          if (token !== state.chatToken) return;
+          state.person = p;
+          // La conversación (o la ficha sintética abierta desde un grupo) toma
+          // el nombre/programa y, si es compañero, su área de usuario.
+          var c = selectedConversation();
+          var changed = false;
+          if (c) {
+            var before = JSON.stringify(c.person || null);
+            c.person = {
+              full_name: p.full_name || null,
+              name_source: p.name_source || null,
+              name_by: p.name_by || null,
+              programas: p.programas || [],
+            };
+            if (JSON.stringify(c.person) !== before) changed = true;
+            if (p.team && JSON.stringify(c.team || null) !== JSON.stringify(p.team)) {
+              c.team = p.team;
+              changed = true;
+            }
+          }
+          if (changed && c) {
+            var meta = els.pane.querySelector('#chat-meta');
+            if (meta) meta.innerHTML = chatMetaHtml(c);
+            renderContact();
+          } else {
+            renderPerson();
+          }
+        })
         .catch(function () { if (token !== state.chatToken) return; state.person = null; });
+    }
+
+    // Refresca la ficha y la cabecera del chat abierto cuando cambian los datos
+    // de la persona (programa/nombre) desde cualquier línea.
+    function refreshOpenPerson() {
+      if (!state.selectedChat || state.tab === 'group') return Promise.resolve();
+      var token = state.chatToken;
+      var before = JSON.stringify(state.person || null);
+      return loadPerson().then(function () {
+        if (token !== state.chatToken) return;
+        var c = selectedConversation();
+        if (!c) return;
+        var meta = els.pane.querySelector('#chat-meta');
+        if (meta) meta.innerHTML = chatMetaHtml(c);
+        var headName = els.pane.querySelector('.chat-header .chat-id .name');
+        if (headName) headName.textContent = convoName(c);
+        if (JSON.stringify(state.person || null) !== before) renderContact();
+      });
     }
 
     function renderPerson() {
@@ -3414,7 +3475,7 @@
       };
       // Si la cabecera de la ficha ya muestra los programas, no se repiten aquí.
       var conv = selectedConversation();
-      var inHead = !!(conv && conv.person && conv.person.programas && conv.person.programas.length);
+      var inHead = convPrograms(conv).length > 0;
       var progs = inHead ? [] : (p.programas && p.programas.length ? p.programas : (p.programa ? [p.programa] : []));
       var programa = progs.length
         ? '<div class="pf-row pf-progs"><span class="pf-label">' + (progs.length > 1 ? 'Programas' : 'Programa') + '</span><span class="pf-value">' +
@@ -3519,7 +3580,7 @@
     }
 
     function memberLabel(p) {
-      return p.name || p.phone || memberPhone(p.id) || String(p.id || '').split('@')[0];
+      return (p.team && p.team.name) || p.full_name || p.name || p.phone || memberPhone(p.id) || String(p.id || '').split('@')[0];
     }
 
     function renderContact() {
@@ -3538,11 +3599,12 @@
           '<div class="members-list" id="members-list"></div></div>';
       }
 
+      var headProgs = convPrograms(c);
       els.contact.innerHTML =
         '<button type="button" class="contact-close" id="contact-close" aria-label="Cerrar la ficha"><span class="ri-close-line"></span></button>' +
         '<div class="contact-head">' + avatarHtml(name, 'avatar-xl', chatPhoto(c)) +
-          ((c.person && c.person.programas || []).length
-            ? '<div class="contact-progs">' + c.person.programas.map(function (p) { return '<span class="pf-prog">' + escapeHtml(p) + '</span>'; }).join('') + '</div>'
+          (headProgs.length
+            ? '<div class="contact-progs">' + headProgs.map(function (p) { return '<span class="pf-prog">' + escapeHtml(p) + '</span>'; }).join('') + '</div>'
             : '') +
           nameBlockHtml(c) +
           (!c.team && c.person && c.person.full_name && ct.name && ct.name !== c.person.full_name ? '<div class="contact-waname">WhatsApp: ' + escapeHtml(ct.name) + '</div>' : '') +
@@ -3678,7 +3740,11 @@
       var q = (state.memberFilter || '').trim().toLowerCase();
       var rows = q
         ? list.filter(function (p) {
-            return ((p.name || '') + ' ' + (p.phone || '') + ' ' + (p.id || '')).toLowerCase().indexOf(q) !== -1;
+            var hay = [
+              p.name, p.phone, p.id, p.full_name, (p.programas || []).join(' '),
+              p.team && p.team.name, p.team && p.team.area,
+            ].join(' ');
+            return hay.toLowerCase().indexOf(q) !== -1;
           })
         : list;
       if (!rows.length) {
@@ -3687,18 +3753,30 @@
         return;
       }
       box.innerHTML = rows.map(function (p) {
-        var nm = p.name || '';
-        var num = p.phone ? '+' + p.phone : '';
-        var primary = nm || num || String(p.id || '').split('@')[0];
-        var initialsName = memberLabel(p);
-        return '<button type="button" class="member-item" data-jid="' + escapeHtml(p.id) + '" title="Iniciar conversación">' +
+        var primary = memberLabel(p);
+        var waName = p.name && p.name !== primary ? p.name : '';
+        var num = p.phone ? fmtPhone(p.phone) : '';
+        var wa = waName || num
+          ? 'WhatsApp: ' + escapeHtml([waName, num].filter(Boolean).join(' · '))
+          : '';
+        var chips = '';
+        if (p.team) {
+          chips += '<span class="member-tag team" title="Usuario del sistema"><span class="ri-team-line" aria-hidden="true"></span> ' +
+            escapeHtml(p.team.area || 'Usuario del sistema') + '</span>';
+        }
+        (p.programas || []).forEach(function (prog) {
+          chips += '<span class="member-tag prog" title="Programa según cronogramas"><span class="ri-graduation-cap-line" aria-hidden="true"></span> ' +
+            escapeHtml(prog) + '</span>';
+        });
+        return '<button type="button" class="member-item" data-jid="' + escapeHtml(p.id) + '" title="Abrir la ficha de ' + escapeHtml(primary) + '">' +
           // Foto de perfil de cada miembro (si es privada o no hay, quedan las iniciales).
-          avatarHtml(initialsName, 'avatar-xs', p.id && state.selectedSession
+          avatarHtml(primary, 'avatar-xs', p.id && state.selectedSession
             ? '/inbox/participant-avatar/' + encodeURIComponent(state.selectedSession) + '/' + encodeURIComponent(p.id)
             : null) +
           '<span class="member-main">' +
             '<span class="member-name">' + escapeHtml(primary) + '</span>' +
-            (nm && num ? '<span class="member-num">' + escapeHtml(num) + '</span>' : '') +
+            (chips ? '<span class="member-tags">' + chips + '</span>' : '') +
+            (wa ? '<span class="member-num">' + wa + '</span>' : (p.full_name && num ? '<span class="member-num">' + escapeHtml(num) + '</span>' : '')) +
           '</span>' +
           (p.admin ? '<span class="member-admin">admin</span>' : '<span class="member-msg ri-chat-1-line"></span>') +
           '</button>';
@@ -3760,7 +3838,14 @@
         var lastRun = 0;
         var flush = function () {
           timer = null; lastRun = Date.now();
-          loadConversations();
+          loadConversations().then(function () {
+            if (!state.selectedChat) return;
+            var c = selectedConversation();
+            if (!c) return;
+            // Cabecera al día (programa del grupo o de la persona) sin rehacer el hilo.
+            var meta = els.pane.querySelector('#chat-meta');
+            if (meta) meta.innerHTML = chatMetaHtml(c);
+          });
           if (state.selectedChat) fetchMessages(false);
         };
         var queue = function () {
@@ -3797,6 +3882,28 @@
           }, 300);
           notifyAssignment(d);
         });
+        // Cambió el nombre/programa de una persona (envío masivo desde cualquier
+        // línea): se actualiza la lista y, si está abierta, su ficha.
+        var personTimer = null;
+        es.addEventListener('person', function (e) {
+          var d; try { d = JSON.parse(e.data); } catch (_) { return; }
+          var chats = (d && d.chats) || [];
+          var open = chats.some(function (c) {
+            return c.sessionId === state.selectedSession && c.chatId === state.selectedChat;
+          });
+          var inGroup = state.tab === 'group' && (state.participants || []).some(function (p) {
+            return p.phone_key && d && p.phone_key === d.phoneKey;
+          });
+          clearTimeout(personTimer);
+          personTimer = setTimeout(function () {
+            // Primero se refresca la lista (de donde sale el `person` de la
+            // conversación) y después la ficha/cabecera abiertas.
+            loadConversations().then(function () {
+              if (inGroup) loadParticipants();
+              else if (open) refreshOpenPerson();
+            });
+          }, 250);
+        });
         es.addEventListener('presence', function (e) {
           var d; try { d = JSON.parse(e.data); } catch (_) { return; }
           if (!d || d.chatId !== state.selectedChat) return;
@@ -3805,7 +3912,12 @@
         });
         es.onerror = function () {};
       }
-      setInterval(function () { loadConversations(); if (state.selectedChat) fetchMessages(false); }, 20000);
+      setInterval(function () {
+        loadConversations().then(function () {
+          if (state.selectedChat) refreshOpenPerson();
+        });
+        if (state.selectedChat) fetchMessages(false);
+      }, 20000);
     }
 
     /* ── Arranque ── */

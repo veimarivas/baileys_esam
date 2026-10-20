@@ -1687,6 +1687,37 @@ The app (`C:\xampp_82_12\htdocs\baileys_esam_app`, see its `PLAN.md`) uses the s
 
 ---
 
+## 47. Programa y nombre completo visibles para todos, también en grupos (2026-10-19)
+
+Los datos que cronogramas manda con cada envío masivo (`programa` y `contact_name`) ya se guardaban por número en `person_programs`, pero el panel no avisaba del cambio a las demás líneas y la ficha del grupo solo mostraba el nombre de WhatsApp de cada miembro.
+
+- **Aviso en vivo por persona (`src/core/person.ts`, `src/baileys/manager.ts`):**
+  - `tagPerson()` devuelve si el nombre o el programa cambiaron (no avisa cuando el
+    envío repite el mismo dato).
+  - `tagConversation()` publica el evento SSE `person` con el `phoneKey`, los datos
+    actualizados y **todos los chats de esa persona en cualquier línea**.
+  - El panel filtra el evento por el alcance del usuario; al recibirlo refresca la
+    lista y, si la ficha está abierta, la cabecera, el programa y el nombre sin
+    recargar la página. El sondeo de 20 s también corrige datos si se perdió el evento.
+- **Ficha de contacto en grupos (`src/panel/inbox.ts`, `public/app.js`, `public/app.css`):**
+  - `GET /inbox/:session/:chat/participants` agrega a cada miembro:
+    `full_name` y `programas` (de cronogramas) y `team` (nombre/área si es usuario
+    del sistema).
+  - La lista de miembros muestra primero el nombre del compañero o el nombre
+    completo registrado, con chips de programa/área; el nombre y número de WhatsApp
+    quedan como dato secundario. El buscador incluye esos campos.
+  - Al abrir la ficha de un miembro desde un grupo, `/person` devuelve también
+    `team`, así se ve su condición de usuario del sistema aunque todavía no haya
+    una conversación guardada en esa línea.
+- **Programa del grupo:** `ConversationDTO` expone `programa`; los chats grupales
+  muestran el programa etiquetado por cronogramas aunque no tengan `person_programs`
+  (los grupos no representan a una persona).
+- **Pruebas:** `test/person.test.ts` cubre el aviso de cambio y la búsqueda de chats
+  de una persona en varias líneas. `npm run typecheck`, `npm test` (88) y
+  `npm run build` limpios. Sin migración de base.
+
+---
+
 ## Notas de operación
 
 - En producción usar `start-baileys.bat` / pm2 / systemd (no `npm run dev`).

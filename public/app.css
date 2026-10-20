@@ -2565,6 +2565,28 @@ html[data-bs-theme="dark"] .insight.is-warn .insight-ico { color: #f0a85c; }
   font-size: 0.82rem;
 }
 .member-num { font-size: 0.72rem; color: var(--ib-ink-mute, #98a2b3); }
+/* Datos de la persona en la ficha del grupo: compañero y programas. */
+.member-tags { display: flex; flex-wrap: wrap; gap: 0.18rem; margin-top: 0.12rem; }
+.member-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.14rem;
+  max-width: 100%;
+  padding: 0.02rem 0.38rem;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  line-height: 1.45;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.member-tag.team { color: #0e9f6e; background: rgba(14, 159, 110, 0.11); }
+.member-tag.prog {
+  color: var(--ib-brand, #045474);
+  background: var(--ib-brand-soft, rgba(4, 84, 116, 0.09));
+}
+html[data-bs-theme="dark"] .member-tag.team { color: #6ee7b7; background: rgba(14, 159, 110, 0.18); }
+html[data-bs-theme="dark"] .member-tag.prog { color: #9ecbdd; background: rgba(4, 84, 116, 0.35); }
 .member-admin {
   font-size: 0.58rem;
   font-weight: 700;

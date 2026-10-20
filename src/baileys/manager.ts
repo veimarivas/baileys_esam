@@ -15,7 +15,7 @@ import { setReaction } from '../core/conversations.js';
 import { addOptout, isOptoutRequest, looksLikeBlock, markBlocked } from '../core/optout.js';
 import { recomputeHealth } from '../core/health.js';
 import { getPolicy, resetTrust } from '../core/anti-ban.js';
-import { phoneKeyOf, tagPerson } from '../core/person.js';
+import { personChatsByKeys, personTagsByKeys, phoneKeyOf, tagPerson } from '../core/person.js';
 import { alertSessionDown } from '../core/notifications.js';
 import { lidForPhone, resolveChatId } from '../core/lid.js';
 import { panelBus } from '../panel/events.js';
@@ -502,7 +502,26 @@ export class SessionManager implements OutboundSender {
     tag: { contactName?: string | null; programa?: string | null; programaId?: number | null },
   ): void {
     // Por persona (número): así lo ven todas las líneas, no solo la que envió.
-    tagPerson(chatId, { fullName: tag.contactName, programa: tag.programa, programaId: tag.programaId, sessionId });
+    const tagged = tagPerson(chatId, {
+      fullName: tag.contactName,
+      programa: tag.programa,
+      programaId: tag.programaId,
+      sessionId,
+    });
+    // En vivo para todos: si el nombre/programa cambió, se avisa a cada línea
+    // donde aparezca esa persona (el panel filtra por el alcance del usuario).
+    if (tagged?.changed) {
+      const chats = personChatsByKeys([tagged.key]);
+      if (!chats.some((c) => c.session_id === sessionId && c.chat_id === chatId)) {
+        chats.push({ session_id: sessionId, chat_id: chatId });
+      }
+      panelBus.publish('person', {
+        phoneKey: tagged.key,
+        person: personTagsByKeys([tagged.key]).get(tagged.key) ?? null,
+        sessionIds: [...new Set(chats.map((c) => c.session_id))],
+        chats: chats.map((c) => ({ sessionId: c.session_id, chatId: c.chat_id })),
+      });
+    }
     const row = this.byId(sessionId);
     run(
       `INSERT INTO conversations (session_id, whatsapp_phone, chat_id, contact_name, programa, programa_id, last_message_at, last_direction, created_at, updated_at)

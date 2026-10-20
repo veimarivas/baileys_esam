@@ -1,7 +1,9 @@
 import './helpers/temp-env.js';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { personTagsByKeys, phoneKeyOf, setPersonName, tagPerson } from '../src/core/person.js';
+import { personChatsByKeys, personTagsByKeys, phoneKeyOf, setPersonName, tagPerson } from '../src/core/person.js';
+import { run } from '../src/db/index.js';
+import { nowIso } from '../src/util/async.js';
 
 /**
  * `phone_key`: la clave que une a una persona entre líneas. Si se calcula mal,
@@ -73,5 +75,38 @@ describe('tagPerson / personTagsByKeys', () => {
   it('devuelve un mapa vacío si no hay claves', () => {
     assert.equal(personTagsByKeys([]).size, 0);
     assert.equal(personTagsByKeys([null, undefined, '']).size, 0);
+  });
+});
+
+describe('avisos de cambio por persona', () => {
+  it('solo marca cambio cuando el nombre o el programa se modifican', () => {
+    const first = tagPerson('59170000001@c.us', { fullName: 'Ana Gómez', programa: 'MAT', programaId: 4 });
+    assert.equal(first?.changed, true);
+    const same = tagPerson('59170000001@c.us', { fullName: 'Ana Gómez', programa: 'MAT', programaId: 4 });
+    assert.equal(same?.changed, false);
+    const renamed = tagPerson('59170000001@c.us', { fullName: 'Ana G. Pérez', programa: 'MAT', programaId: 4 });
+    assert.equal(renamed?.changed, true);
+    const newProgram = tagPerson('59170000001@c.us', { fullName: 'Ana G. Pérez', programa: 'INF' });
+    assert.equal(newProgram?.changed, true);
+  });
+
+  it('encuentra los chats de la persona en todas las líneas', () => {
+    const now = nowIso();
+    for (const [session, chat] of [['s-a', '59170000002@c.us'], ['s-b', '59170000002@s.whatsapp.net']]) {
+      run(
+        `INSERT INTO contacts (session_id, chat_id, phone, phone_key, created_at, updated_at)
+         VALUES (?, ?, '59170000002', '59170000002', ?, ?)`,
+        session,
+        chat,
+        now,
+        now,
+      );
+    }
+    const chats = personChatsByKeys(['59170000002']);
+    assert.deepEqual(
+      chats.map((c) => `${c.session_id}|${c.chat_id}`).sort(),
+      ['s-a|59170000002@c.us', 's-b|59170000002@s.whatsapp.net'],
+    );
+    assert.equal(personChatsByKeys([]).length, 0);
   });
 });

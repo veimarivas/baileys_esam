@@ -1,4 +1,4 @@
-import { all, run } from '../db/index.js';
+import { all, get, run } from '../db/index.js';
 import { nowIso } from '../util/async.js';
 
 /**
@@ -19,11 +19,22 @@ export function phoneKeyOf(value: string | null | undefined): string | null {
 export function tagPerson(
   chatId: string,
   tag: { fullName?: string | null; programa?: string | null; programaId?: number | null; sessionId?: string | null },
-): void {
-  if (chatId.endsWith('@g.us')) return;
+): { key: string; changed: boolean } | null {
+  if (chatId.endsWith('@g.us')) return null;
   const key = phoneKeyOf(chatId);
   const programa = (tag.programa ?? '').trim();
-  if (!key || !programa) return;
+  if (!key || !programa) return null;
+  const prev = get<{ full_name: string | null; programa_id: number | null }>(
+    'SELECT full_name, programa_id FROM person_programs WHERE phone_key = ? AND programa = ?',
+    key,
+    programa,
+  );
+  const fullName = tag.fullName?.trim() || null;
+  // Solo se avisa al panel cuando el dato visible cambia (no en cada envío del
+  // mismo programa): así el refresco en vivo no se vuelve una ráfaga de eventos.
+  const changed = !prev
+    || (!!fullName && fullName !== prev.full_name)
+    || (tag.programaId != null && tag.programaId !== prev.programa_id);
   run(
     `INSERT INTO person_programs (phone_key, programa, programa_id, full_name, session_id, last_at)
      VALUES (?, ?, ?, ?, ?, ?)
@@ -35,9 +46,23 @@ export function tagPerson(
     key,
     programa,
     tag.programaId ?? null,
-    tag.fullName?.trim() || null,
+    fullName,
     tag.sessionId ?? null,
     nowIso(),
+  );
+  return { key, changed };
+}
+
+/**
+ * Chats (de cualquier línea) que representan a una persona, para avisar en vivo
+ * a todos los usuarios que la tengan abierta aunque el envío salga de otra.
+ */
+export function personChatsByKeys(keys: Array<string | null | undefined>): Array<{ session_id: string; chat_id: string }> {
+  const list = [...new Set(keys.filter((k): k is string => !!k))];
+  if (!list.length) return [];
+  return all<{ session_id: string; chat_id: string }>(
+    `SELECT session_id, chat_id FROM contacts WHERE phone_key IN (${list.map(() => '?').join(',')})`,
+    ...list,
   );
 }
 

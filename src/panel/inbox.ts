@@ -36,7 +36,7 @@ import {
 } from '../core/contacts.js';
 import * as noteTags from '../core/note-tags.js';
 import { personTagsByKeys, phoneKeyOf, setPersonName } from '../core/person.js';
-import { teamMembers } from '../core/team.js';
+import { teamMembers, teamTagFor } from '../core/team.js';
 import { listNotifications, markNoteRead, markRead, notify, supervisorIds, unreadCount, type NotificationKind } from '../core/notifications.js';
 import * as noteTemplates from '../core/note-templates.js';
 import * as quickReplies from '../core/quick-replies.js';
@@ -459,7 +459,28 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       if (!resolved) return;
       if (!resolved.chatId.endsWith('@g.us')) return res.json([]);
       try {
-        res.json(await manager.groupParticipants(resolved.session.id, resolved.chatId));
+        const raw = await manager.groupParticipants(resolved.session.id, resolved.chatId);
+        // La ficha del grupo muestra a cada miembro como persona del sistema:
+        // nombre completo/programas de cronogramas y, si es compañero, su área.
+        const keyOf = (p: (typeof raw)[number]) =>
+          phoneKeyOf(p.phone) ?? (p.id.endsWith('@lid') ? null : phoneKeyOf(p.id));
+        const keys = raw.map(keyOf);
+        const people = personTagsByKeys(keys);
+        res.json(
+          raw.map((p, i) => {
+            const key = keys[i];
+            const tags = key ? people.get(key) : undefined;
+            const team = teamTagFor(key);
+            return {
+              ...p,
+              phone_key: key,
+              full_name: tags?.full_name ?? null,
+              name_source: tags?.name_source ?? null,
+              programas: tags?.programas ?? [],
+              team,
+            };
+          }),
+        );
       } catch (err) {
         res.status(502).json({ error: (err as Error).message });
       }
@@ -514,6 +535,7 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
         name_by: tags?.name_by ?? null,
         can_name: !!key,
         programas: tags?.programas ?? [],
+        team: teamTagFor(key),
         lines: others,
         fill: { name: pick('name'), email: pick('email'), company: pick('company'), programa: pick('programa') },
       });

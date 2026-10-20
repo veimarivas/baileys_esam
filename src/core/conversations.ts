@@ -31,6 +31,8 @@ export interface ConversationDTO {
   last_message_text: string | null;
   last_message_at: string | null;
   last_direction: string | null;
+  /** Programa del último envío masivo (también en grupos, donde no hay persona). */
+  programa: string | null;
   contact: {
     id: number | null;
     /** Hay foto de perfil (propia o de la misma persona en otra línea). */
@@ -145,6 +147,7 @@ interface ConvJoinRow {
   last_message_text: string | null;
   last_message_at: string | null;
   last_direction: string | null;
+  programa: string | null;
   contact_id: number | null;
   ct_name: string | null;
   ct_phone: string | null;
@@ -182,6 +185,7 @@ function mapConversation(
     last_message_text: row.last_message_text,
     last_message_at: row.last_message_at,
     last_direction: row.last_direction,
+    programa: row.programa,
     contact: {
       id: row.contact_id,
       avatar: !!row.contact_id && (!!row.ct_avatar || (!!personKey(row) && !!avatars?.has(personKey(row)!))),
@@ -215,7 +219,7 @@ function mapConversations(rows: ConvJoinRow[]): ConversationDTO[] {
 }
 
 const CONV_SELECT = `SELECT c.id, c.session_id, c.chat_id, c.status, c.unread_count, c.last_message_text,
-    c.last_message_at, c.last_direction, c.contact_id,
+    c.last_message_at, c.last_direction, c.programa, c.contact_id,
     ct.name AS ct_name, ct.phone AS ct_phone, ct.email AS ct_email, ct.company AS ct_company,
     ct.avatar_path AS ct_avatar, ct.phone_key AS ct_phone_key,
     u.id AS agent_id, u.name AS agent_name

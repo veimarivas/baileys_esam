@@ -36,6 +36,7 @@ import {
 } from '../core/contacts.js';
 import * as noteTags from '../core/note-tags.js';
 import { personTagsByKeys, phoneKeyOf, setPersonName } from '../core/person.js';
+import * as directory from '../core/directory.js';
 import { teamMembers, teamTagFor } from '../core/team.js';
 import { listNotifications, markNoteRead, markRead, notify, supervisorIds, unreadCount, type NotificationKind } from '../core/notifications.js';
 import * as noteTemplates from '../core/note-templates.js';
@@ -320,6 +321,26 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
     ah((req, res) => {
       const chat = typeof req.query.chat === 'string' ? req.query.chat : '';
       res.json({ conversation: conversations.findConversationForUser(req.user!, chat) ?? null });
+    }),
+  );
+
+  // Directorio de personas registradas por cronogramas (nombre completo y
+  // programa). No depende de tener historial con el contacto: lo ve todo el
+  // equipo y desde aquí se puede abrir o iniciar la conversación.
+  app.get(
+    '/inbox/directory',
+    ...auth,
+    ah((req, res) => {
+      const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+      const programa = typeof req.query.programa === 'string' ? req.query.programa.trim() : '';
+      res.json(
+        directory.listDirectory({
+          q: q || null,
+          programa: programa || null,
+          sessionIds: sessionScopeFor(req.user!),
+          limit: Number(req.query.limit ?? 800) || 800,
+        }),
+      );
     }),
   );
 

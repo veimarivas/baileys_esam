@@ -2587,6 +2587,49 @@ html[data-bs-theme="dark"] .insight.is-warn .insight-ico { color: #f0a85c; }
 }
 html[data-bs-theme="dark"] .member-tag.team { color: #6ee7b7; background: rgba(14, 159, 110, 0.18); }
 html[data-bs-theme="dark"] .member-tag.prog { color: #9ecbdd; background: rgba(4, 84, 116, 0.35); }
+.member-full {
+  display: flex;
+  align-items: center;
+  gap: 0.18rem;
+  margin-top: 0.08rem;
+  font-size: 0.68rem;
+  color: var(--ib-ink-soft, #475467);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.member-full .ri-user-star-line { color: var(--ib-brand, #045474); }
+/* Lista global de personas registradas por cronogramas (solapa Contactos). */
+.dir-group-title {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.28rem;
+  margin: 0.45rem 0.75rem 0.2rem;
+  padding-top: 0.45rem;
+  border-top: 1px dashed var(--ib-line, #e6ebf1);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--ib-ink-mute, #98a2b3);
+}
+.dir-group-title small {
+  flex-basis: 100%;
+  font-size: 0.64rem;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.convo.dir-row .dir-new { color: var(--ib-brand, #045474); font-style: italic; }
+.dir-more {
+  margin: 0.35rem 0.75rem 0.6rem;
+  font-size: 0.68rem;
+  line-height: 1.35;
+  color: var(--ib-ink-mute, #98a2b3);
+}
+.cl-tab-count.total { background: rgba(4, 84, 116, 0.12); }
+.cl-tab.active .cl-tab-count.total { background: rgba(255, 255, 255, 0.25); }
 .member-admin {
   font-size: 0.58rem;
   font-weight: 700;

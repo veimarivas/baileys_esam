@@ -2431,6 +2431,9 @@
       syntheticConv: null,
       participants: [],
       memberFilter: '',
+      directory: null,
+      directoryLoading: null,
+      directoryTotal: 0,
       notes: [],
       tags: [],
       noteDraft: emptyNoteDraft(),
@@ -2464,6 +2467,7 @@
     }
 
     function inActiveTab(c) {
+      if (state.tab === 'contacts') return false;
       return (state.tab === 'group') === isGroupChat(c);
     }
 
@@ -2486,6 +2490,146 @@
           (c.programa || '') + ' ' + ((c.team && c.team.name) || '');
         return (name + ' ' + phone + ' ' + last + ' ' + extra).toLowerCase().indexOf(s) !== -1;
       });
+    }
+
+    // ── Directorio: personas registradas por cronogramas ──
+    // Nombre completo y programas por número. A diferencia de la lista de
+    // conversaciones, incluye a quien todavía no tiene historial en esta línea.
+    function foldText(value) {
+      return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    }
+
+    function ownSessionId() {
+      var rootSession = root.getAttribute('data-session') || '';
+      if (rootSession) return rootSession;
+      if (state.selectedSession) return state.selectedSession;
+      var first = state.conversations[0];
+      return first ? first.session_id : '';
+    }
+
+    function loadDirectory(force) {
+      if (!force && state.directory) return Promise.resolve(state.directory);
+      if (!force && state.directoryLoading) return state.directoryLoading;
+      state.directoryLoading = api('/inbox/directory?limit=1000')
+        .then(function (d) {
+          state.directory = (d && d.people) || [];
+          state.directoryTotal = Number((d && d.total) || state.directory.length);
+          return state.directory;
+        })
+        .catch(function () {
+          if (!state.directory) state.directory = [];
+          state.directoryTotal = state.directory.length;
+          return state.directory;
+        })
+        .then(function (list) {
+          state.directoryLoading = null;
+          renderTabs();
+          if (state.tab === 'contacts' || state.search.trim()) renderList();
+          return list;
+        });
+      return state.directoryLoading;
+    }
+
+    function directoryMatches() {
+      var list = state.directory || [];
+      var q = foldText(state.search.trim());
+      if (!q) return list;
+      return list.filter(function (p) {
+        var hay = foldText([p.full_name, p.phone_key, p.phone, (p.programas || []).join(' ')].join(' '));
+        return hay.indexOf(q) !== -1;
+      });
+    }
+
+    function conversationKeyOf(chatId) {
+      return String(chatId || '').replace(/@.*$/, '').replace(/\D+/g, '').slice(-12);
+    }
+
+    function personHasConversation(p) {
+      if (p.chat) return true;
+      var key = conversationKeyOf(p.phone_key);
+      if (!key) return false;
+      return state.conversations.some(function (c) {
+        return !/@g\.us$/.test(c.chat_id || '') && conversationKeyOf(c.chat_id) === key;
+      });
+    }
+
+    function directoryOnlyMatches() {
+      if (!state.directory || !state.search.trim()) return [];
+      return directoryMatches().filter(function (p) { return !personHasConversation(p); });
+    }
+
+    function openDirectoryPerson(p) {
+      if (p.chat && p.chat.session_id && p.chat.chat_id) {
+        openChat(p.chat.session_id, p.chat.chat_id, true);
+        return;
+      }
+      var digits = String(p.phone_key || p.phone || '').replace(/\D+/g, '');
+      if (!digits) { toast('Ese contacto no tiene un número válido.', true); return; }
+      var existing = findConversation(digits + '@c.us');
+      if (existing) { openChat(existing.session_id, existing.chat_id, true); return; }
+      var own = ownSessionId();
+      if (!own) { toast('No tenés una línea de WhatsApp para escribirle.', true); return; }
+      var chatId = digits + '@c.us';
+      openChat(own, chatId, true, {
+        id: 0, session_id: own, chat_id: chatId, status: 'open', unread_count: 0,
+        last_message_text: null, last_message_at: null, last_direction: null, created_at: null,
+        contact: { id: null, avatar: false, name: p.full_name || null, phone: digits, email: null, company: null, avatar_path: null },
+        person: { full_name: p.full_name || null, programas: p.programas || [] },
+        notes: { open: 0, pinned: 0, overdue: 0 },
+        team: null,
+      });
+    }
+
+    function renderDirectoryRow(p) {
+      var el = document.createElement('div');
+      el.className = 'convo dir-row';
+      var name = p.full_name || fmtPhone(p.phone) || p.phone_key;
+      var progs = p.programas || [];
+      var chat = p.chat;
+      var avatar = chat && chat.contact_id ? '/inbox/avatar/' + chat.contact_id : null;
+      el.innerHTML =
+        avatarHtml(name, 'avatar-sm', avatar, '') +
+        '<div class="convo-body">' +
+          (progs.length
+            ? '<div class="convo-prog" title="' + escapeHtml(progs.join(' · ')) + '"><span class="ri-graduation-cap-line" aria-hidden="true"></span>' +
+                escapeHtml(progs[0]) + (progs.length > 1 ? ' <b>+' + (progs.length - 1) + '</b>' : '') + '</div>'
+            : '') +
+          '<div class="convo-top"><span class="convo-name" title="' + escapeHtml(name) + '">' + escapeHtml(name) + '</span></div>' +
+          '<div class="convo-number"><span class="ri-whatsapp-line" aria-hidden="true"></span>' + escapeHtml(fmtPhone(p.phone)) + '</div>' +
+          '<div class="convo-last">' +
+            (chat
+              ? (chat.last_message_at ? 'Abrir conversación' : 'Conversación registrada')
+              : '<span class="dir-new">Sin historial en tu línea · tocá para escribirle</span>') +
+          '</div>' +
+        '</div>' +
+        '<div class="convo-side">' +
+          '<span class="convo-time" title="Último envío registrado">' + timeAgo(p.last_at) + '</span>' +
+        '</div>';
+      el.addEventListener('click', function () { openDirectoryPerson(p); });
+      return el;
+    }
+
+    function renderDirectoryList() {
+      if (!els.list) return;
+      if (!state.directory) {
+        els.list.innerHTML = '<div class="cl-empty"><span class="ri-contacts-book-2-line"></span><p>Cargando contactos…</p></div>';
+        loadDirectory();
+        return;
+      }
+      var rows = directoryMatches();
+      els.list.innerHTML = '';
+      if (!rows.length) {
+        els.list.innerHTML = '<div class="cl-empty"><span class="ri-search-eye-line"></span><p>Sin coincidencias</p>' +
+          '<small>Probá con el nombre, el número o el programa.</small></div>';
+        return;
+      }
+      rows.forEach(function (p) { els.list.appendChild(renderDirectoryRow(p)); });
+      if (!state.search.trim() && state.directoryTotal > rows.length) {
+        var note = document.createElement('div');
+        note.className = 'dir-more';
+        note.textContent = 'Mostrando ' + rows.length + ' de ' + state.directoryTotal + ' contactos. Usá la búsqueda para encontrar a los demás.';
+        els.list.appendChild(note);
+      }
     }
 
     // ── Equipo: compañeros del sistema, siempre visibles ──
@@ -2593,6 +2737,20 @@
         teamBtn.classList.toggle('active', state.tab === 'team');
         setTabCount(teamBtn, 'team', unreadOf(state.conversations.filter(function (c) { return !!c.team; })));
       }
+      var contactsBtn = els.tabs.querySelector('[data-tab="contacts"]');
+      if (contactsBtn) {
+        contactsBtn.classList.toggle('active', state.tab === 'contacts');
+        var total = state.directory ? state.directoryTotal || state.directory.length : 0;
+        var contactsCount = contactsBtn.querySelector('[data-count="contacts"]');
+        if (contactsCount) {
+          contactsCount.textContent = total > 999 ? '999+' : String(total);
+          contactsCount.hidden = !state.directory;
+          contactsCount.classList.add('total');
+        }
+        contactsBtn.title = state.directory
+          ? total + ' persona(s) registrada(s) por cronogramas'
+          : 'Personas registradas por cronogramas';
+      }
       ['individual', 'group'].forEach(function (t) {
         var btn = els.tabs.querySelector('[data-tab="' + t + '"]');
         if (!btn) return;
@@ -2607,9 +2765,13 @@
     function renderList() {
       if (!els.list) return;
       if (state.tab === 'team') { els.list.innerHTML = ''; renderTeamList(); return; }
+      if (state.tab === 'contacts') { renderDirectoryList(); return; }
       var rows = filteredConversations();
+      // Al buscar en Números también se muestran las personas registradas por
+      // cronogramas que todavía no tienen conversación en esta línea.
+      var extra = state.tab === 'individual' ? directoryOnlyMatches() : [];
       els.list.innerHTML = '';
-      if (!rows.length) {
+      if (!rows.length && !extra.length) {
         if (state.search.trim()) {
           els.list.innerHTML = '<div class="cl-empty"><span class="ri-search-eye-line"></span><p>Sin coincidencias</p></div>';
         } else if (state.tab === 'group') {
@@ -2620,6 +2782,14 @@
         return;
       }
       rows.forEach(function (c) { els.list.appendChild(renderConvo(c)); });
+      if (extra.length) {
+        var title = document.createElement('div');
+        title.className = 'dir-group-title';
+        title.innerHTML = '<span class="ri-contacts-book-2-line" aria-hidden="true"></span> Contactos registrados' +
+          '<small>Nombre completo y programa · sin historial en tu línea</small>';
+        els.list.appendChild(title);
+        extra.forEach(function (p) { els.list.appendChild(renderDirectoryRow(p)); });
+      }
     }
 
     function convoName(c) {
@@ -3873,10 +4043,12 @@
 
     // Abre la conversación existente con un contacto o crea una si no la hay.
     // Resuelve variantes de JID (@lid, @s.whatsapp.net) al chat ya guardado.
-    function openContactChat(jid, name) {
+    function openContactChat(jid, name, person) {
       if (!jid) return;
       var c = findConversation(jid);
       if (c) { openChat(c.session_id, c.chat_id, true); return; }
+      var phone = (person && person.phone) || memberPhone(jid);
+      var contactName = name || (person && person.full_name) || null;
       openChat(state.selectedSession, jid, true, {
         id: 0,
         session_id: state.selectedSession,
@@ -3887,7 +4059,9 @@
         last_message_at: null,
         last_direction: null,
         created_at: null,
-        contact: { id: null, name: name || null, phone: memberPhone(jid), email: null, company: null, avatar_path: null },
+        contact: { id: null, name: contactName, phone: phone, email: null, company: null, avatar_path: null },
+        person: { full_name: (person && person.full_name) || null, programas: (person && person.programas) || [] },
+        team: (person && person.team) || null,
       });
     }
 
@@ -4091,13 +4265,19 @@
         var wa = waName || num
           ? 'WhatsApp: ' + escapeHtml([waName, num].filter(Boolean).join(' · '))
           : '';
+        // El nombre completo de cronogramas puede ser distinto del nombre del
+        // sistema (compañero) o del de WhatsApp: se muestra siempre que exista.
+        var fullName = p.full_name && p.full_name !== primary
+          ? '<span class="member-full" title="Nombre completo registrado por cronogramas"><span class="ri-user-star-line" aria-hidden="true"></span> ' +
+              escapeHtml(p.full_name) + '</span>'
+          : '';
         var chips = '';
         if (p.team) {
           chips += '<span class="member-tag team" title="Usuario del sistema"><span class="ri-team-line" aria-hidden="true"></span> ' +
             escapeHtml(p.team.area || 'Usuario del sistema') + '</span>';
         }
         (p.programas || []).forEach(function (prog) {
-          chips += '<span class="member-tag prog" title="Programa según cronogramas"><span class="ri-graduation-cap-line" aria-hidden="true"></span> ' +
+          chips += '<span class="member-tag prog" title="Programa según cronogramas"><span class="ri-graduation-cap-line" aria-hidden="true"></span> Programa: ' +
             escapeHtml(prog) + '</span>';
         });
         return '<button type="button" class="member-item" data-jid="' + escapeHtml(p.id) + '" title="Abrir la ficha de ' + escapeHtml(primary) + '">' +
@@ -4107,6 +4287,7 @@
             : null) +
           '<span class="member-main">' +
             '<span class="member-name">' + escapeHtml(primary) + '</span>' +
+            fullName +
             (chips ? '<span class="member-tags">' + chips + '</span>' : '') +
             (wa ? '<span class="member-num">' + wa + '</span>' : (p.full_name && num ? '<span class="member-num">' + escapeHtml(num) + '</span>' : '')) +
           '</span>' +
@@ -4117,7 +4298,8 @@
         btn.addEventListener('click', function () {
           var jid = btn.getAttribute('data-jid');
           var nmEl = btn.querySelector('.member-name');
-          if (jid) openContactChat(jid, nmEl ? nmEl.textContent : null);
+          var person = rows.filter(function (p) { return String(p.id) === String(jid); })[0] || null;
+          if (jid) openContactChat(jid, nmEl ? nmEl.textContent : null, person);
         });
       });
     }
@@ -4127,7 +4309,13 @@
       Array.prototype.forEach.call(els.tabs.querySelectorAll('.cl-tab'), function (btn) {
         btn.addEventListener('click', function () {
           var t = btn.getAttribute('data-tab');
-          if (t && t !== state.tab) { state.tab = t; renderTabs(); renderList(); if (t === 'team') loadTeam(); }
+          if (t && t !== state.tab) {
+            state.tab = t;
+            renderTabs();
+            renderList();
+            if (t === 'team') loadTeam();
+            if (t === 'contacts') loadDirectory();
+          }
         });
       });
     }
@@ -4137,6 +4325,9 @@
       els.search.addEventListener('input', function () {
         state.search = els.search.value;
         if (els.clear) els.clear.hidden = !state.search;
+        // Buscar por nombre/número también entre las personas registradas por
+        // cronogramas, aunque no tengan conversación en esta línea.
+        if (state.search.trim().length >= 2 && !state.directory) loadDirectory();
         renderList();
       });
     }
@@ -4230,6 +4421,7 @@
           personTimer = setTimeout(function () {
             // Primero se refresca la lista (de donde sale el `person` de la
             // conversación) y después la ficha/cabecera abiertas.
+            if (state.directory) loadDirectory(true);
             loadConversations().then(function () {
               if (inGroup) loadParticipants();
               else if (open) refreshOpenPerson();
@@ -4249,6 +4441,7 @@
           if (state.selectedChat) refreshOpenPerson();
         });
         if (state.selectedChat) fetchMessages(false);
+        if (state.directory && (state.tab === 'contacts' || state.search.trim())) loadDirectory(true);
       }, 20000);
     }
 

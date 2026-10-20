@@ -1458,10 +1458,14 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
             <span class="cl-tab-ic ri-team-line" aria-hidden="true"></span><span class="cl-tab-label">Equipo</span>
             <span class="cl-tab-count" data-count="team" hidden>0</span>
           </button>
+          <button type="button" class="cl-tab" data-tab="contacts" title="Personas registradas por cronogramas, tengan o no historial">
+            <span class="cl-tab-ic ri-contacts-book-2-line" aria-hidden="true"></span><span class="cl-tab-label">Contactos</span>
+            <span class="cl-tab-count" data-count="contacts" hidden>0</span>
+          </button>
         </div>
         <label class="chatlist-search" for="chat-search">
           <span class="ri-search-line"></span>
-          <input type="search" id="chat-search" placeholder="Buscar conversación…" autocomplete="off" />
+          <input type="search" id="chat-search" placeholder="Buscar nombre, número o programa…" autocomplete="off" />
           <button type="button" class="cl-clear" id="chat-clear" hidden aria-label="Limpiar"><span class="ri-close-line"></span></button>
         </label>
         <div class="chatlist-items" id="chatlist-items"></div>

@@ -1736,8 +1736,14 @@ Se distingue **cuándo alguien ingresó** de **cuándo trabajó por última vez*
   - gráfico diario de respuestas vs. envíos;
   - tareas asignadas (vencidas, para hoy y abiertas), contactos atendidos y actividad reciente (mensajes y notas);
   - mismo selector de período y línea que Reportes; los filtros de Equipo se conservan al entrar y al volver.
+- **Ajuste visual de la ficha (19/10/2026):**
+  - el hero vuelve a ser horizontal en escritorio: Bootstrap `.card` lo apilaba en columna y producía un hueco vertical grande;
+  - identidad a la izquierda y datos de último ingreso/última actividad en una columna lateral legible; en tablet pasan a dos columnas y en móvil a una;
+  - KPIs en 3×2 en escritorio, 2 columnas en tablet y móvil ancho, y 1 columna en teléfonos; los subtítulos ya no se recortan;
+  - más aire en la cabecera, sin rótulo superior, y sin halos decorativos en el avatar ni en los puntos de tareas;
+  - el panel de tareas conserva un ancho mínimo y el gráfico reserva 300 px para evitar saltos de altura.
 - **Métricas:** `attentionData()` ahora expone `within15`, `within60` y respuestas por día por usuario. `userReportDetail()` agrega envíos, chats atendidos, tareas y actividad reciente.
-- **Pruebas:** `test/user-activity.test.ts` cubre prioridad entre mensaje/nota/lote, atribución por dueño de línea, cuentas sin actividad y el armado completo de la ficha (respuestas, envíos, notas asignadas y render HTML). `test/reports-scope.test.ts` fija que el Super Admin vea todas las líneas en Reportes sin ampliar su historial personal. `npm run typecheck`, `npm test` (94) y `npm run build` limpios. Sin migración de base ni librerías nuevas.
+- **Pruebas:** `test/user-activity.test.ts` cubre prioridad entre mensaje/nota/lote, atribución por dueño de línea, cuentas sin actividad y el armado completo de la ficha (respuestas, envíos, notas asignadas y render HTML). `test/reports-scope.test.ts` fija que el Super Admin vea todas las líneas en Reportes sin ampliar su historial personal. `npm run typecheck`, `npm test` (94) y `npm run build` limpios. Revisión visual con capturas headless en 1440, 1024 y 500 px, y modo oscuro. Sin migración de base ni librerías nuevas.
 
 ---
 

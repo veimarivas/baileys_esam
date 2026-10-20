@@ -722,17 +722,22 @@ export function renderReportUser(v: ReportUserView): string {
     <div class="ur-hero-main">
       <span class="avatar-xl rounded-circle av-${u.id % 8} ur-avatar">${esc(initials(name))}</span>
       <div class="ur-identity">
-        <div class="ur-eyebrow">Ficha del equipo</div>
         <h2 class="ur-name">${esc(name)}</h2>
         <div class="ur-meta">${[u.username, u.email].filter(Boolean).map((x) => esc(x)).join(' · ') || 'Cuenta del panel'}</div>
         <div class="ur-chips">${roleChips}${lineChip}${accessChip}</div>
       </div>
     </div>
     <div class="ur-hero-side">
-      <div class="ur-fact"><span>Último ingreso</span><b>${esc(loginRel)}</b>
-        <small>${esc(loginDetail)}</small></div>
-      <div class="ur-fact"><span>Última actividad</span><b>${esc(v.lastUse ? relTime(v.lastUse.at) : 'Sin actividad')}</b>
-        <small>${esc(v.lastUse ? `${v.lastUse.label} · ${fmtDate(v.lastUse.at)}` : 'Todavía no envió mensajes, lotes ni notas')}</small></div>
+      <div class="ur-fact">
+        <span class="ur-fact-label"><i class="ri-login-circle-line" aria-hidden="true"></i>Último ingreso</span>
+        <b>${esc(loginRel)}</b>
+        <small>${esc(loginDetail)}</small>
+      </div>
+      <div class="ur-fact">
+        <span class="ur-fact-label"><i class="ri-pulse-line" aria-hidden="true"></i>Última actividad</span>
+        <b>${esc(v.lastUse ? relTime(v.lastUse.at) : 'Sin actividad')}</b>
+        <small>${esc(v.lastUse ? `${v.lastUse.label} · ${fmtDate(v.lastUse.at)}` : 'Todavía no envió mensajes, lotes ni notas')}</small>
+      </div>
     </div>
   </div>`;
 

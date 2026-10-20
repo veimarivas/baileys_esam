@@ -190,7 +190,8 @@ describe('última actividad por usuario', () => {
       lastUse: lastUseByUser([user]).get(user.id) ?? null,
       filters: { programa: '', account: '', area: '', tipo: '' },
     });
-    assert.match(html, /Ficha del equipo/);
+    assert.match(html, /ur-hero-side/);
+    assert.match(html, /Última actividad/);
     assert.match(html, /Cliente Ficha/);
     assert.match(html, /id="urDaily"/);
     assert.match(html, /"kind":"user"/);

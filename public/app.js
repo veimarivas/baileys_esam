@@ -4778,6 +4778,27 @@
       return;
     }
 
+    if (data.kind === 'user') {
+      var userDaily = data.daily || [];
+      if (!userDaily.some(function (d) { return d.responses || d.sent; })) {
+        empty('urDaily', 'Sin respuestas ni envíos en el período.');
+        return;
+      }
+      render('urDaily', base('bar', {
+        series: [
+          { name: 'Respuestas', data: userDaily.map(function (d) { return d.responses; }) },
+          { name: 'Envíos', data: userDaily.map(function (d) { return d.sent; }) }
+        ],
+        colors: [C.s2, C.s1],
+        plotOptions: barEnds,
+        stroke: { width: 2, colors: ['transparent'] },
+        xaxis: { categories: userDaily.map(function (d) { return shortDay(d.day); }), tickAmount: Math.min(userDaily.length, 10), axisBorder: { color: C.grid }, axisTicks: { show: false }, labels: { rotate: 0, hideOverlappingLabels: true } },
+        yaxis: { labels: { formatter: function (v) { return Math.round(v); } } },
+        tooltip: { shared: true, intersect: false, theme: dark ? 'dark' : 'light' }
+      }));
+      return;
+    }
+
     if (data.kind === 'reports') {
       var daily = data.daily || [];
       if (daily.some(function (d) { return d.received || d.sent; })) {

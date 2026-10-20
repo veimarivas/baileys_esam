@@ -36,10 +36,11 @@ import { listOptouts, addOptout, removeOptout } from '../core/optout.js';
 import { audit } from '../core/webhooks.js';
 import { getConfig, setConfig } from '../core/config-store.js';
 import { monitoringData, activityData } from '../core/monitoring.js';
-import { attentionData, deliveryStats, notesFollowup, pendingReplies, previousPeriod, protectionStats, resolvePeriod, sessionActivity, userPerformance } from '../core/followup.js';
+import { attentionData, deliveryStats, notesFollowup, pendingReplies, previousPeriod, protectionStats, resolvePeriod, sessionActivity, userPerformance, userReportDetail } from '../core/followup.js';
 import { getHealth } from '../core/health.js';
 import { systemHealth } from '../core/system-health.js';
-import { renderMonitoring, renderReports, reportsCsv, type MonitoringTab, type ReportsTab } from './followup-views.js';
+import { lastUseByUser } from '../core/user-activity.js';
+import { renderMonitoring, renderReportUser, renderReports, reportsCsv, type MonitoringTab, type ReportsTab } from './followup-views.js';
 import { recount } from '../core/batches.js';
 import type { BatchRunner } from '../core/batches.js';
 import { normalizePhone } from '../core/phone.js';
@@ -1732,6 +1733,7 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     for (const [k, v] of Object.entries({ period: period.preset, from: period.from, to: period.to, session: selected, ...filters })) {
       if (v) params.set(k, v);
     }
+    const team = new Map(listUsers().map((u) => [u.id, u]));
     return {
       tab,
       period,
@@ -1745,6 +1747,8 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
       protection: protectionStats(scope, period),
       notes: notesFollowup(scope, period),
       users: userPerformance(scope, period, attention),
+      team,
+      lastUse: lastUseByUser([...team.values()]),
       sends,
       filters,
       exportHref: `/reports/export.csv?${params.toString()}`,
@@ -1774,6 +1778,66 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
       const view = buildReports(req);
       res.setHeader('Content-Disposition', `attachment; filename="reporte-${view.period.from}_${view.period.to}.csv"`);
       res.type('text/csv; charset=utf-8').send(reportsCsv(view));
+    }),
+  );
+
+  app.get(
+    '/reports/users/:id',
+    requireUser,
+    requireSection('reports'),
+    ah(async (req: AuthedRequest, res) => {
+      const id = Number(req.params.id);
+      const target = Number.isInteger(id) ? listUsers().find((u) => u.id === id) : undefined;
+      if (!target) {
+        return res.status(404).send(
+          renderLayout('Usuario no encontrado', req.user!, 'reports', emptyState('ri-user-search-line', 'Usuario no encontrado', 'La cuenta pudo haberse eliminado o el enlace no es válido.'), {
+            subtitle: 'Ficha de seguimiento',
+            actions: '<a class="btn btn-soft-secondary btn-sm" href="/reports?tab=equipo"><i class="ri-arrow-left-line me-1"></i>Volver a Equipo</a>',
+          }),
+        );
+      }
+      const { scope, visible, selected } = followupScope(req);
+      const period = resolvePeriod({ period: qstr(req, 'period'), from: qstr(req, 'from'), to: qstr(req, 'to') }, '30d');
+      const filters = {
+        programa: qstr(req, 'programa'),
+        account: qstr(req, 'account'),
+        area: qstr(req, 'area'),
+        tipo: qstr(req, 'tipo'),
+      };
+      const attention = attentionData(scope, period);
+      const performance = userPerformance(scope, period, attention).find((u) => u.id === id);
+      const lastUse = lastUseByUser([target]).get(target.id) ?? null;
+      const detail = userReportDetail(
+        scope,
+        period,
+        { id: target.id, name: target.name, username: target.username, source_uid: target.source_uid },
+        attention,
+        performance,
+      );
+      const back = new URLSearchParams({ tab: 'equipo' });
+      if (period.preset) back.set('period', period.preset);
+      if (period.preset === 'custom') {
+        back.set('from', period.from);
+        back.set('to', period.to);
+      }
+      if (selected) back.set('session', selected);
+      for (const [key, value] of Object.entries(filters)) if (value) back.set(key, value);
+      const body = renderReportUser({
+        user: target,
+        detail,
+        period,
+        sessions: visible,
+        selectedSession: selected,
+        lastUse,
+        filters,
+      });
+      const name = target.name ?? target.username ?? `Usuario ${target.id}`;
+      return res.send(
+        renderLayout(`Ficha de ${name}`, req.user!, 'reports', body, {
+          subtitle: `Seguimiento individual · ${period.label}`,
+          actions: `<a class="btn btn-soft-secondary btn-sm" href="${esc(`/reports?${back.toString()}`)}"><i class="ri-arrow-left-line me-1"></i>Volver a Equipo</a>`,
+        }),
+      );
     }),
   );
 

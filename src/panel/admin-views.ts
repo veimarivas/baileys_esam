@@ -4,6 +4,7 @@ import { all, get } from '../db/index.js';
 import { esc, renderLayout } from './layout.js';
 import { emptyState, fmtDate, initials } from './views.js';
 import { esamEsAdmin, esamRoles, listUsers, type UserRow } from '../auth/users.js';
+import { lastUseByUser } from '../core/user-activity.js';
 import { audit } from '../core/webhooks.js';
 import {
   createTemplate,
@@ -363,6 +364,7 @@ function renderUsers(req: Request, sessions: SessionRow[]): string {
       since,
     ).map((r) => [r.uid, r.c]),
   );
+  const lastUse = lastUseByUser(users);
   const lineOf = (u: UserRow) => {
     const num = digits(u.esam_numero);
     if (!num) return null;
@@ -391,7 +393,7 @@ function renderUsers(req: Request, sessions: SessionRow[]): string {
 
   const table = rows.length
     ? `<div class="table-responsive"><table class="table table-hover align-middle mb-0 ab-table adm-users">
-        <thead><tr><th>Persona</th><th>Rol</th><th>Línea de WhatsApp</th><th>Último ingreso</th><th>Actividad 30 días</th><th>Acceso</th></tr></thead>
+        <thead><tr><th>Persona</th><th>Rol</th><th>Línea de WhatsApp</th><th>Último ingreso</th><th>Última actividad</th><th>Actividad 30 días</th><th>Acceso</th></tr></thead>
         <tbody>${rows
           .map((u, i) => {
             const roles = esamRoles(u);
@@ -412,16 +414,20 @@ function renderUsers(req: Request, sessions: SessionRow[]): string {
             const r = responses.get(u.id);
             const n = notes.get(u.id) ?? 0;
             const inactive = isInactive(u);
+            const use = lastUse.get(u.id);
+            const useIcon = use?.kind === 'batch' ? 'ri-send-plane-2-line' : use?.kind === 'note' ? 'ri-sticky-note-line' : 'ri-chat-1-line';
             return `<tr>
               <td><div class="user-cell">
                 <span class="avatar-xs rounded-circle av-${i % 8}">${esc(initials(u.name ?? u.username))}</span>
-                <div class="min-w-0"><div class="user-name">${esc(u.name ?? '—')}</div>
+                <div class="min-w-0"><div class="user-name"><a class="adm-user-link" href="/reports/users/${u.id}" title="Ver ficha y seguimiento">${esc(u.name ?? '—')}</a></div>
                   <div class="user-mail">${esc(u.username ?? '')}${u.email ? ` · ${esc(u.email)}` : ''}</div></div>
               </div></td>
               <td>${roleCell}${u.esam_area ? `<div class="adm-sub">${esc(u.esam_area)}</div>` : ''}</td>
               <td>${lineCell}</td>
               <td><span title="${esc(fmtDate(u.last_login_at))}" class="${inactive ? 'ab-t-warn' : ''}">${esc(relTime(u.last_login_at))}</span>
                 <div class="adm-sub">${u.login_count} ingreso${u.login_count === 1 ? '' : 's'}</div></td>
+              <td>${use ? `<span class="adm-use" title="${esc(fmtDate(use.at))}"><i class="${useIcon}"></i>${esc(relTime(use.at))}</span>
+                <div class="adm-sub">${esc(use.label)}</div>` : '<span class="text-muted">Sin actividad registrada</span>'}</td>
               <td>${r || n ? `<b>${r?.c ?? 0}</b> respuestas · ${r?.chats ?? 0} chats<div class="adm-sub">${n} nota${n === 1 ? '' : 's'} registrada${n === 1 ? '' : 's'}</div>` : '<span class="text-muted">Sin actividad</span>'}</td>
               <td>${u.esam_autorizado ? '<span class="ab-pill ab-ok"><i class="ri-check-line"></i>Autorizado</span>' : '<span class="ab-pill ab-danger">Sin autorizar</span>'}
                 <div class="adm-sub">${esc(u.source === 'local' ? 'Local' : u.source === 'cronogramas' ? 'Cronogramas' : u.source)}</div></td>

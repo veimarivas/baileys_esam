@@ -214,6 +214,11 @@ export interface ResponderStat {
   responses: number;
   chats: number;
   avgFirstResponseMin: number | null;
+  /** Respuestas que llegaron dentro de los primeros 15 / 60 minutos. */
+  within15: number;
+  within60: number;
+  /** Respuestas por día local, para la ficha individual. */
+  byDay: Array<{ day: string; responses: number }>;
 }
 
 export interface AttentionData {
@@ -286,7 +291,10 @@ export function attentionData(scope: Scope, period: Period): AttentionData {
   const sent = { panel: 0, phone: 0, batch: 0, total: 0 };
   const receivedChats = new Set<string>();
   const attended = new Set<string>();
-  const responderMap = new Map<string, { responses: number; chats: Set<string>; times: number[] }>();
+  const responderMap = new Map<
+    string,
+    { responses: number; chats: Set<string>; times: number[]; within15: number; within60: number; days: Map<string, number> }
+  >();
   const allTimes: number[] = [];
   let received = 0;
   let episodes = 0;
@@ -299,6 +307,14 @@ export function attentionData(scope: Scope, period: Period): AttentionData {
   let openSince: string | null = null;
   const responderKey = (r: { origin: string | null; sender_uid: number | null }) =>
     r.origin === 'panel' && r.sender_uid != null ? String(r.sender_uid) : r.origin === 'panel' ? 'panel' : 'phone';
+  const ensureResponder = (key: string) => {
+    let st = responderMap.get(key);
+    if (!st) {
+      st = { responses: 0, chats: new Set<string>(), times: [], within15: 0, within60: 0, days: new Map() };
+      responderMap.set(key, st);
+    }
+    return st;
+  };
 
   for (const r of rows) {
     const chatKey = `${r.session_id}|${r.chat_id}`;
@@ -335,10 +351,10 @@ export function attentionData(scope: Scope, period: Period): AttentionData {
         const key = responderKey(r);
         if (counted) {
           attended.add(chatKey);
-          const st = responderMap.get(key) ?? { responses: 0, chats: new Set<string>(), times: [] };
+          const st = ensureResponder(key);
           st.responses++;
           st.chats.add(chatKey);
-          responderMap.set(key, st);
+          st.days.set(day, (st.days.get(day) ?? 0) + 1);
         }
         if (openSince) {
           const minutes = (Date.parse(r.occurred_at) - Date.parse(openSince)) / 60_000;
@@ -347,9 +363,10 @@ export function attentionData(scope: Scope, period: Period): AttentionData {
           if (minutes <= 15) within15++;
           if (minutes <= 60) within60++;
           dayMap.get(localDay(openSince))?.times.push(minutes);
-          const st = responderMap.get(key) ?? { responses: 0, chats: new Set<string>(), times: [] };
+          const st = ensureResponder(key);
           st.times.push(minutes);
-          responderMap.set(key, st);
+          if (minutes <= 15) st.within15++;
+          if (minutes <= 60) st.within60++;
           openSince = null;
         }
       }
@@ -395,6 +412,9 @@ export function attentionData(scope: Scope, period: Period): AttentionData {
         responses: v.responses,
         chats: v.chats.size,
         avgFirstResponseMin: v.times.length ? Math.round(v.times.reduce((a, b) => a + b, 0) / v.times.length) : null,
+        within15: v.within15,
+        within60: v.within60,
+        byDay: [...v.days.entries()].map(([day, responses]) => ({ day, responses })).sort((a, b) => a.day.localeCompare(b.day)),
       }))
       .sort((a, b) => b.responses - a.responses),
   };
@@ -495,6 +515,249 @@ export function userPerformance(scope: Scope, period: Period, attention: Attenti
     })
     .filter((u) => u.responses || u.notesCreated || u.notesResolved || u.notesOverdue)
     .sort((a, b) => b.responses - a.responses || b.notesResolved - a.notesResolved);
+}
+
+// ── Ficha individual de un usuario ────────────────────────────────────────────
+
+export interface UserTopChat {
+  sessionId: string;
+  chatId: string;
+  name: string;
+  phone: string | null;
+  sent: number;
+  lastAt: string;
+}
+
+export interface UserRecentActivity {
+  at: string;
+  kind: 'message' | 'note';
+  label: string;
+  detail: string | null;
+  href: string | null;
+}
+
+export interface UserReportDetail {
+  performance: UserPerformance;
+  within15: number;
+  within60: number;
+  sends: { panel: number; batch: number; total: number };
+  byDay: Array<{ day: string; responses: number; sent: number }>;
+  topChats: UserTopChat[];
+  assigned: {
+    overdue: GlobalNote[];
+    today: GlobalNote[];
+    pending: GlobalNote[];
+    counts: { overdue: number; today: number; pending: number };
+  };
+  recent: UserRecentActivity[];
+}
+
+/**
+ * Envíos atribuidos al usuario: mensajes escritos desde la bandeja y
+ * destinatarios de lotes. Los lotes se identifican por `meta.account` o, si
+ * falta, por el dueño de la línea que los envió.
+ */
+function userSendStats(
+  user: { id: number; source_uid: string | null },
+  scope: Scope,
+  period: Period,
+): { panel: number; batch: number; total: number; byDay: Map<string, { panel: number; batch: number }> } {
+  const byDay = new Map<string, { panel: number; batch: number }>();
+  const bucket = (day: string) => {
+    const b = byDay.get(day) ?? { panel: 0, batch: 0 };
+    byDay.set(day, b);
+    return b;
+  };
+
+  const pp: unknown[] = [user.id, period.fromIso, period.toIso];
+  const panelWhere = sessionClause(scope, 'm.session_id', pp);
+  const panel = all<{ day: string; c: number }>(
+    `SELECT date(m.occurred_at, 'localtime') AS day, COUNT(*) AS c
+       FROM messages m
+      WHERE m.direction = 'out' AND m.origin = 'panel' AND m.sender_uid = ?
+        AND m.occurred_at >= ? AND m.occurred_at < ? AND ${panelWhere}
+        AND NOT EXISTS (SELECT 1 FROM batch_items bi WHERE bi.message_id = m.wa_message_id)
+      GROUP BY day`,
+    ...pp,
+  );
+
+  const bp: unknown[] = [period.fromIso, period.toIso];
+  const batchWhere = sessionClause(scope, 'b.session_id', bp);
+  const batches = all<{ meta: string | null; session_id: string | null; day: string; c: number }>(
+    `SELECT b.meta AS meta, b.session_id AS session_id, date(bi.updated_at, 'localtime') AS day, COUNT(*) AS c
+       FROM batch_items bi JOIN batches b ON b.id = bi.batch_id
+      WHERE bi.status = 'sent' AND bi.updated_at >= ? AND bi.updated_at < ? AND ${batchWhere}
+      GROUP BY b.id, day`,
+    ...bp,
+  );
+  const owners = new Map(
+    all<{ id: string; owner_uid: string | null }>('SELECT id, owner_uid FROM sessions').map((s) => [s.id, s.owner_uid]),
+  );
+  const keys = new Set([String(user.id), ...(user.source_uid ? [String(user.source_uid)] : [])]);
+
+  let panelTotal = 0;
+  for (const row of panel) {
+    panelTotal += Number(row.c ?? 0);
+    if (row.day) bucket(row.day).panel += Number(row.c ?? 0);
+  }
+  let batchTotal = 0;
+  for (const row of batches) {
+    let meta: Record<string, unknown> = {};
+    try {
+      const parsed = JSON.parse(row.meta ?? '{}');
+      meta = parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {};
+    } catch {
+      meta = {};
+    }
+    const raw = meta.account != null && String(meta.account).trim() !== '' ? String(meta.account) : null;
+    const account = raw ?? (row.session_id ? owners.get(row.session_id) ?? null : null);
+    if (!account || !keys.has(account)) continue;
+    batchTotal += Number(row.c ?? 0);
+    if (row.day) bucket(row.day).batch += Number(row.c ?? 0);
+  }
+
+  return { panel: panelTotal, batch: batchTotal, total: panelTotal + batchTotal, byDay };
+}
+
+/** Detalle para la ficha de seguimiento de una persona del equipo. */
+export function userReportDetail(
+  scope: Scope,
+  period: Period,
+  user: { id: number; name: string | null; username: string | null; source_uid: string | null },
+  attention: AttentionData,
+  performance?: UserPerformance,
+): UserReportDetail {
+  const name = performance?.name ?? user.name ?? user.username ?? `Usuario ${user.id}`;
+  const perf: UserPerformance = performance ?? {
+    id: user.id,
+    name,
+    responses: 0,
+    chats: 0,
+    avgFirstResponseMin: null,
+    notesCreated: 0,
+    notesResolved: 0,
+    notesOverdue: 0,
+  };
+  const responder = attention.responders.find((r) => r.key === String(user.id));
+  const sends = userSendStats(user, scope, period);
+
+  const p: unknown[] = [user.id, period.fromIso, period.toIso];
+  const sw = sessionClause(scope, 'm.session_id', p);
+  const topChats = all<UserTopChat>(
+    `SELECT m.session_id AS sessionId, m.chat_id AS chatId, COUNT(*) AS sent, MAX(m.occurred_at) AS lastAt,
+            COALESCE(
+              (SELECT pn.full_name FROM person_names pn WHERE pn.phone_key = ct.phone_key),
+              (SELECT pp.full_name FROM person_programs pp
+                WHERE pp.phone_key = ct.phone_key AND pp.full_name IS NOT NULL
+                ORDER BY pp.last_at DESC LIMIT 1),
+              ct.name, ct.phone, m.chat_id) AS name,
+            ct.phone AS phone
+       FROM messages m
+       LEFT JOIN contacts ct ON ct.session_id = m.session_id AND ct.chat_id = m.chat_id
+      WHERE m.direction = 'out' AND m.origin = 'panel' AND m.sender_uid = ?
+        AND m.occurred_at >= ? AND m.occurred_at < ? AND ${INDIVIDUAL('m')} AND ${sw}
+      GROUP BY m.session_id, m.chat_id
+      ORDER BY sent DESC, lastAt DESC
+      LIMIT 6`,
+    ...p,
+  );
+
+  const rp: unknown[] = [user.id, period.fromIso, period.toIso];
+  const recentWhere = sessionClause(scope, 'm.session_id', rp);
+  const recentMessages = all<{
+    session_id: string;
+    chat_id: string;
+    occurred_at: string;
+    body: string | null;
+    name: string;
+  }>(
+    `SELECT m.session_id, m.chat_id, m.occurred_at, m.body,
+            COALESCE(
+              (SELECT pn.full_name FROM person_names pn WHERE pn.phone_key = ct.phone_key),
+              (SELECT pp.full_name FROM person_programs pp
+                WHERE pp.phone_key = ct.phone_key AND pp.full_name IS NOT NULL
+                ORDER BY pp.last_at DESC LIMIT 1),
+              ct.name, ct.phone, m.chat_id) AS name
+       FROM messages m
+       LEFT JOIN contacts ct ON ct.session_id = m.session_id AND ct.chat_id = m.chat_id
+      WHERE m.direction = 'out' AND m.origin = 'panel' AND m.sender_uid = ?
+        AND m.occurred_at >= ? AND m.occurred_at < ? AND ${recentWhere}
+      ORDER BY m.occurred_at DESC, m.id DESC
+      LIMIT 8`,
+    ...rp,
+  );
+
+  const sessionIds = effectiveSessions(scope);
+  const authoredNotes = listAllNotes({ authorId: user.id, sessionIds, limit: 200, orderBy: 'created' }).filter(
+    (n) => n.created_at >= period.fromIso && n.created_at < period.toIso,
+  );
+  const noteActivity = authoredNotes.map<UserRecentActivity>((n) => ({
+    at: n.created_at,
+    kind: 'note',
+    label: `Nota sobre ${n.contact_name ?? n.contact_phone ?? n.chat_id.split('@')[0]}`,
+    detail: (n.note_text ?? '[nota de voz]').slice(0, 110),
+    href: `/notes?nota=${n.id}`,
+  }));
+  const messageActivity = recentMessages.map<UserRecentActivity>((m) => ({
+    at: m.occurred_at,
+    kind: 'message',
+    label: `Mensaje a ${m.name}`,
+    detail: (m.body ?? '').replace(/\s+/g, ' ').trim().slice(0, 110) || null,
+    href: `/conversations/${encodeURIComponent(m.chat_id)}`,
+  }));
+  const recent = [...messageActivity, ...noteActivity].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).slice(0, 8);
+
+  const assignedOverdue = listAllNotes({
+    assignedTo: user.id,
+    sessionIds,
+    status: 'overdue',
+    orderBy: 'due',
+    limit: 4,
+  });
+  const assignedToday = listAllNotes({
+    assignedTo: user.id,
+    sessionIds,
+    status: 'today',
+    orderBy: 'due',
+    limit: 4,
+  });
+  const assignedPending = listAllNotes({
+    assignedTo: user.id,
+    sessionIds,
+    status: 'pending',
+    orderBy: 'due',
+    limit: 4,
+  });
+  const assignedCounts = noteStats({ assignedTo: user.id, sessionIds });
+
+  // Serie diaria del gráfico: respuestas + envíos, con días vacíos en cero.
+  const responsesByDay = new Map((responder?.byDay ?? []).map((d) => [d.day, d.responses]));
+  const daily: Array<{ day: string; responses: number; sent: number }> = [];
+  for (let d = parseYmd(period.from)!; ymd(d) <= period.to; d = addDays(d, 1)) {
+    const day = ymd(d);
+    const s = sends.byDay.get(day) ?? { panel: 0, batch: 0 };
+    daily.push({ day, responses: responsesByDay.get(day) ?? 0, sent: s.panel + s.batch });
+  }
+
+  return {
+    performance: perf,
+    within15: responder?.within15 ?? 0,
+    within60: responder?.within60 ?? 0,
+    sends: { panel: sends.panel, batch: sends.batch, total: sends.total },
+    byDay: daily.length > 31 ? daily.slice(-31) : daily,
+    topChats,
+    assigned: {
+      overdue: assignedOverdue,
+      today: assignedToday,
+      pending: assignedPending,
+      counts: {
+        overdue: assignedCounts.overdue,
+        today: assignedCounts.today,
+        pending: assignedCounts.pending,
+      },
+    },
+    recent,
+  };
 }
 
 // ── Números (sesiones) ────────────────────────────────────────────────────────

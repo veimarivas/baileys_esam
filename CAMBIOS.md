@@ -1718,6 +1718,28 @@ Los datos que cronogramas manda con cada envío masivo (`programa` y `contact_na
 
 ---
 
+## 48. Última actividad por usuario y ficha individual de seguimiento (2026-10-19)
+
+Se distingue **cuándo alguien ingresó** de **cuándo trabajó por última vez** (envió un mensaje, lanzó un lote o registró una nota), y se agrega una ficha por persona para hacer seguimiento desde Reportes.
+
+- **`src/core/user-activity.ts` (nuevo):** `lastUseByUser()` calcula la última actividad real por cuenta:
+  - mensajes salientes con `messages.sender_uid`;
+  - notas con `contact_notes.user_id` (sin eliminadas);
+  - lotes por `batches.meta.account` o, si falta, por el dueño de la línea (`sessions.owner_uid`).
+  - El último ingreso sigue viviendo en `users.last_login_at` y se muestra por separado.
+- **`/users`:** nueva columna **Última actividad** con fecha relativa, tipo de trabajo y fecha exacta al pasar el cursor. El nombre enlaza a la ficha individual.
+- **`/reports` → Equipo:** la tabla **Desempeño por persona** muestra la última actividad, compacta las métricas de notas y agrega la acción **Ver ficha**. Se conservan período, sesión y filtros.
+- **`/reports/users/:id` (nuevo):**
+  - cabecera con identidad, roles, área, línea/estado, autorización, último ingreso y última actividad;
+  - KPIs de respuestas, primera respuesta (≤15 min y ≤1 h), envíos de bandeja/lotes, notas creadas y resueltas, y tareas vencidas;
+  - gráfico diario de respuestas vs. envíos;
+  - tareas asignadas (vencidas, para hoy y abiertas), contactos atendidos y actividad reciente (mensajes y notas);
+  - mismo selector de período y línea que Reportes; los filtros de Equipo se conservan al entrar y al volver.
+- **Métricas:** `attentionData()` ahora expone `within15`, `within60` y respuestas por día por usuario. `userReportDetail()` agrega envíos, chats atendidos, tareas y actividad reciente.
+- **Pruebas:** `test/user-activity.test.ts` cubre prioridad entre mensaje/nota/lote, atribución por dueño de línea, cuentas sin actividad y el armado completo de la ficha (respuestas, envíos, notas asignadas y render HTML). `npm run typecheck`, `npm test` (92) y `npm run build` limpios. Sin migración de base ni librerías nuevas.
+
+---
+
 ## Notas de operación
 
 - En producción usar `start-baileys.bat` / pm2 / systemd (no `npm run dev`).

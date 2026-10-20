@@ -1,5 +1,7 @@
 import { esc } from './layout.js';
-import { emptyState, statusBadge, table } from './views.js';
+import { emptyState, fmtDate, initials, statusBadge, table } from './views.js';
+import { esamAreaLabel, esamRoles, type UserRow } from '../auth/users.js';
+import type { UserActivity } from '../core/user-activity.js';
 import {
   fmtMinutes,
   PERIOD_LABELS,
@@ -12,6 +14,7 @@ import {
   type ProtectionStats,
   type SessionActivity,
   type UserPerformance,
+  type UserReportDetail,
 } from '../core/followup.js';
 import { TIPO_LABELS, type MonitoringData } from '../core/monitoring.js';
 import type { GlobalNote } from '../core/contacts.js';
@@ -68,11 +71,23 @@ function keepQuery(params: Record<string, string>): string {
 }
 
 /** Barra de período: atajos + rango libre + número (si hay varios) + filtros extra. */
-function periodBar(action: string, period: Period, sessions: SessionRow[], selected: string, tab: string, extra = ''): string {
+function periodBar(
+  action: string,
+  period: Period,
+  sessions: SessionRow[],
+  selected: string,
+  tab: string,
+  extra = '',
+  keepExtra: Record<string, string> = {},
+): string {
   const chips = PRESETS.map((p) => {
-    const qs = keepQuery({ period: p, session: selected, tab });
+    const qs = keepQuery({ period: p, session: selected, tab, ...keepExtra });
     return `<a class="fu-chip${period.preset === p ? ' on' : ''}" href="${action}?${qs}" aria-current="${period.preset === p}">${esc(PERIOD_LABELS[p])}</a>`;
   }).join('');
+  const hiddenKeep = Object.entries(keepExtra)
+    .filter(([k, v]) => v && !['period', 'from', 'to', 'tab', 'session'].includes(k))
+    .map(([k, v]) => `<input type="hidden" name="${esc(k)}" value="${esc(v)}" />`)
+    .join('');
   const sessionSelect =
     sessions.length > 1
       ? `<div class="toolbar-field" style="flex:1 1 190px"><label>Número</label>
@@ -91,9 +106,10 @@ function periodBar(action: string, period: Period, sessions: SessionRow[], selec
         <div class="toolbar-field" style="flex:0 1 150px"><label>Hasta</label><input type="date" name="to" value="${esc(period.to)}" class="form-control form-control-sm"></div>
         ${sessionSelect}
         ${extra}
+        ${hiddenKeep}
         <div class="toolbar-actions">
           <button class="btn btn-primary btn-sm" type="submit"><i class="ri-filter-3-line me-1"></i>Aplicar</button>
-          <a class="btn btn-soft-secondary btn-sm" href="${action}?${keepQuery({ tab })}">Limpiar</a>
+          <a class="btn btn-soft-secondary btn-sm" href="${action}?${keepQuery({ tab, ...keepExtra })}">Limpiar</a>
         </div>
       </div>
     </div>
@@ -341,6 +357,8 @@ export interface ReportsView {
   prevDelivery: DeliveryStats;
   notes: NotesFollowup;
   users: UserPerformance[];
+  team: Map<number, UserRow>;
+  lastUse: Map<number, UserActivity>;
   sends: MonitoringData;
   protection: ProtectionStats;
   filters: { programa: string; account: string; area: string; tipo: string };
@@ -410,20 +428,49 @@ export function renderReports(v: ReportsView): string {
     </div>
     ${dataScript({ kind: 'reports', daily: a.byDay, tipos: [], programas: [] })}${APEX}`;
   } else if (v.tab === 'equipo') {
+    const detailHref = (id: number) => `/reports/users/${id}?${keepQuery({ ...keep, tab: 'equipo' })}`;
     const rows = [
-      ...v.users.map((u) => [
-        `<b>${esc(u.name)}</b>`,
-        String(u.responses),
-        String(u.chats),
-        esc(fmtMinutes(u.avgFirstResponseMin)),
-        String(u.notesCreated),
-        String(u.notesResolved),
-        u.notesOverdue ? `<span class="ab-pill ab-danger">${u.notesOverdue}</span>` : '0',
-      ]),
+      ...v.users.map((u) => {
+        const member = v.team.get(u.id);
+        const use = v.lastUse.get(u.id);
+        const area = member ? esamAreaLabel(member) : null;
+        const sub = [
+          area,
+          use ? `Última actividad ${relTime(use.at)}` : 'Sin actividad registrada',
+        ].filter(Boolean).join(' · ');
+        return [
+          `<div class="team-person">
+            <span class="avatar-xs rounded-circle av-${u.id % 8}">${esc(initials(u.name))}</span>
+            <div class="min-w-0"><a class="team-link" href="${esc(detailHref(u.id))}">${esc(u.name)}</a>
+              <div class="adm-sub">${esc(sub)}</div></div>
+          </div>`,
+          `<b class="team-metric">${u.responses}</b>`,
+          `<span class="team-metric">${u.chats}</span>`,
+          `<span class="team-muted">${esc(fmtMinutes(u.avgFirstResponseMin))}</span>`,
+          `<b>${u.notesCreated}</b> <span class="team-muted">creadas</span>
+            <div class="adm-sub">${u.notesResolved} resueltas</div>`,
+          u.notesOverdue ? `<span class="ab-pill ab-danger"><i class="ri-alarm-warning-line"></i>${u.notesOverdue}</span>` : '<span class="team-muted">0</span>',
+          `<a class="btn btn-soft-secondary btn-sm team-open" href="${esc(detailHref(u.id))}" title="Ver ficha y seguimiento">Ver ficha <i class="ri-arrow-right-line"></i></a>`,
+        ];
+      }),
       ...a.responders
         .filter((r) => r.key === 'phone')
-        .map((r) => [`<i class="ri-smartphone-line me-1 text-muted"></i>${esc(r.name)}`, String(r.responses), String(r.chats), esc(fmtMinutes(r.avgFirstResponseMin)), '—', '—', '—']),
+        .map((r) => [
+          `<div class="team-person"><span class="team-phone"><i class="ri-smartphone-line"></i></span>
+            <div class="min-w-0"><span class="team-link is-muted">${esc(r.name)}</span>
+              <div class="adm-sub">Sin cuenta del panel · respuestas desde el teléfono</div></div></div>`,
+          `<b class="team-metric">${r.responses}</b>`,
+          `<span class="team-metric">${r.chats}</span>`,
+          `<span class="team-muted">${esc(fmtMinutes(r.avgFirstResponseMin))}</span>`,
+          '<span class="team-muted">—</span>',
+          '<span class="team-muted">—</span>',
+          '<span class="adm-sub">No disponible</span>',
+        ]),
     ];
+    const teamTable = `<div class="table-responsive"><table class="table table-hover align-middle mb-0 ab-table team-table">
+      <thead class="table-light"><tr><th>Persona</th><th>Respuestas</th><th>Chats</th><th>1.ª respuesta</th><th>Notas del período</th><th>Notas vencidas</th><th><span class="visually-hidden">Acciones</span></th></tr></thead>
+      <tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody>
+    </table></div>`;
     const top = [...v.users].sort((x, y) => y.responses - x.responses)[0];
     content = `<div class="ab-kpis adm-kpis-3">
       ${kpi('ri-team-line', 'info', 'Personas con actividad', v.users.filter((u) => u.responses || u.notesCreated).length, 'respondieron o registraron notas')}
@@ -433,7 +480,7 @@ export function renderReports(v: ReportsView): string {
     ${panel(
       'Desempeño por persona',
       rows.length
-        ? table(['Persona', 'Respuestas', 'Chats atendidos', 'Tiempo prom. 1.ª respuesta', 'Notas registradas', 'Notas resueltas', 'Vencidas'], rows)
+        ? teamTable
         : emptyState('ri-user-search-line', 'Sin actividad del equipo', 'No hubo respuestas ni notas en el período.'),
       `<a class="btn btn-soft-secondary btn-sm" href="${esc(v.exportHref)}"><i class="ri-download-2-line me-1"></i>CSV</a>`,
     )}`;
@@ -531,6 +578,160 @@ export function renderReports(v: ReportsView): string {
       <a class="btn btn-soft-secondary btn-sm" href="${esc(v.exportHref)}"><i class="ri-download-2-line me-1"></i>Exportar CSV</a>
     </div>
     ${content}
+  </div>`;
+}
+
+// ── Ficha individual ─────────────────────────────────────────────────────────
+
+export interface ReportUserView {
+  user: UserRow;
+  detail: UserReportDetail;
+  period: Period;
+  sessions: SessionRow[];
+  selectedSession: string;
+  lastUse: UserActivity | null;
+  filters: { programa: string; account: string; area: string; tipo: string };
+}
+
+function digits(value: string | null | undefined): string {
+  return (value ?? '').replace(/\D+/g, '');
+}
+
+function todayYmd(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** Ficha de seguimiento individual, con el mismo período y filtros de Reportes. */
+export function renderReportUser(v: ReportUserView): string {
+  const u = v.user;
+  const d = v.detail;
+  const p = d.performance;
+  const name = u.name ?? u.username ?? `Usuario ${u.id}`;
+  const area = esamAreaLabel(u);
+  const roles = esamRoles(u);
+  const line = (() => {
+    const num = digits(u.esam_numero);
+    if (!num) return undefined;
+    const matches = v.sessions.filter((s) => digits(s.expected_phone) === num || digits(s.phone) === num);
+    return matches.find((s) => s.status === 'ready') ?? matches[0];
+  })();
+
+  const roleChips = (roles.length ? roles : [area])
+    .map((r) => `<span class="ur-chip"><i class="ri-shield-user-line" aria-hidden="true"></i>${esc(r)}</span>`)
+    .join('');
+  const lineChip = line
+    ? `<span class="ur-chip"><i class="ri-whatsapp-line" aria-hidden="true"></i>${esc(line.phone ?? line.expected_phone ?? line.name)} ${statusBadge(line.status)}</span>`
+    : `<span class="ur-chip is-muted"><i class="ri-link-unlink" aria-hidden="true"></i>${u.esam_numero ? `+${esc(digits(u.esam_numero))} · sin línea activa` : 'Sin línea asignada'}</span>`;
+  const accessChip = u.esam_autorizado
+    ? '<span class="ur-chip is-ok"><i class="ri-check-line" aria-hidden="true"></i>Acceso autorizado</span>'
+    : '<span class="ur-chip is-danger"><i class="ri-close-line" aria-hidden="true"></i>Sin autorizar</span>';
+
+  const overdue = d.assigned.counts.overdue;
+  const responseTone = p.avgFirstResponseMin == null ? 'mute' : p.avgFirstResponseMin > 60 ? 'warn' : 'ok';
+  const kpis = `<div class="ab-kpis ur-kpis">
+    ${kpi('ri-chat-check-line', 'info', 'Respuestas', p.responses, `${p.chats} chat${p.chats === 1 ? '' : 's'} atendido${p.chats === 1 ? '' : 's'}`)}
+    ${kpi('ri-speed-up-line', responseTone, '1.ª respuesta', fmtMinutes(p.avgFirstResponseMin), `${d.within15} en ≤ 15 min · ${d.within60} en ≤ 1 h`)}
+    ${kpi('ri-send-plane-2-line', 'info', 'Envíos', d.sends.total, `${d.sends.panel} bandeja · ${d.sends.batch} lotes`)}
+    ${kpi('ri-sticky-note-add-line', 'info', 'Notas creadas', p.notesCreated, `${p.notesResolved} resueltas por la persona`)}
+    ${kpi('ri-check-double-line', 'ok', 'Notas resueltas', p.notesResolved, 'marcadas como resueltas en el período')}
+    ${kpi('ri-alarm-warning-line', overdue ? 'danger' : 'ok', 'Tareas vencidas', overdue, `${d.assigned.counts.today} para hoy · ${d.assigned.counts.pending} abiertas`)}
+  </div>`;
+
+  const today = todayYmd();
+  const seen = new Set<number>();
+  const tasks = [...d.assigned.overdue, ...d.assigned.today, ...d.assigned.pending]
+    .filter((n) => (seen.has(n.id) ? false : (seen.add(n.id), true)))
+    .slice(0, 7);
+  const taskList = tasks.length
+    ? `<div class="ur-task-counts">
+        <span class="is-late">${overdue} vencida${overdue === 1 ? '' : 's'}</span>
+        <span>${d.assigned.counts.today} para hoy</span>
+        <span>${d.assigned.counts.pending} abierta${d.assigned.counts.pending === 1 ? '' : 's'}</span>
+      </div>
+      <ul class="ur-tasks">${tasks
+        .map((n) => {
+          const tone = n.due_at && n.due_at < today ? 'late' : n.due_at === today ? 'today' : 'pending';
+          const due = n.due_at ? `${n.due_at.split('-').reverse().join('/')}${n.due_time ? ` · ${n.due_time}` : ''}` : 'Sin fecha';
+          return `<li class="ur-task is-${tone}">
+            <span class="ur-task-dot" aria-hidden="true"></span>
+            <div class="ur-task-main">
+              <a class="ur-task-text" href="/notes?nota=${n.id}">${esc((n.note_text ?? '[nota de voz]').slice(0, 120))}</a>
+              <div class="ur-task-meta">
+                <a href="/conversations/${encodeURIComponent(n.chat_id)}">${esc(n.contact_name ?? n.contact_phone ?? n.chat_id.split('@')[0])}</a>
+                <span>${esc(due)}</span>
+              </div>
+            </div>
+          </li>`;
+        })
+        .join('')}</ul>`
+    : emptyState('ri-checkbox-circle-line', 'Sin tareas asignadas', 'Esta persona no tiene tareas pendientes en las líneas visibles.');
+
+  const chatRows = d.topChats.map((c) => [
+    `<a class="fu-contact" href="/conversations/${encodeURIComponent(c.chatId)}">${esc(c.name)}</a>
+      <div class="adm-sub">${esc(c.phone ? `+${c.phone}` : c.chatId.split('@')[0])}</div>`,
+    `<b class="team-metric">${c.sent}</b>`,
+    `<span class="team-muted" title="${esc(fmtDate(c.lastAt))}">${esc(relTime(c.lastAt))}</span>`,
+  ]);
+  const chats = chatRows.length
+    ? table(['Contacto', 'Mensajes', 'Último envío'], chatRows)
+    : emptyState('ri-chat-3-line', 'Sin conversaciones atendidas', 'No escribió mensajes en chats individuales durante el período.');
+
+  const icons: Record<string, string> = { message: 'ri-chat-1-line', note: 'ri-sticky-note-line' };
+  const recent = d.recent.length
+    ? `<ul class="ur-activity">${d.recent
+        .map(
+          (a) => `<li class="ur-act is-${a.kind}">
+            <span class="ur-act-ico"><i class="${icons[a.kind] ?? 'ri-history-line'}" aria-hidden="true"></i></span>
+            <div class="ur-act-main">
+              ${a.href ? `<a href="${esc(a.href)}">${esc(a.label)}</a>` : `<span>${esc(a.label)}</span>`}
+              ${a.detail ? `<p>${esc(a.detail)}</p>` : ''}
+            </div>
+            <span class="ur-act-time" title="${esc(fmtDate(a.at))}">${esc(relTime(a.at))}</span>
+          </li>`,
+        )
+        .join('')}</ul>`
+    : emptyState('ri-history-line', 'Sin actividad reciente', 'No hay mensajes ni notas de esta persona en el período.');
+
+  const loginRel = u.last_login_at ? relTime(u.last_login_at) : 'Nunca';
+  const loginDetail = u.last_login_at
+    ? `${fmtDate(u.last_login_at)} · ${u.login_count} ingreso${u.login_count === 1 ? '' : 's'}`
+    : 'Sin ingresos registrados';
+  const hero = `<div class="card ab-card ur-hero">
+    <div class="ur-hero-main">
+      <span class="avatar-xl rounded-circle av-${u.id % 8} ur-avatar">${esc(initials(name))}</span>
+      <div class="ur-identity">
+        <div class="ur-eyebrow">Ficha del equipo</div>
+        <h2 class="ur-name">${esc(name)}</h2>
+        <div class="ur-meta">${[u.username, u.email].filter(Boolean).map((x) => esc(x)).join(' · ') || 'Cuenta del panel'}</div>
+        <div class="ur-chips">${roleChips}${lineChip}${accessChip}</div>
+      </div>
+    </div>
+    <div class="ur-hero-side">
+      <div class="ur-fact"><span>Último ingreso</span><b>${esc(loginRel)}</b>
+        <small>${esc(loginDetail)}</small></div>
+      <div class="ur-fact"><span>Última actividad</span><b>${esc(v.lastUse ? relTime(v.lastUse.at) : 'Sin actividad')}</b>
+        <small>${esc(v.lastUse ? `${v.lastUse.label} · ${fmtDate(v.lastUse.at)}` : 'Todavía no envió mensajes, lotes ni notas')}</small></div>
+    </div>
+  </div>`;
+
+  const chartSub = d.byDay.length < v.period.days
+    ? `Últimos ${d.byDay.length} días del período · ${esc(v.period.label)}`
+    : `Respuestas y envíos por día · ${esc(v.period.label)}`;
+  return `<div class="ab-page fu-page ur-page">
+    ${periodBar(`/reports/users/${u.id}`, v.period, v.sessions, v.selectedSession, 'equipo', '', v.filters)}
+    ${hero}
+    ${kpis}
+    <div class="ur-layout">
+      ${panel('Actividad diaria', `<div id="urDaily" class="ur-chart" role="img" aria-label="Respuestas y envíos por día"></div><p class="fu-chart-sub mb-0">${chartSub}</p>`)}
+      ${panel('Seguimiento asignado', taskList)}
+    </div>
+    <div class="fu-split fu-split-even">
+      ${panel('Contactos atendidos', chats)}
+      ${panel('Actividad reciente', recent)}
+    </div>
+    ${dataScript({ kind: 'user', daily: d.byDay })}${APEX}
   </div>`;
 }
 

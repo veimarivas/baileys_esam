@@ -26,6 +26,7 @@ import {
   findById,
   listUsers,
   registerLogin,
+  reportsScopeFor,
   sessionScopeFor,
   upsertUser,
   usernameAvailableFor,
@@ -1664,9 +1665,13 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
 
   // ── Seguimiento (monitoreo) y reportes ───────────────────────────────────────
 
-  /** Sesiones visibles para el usuario y la seleccionada en `?session=`. */
-  const followupScope = (req: AuthedRequest) => {
-    const sessionIds = sessionScopeFor(req.user!);
+  /**
+   * Sesiones visibles para el usuario y la seleccionada en `?session=`.
+   * En Reportes (`allAdminLines`) el Super Admin ve todas las líneas; Monitoreo
+   * mantiene el alcance personal de `sessionScopeFor`.
+   */
+  const followupScope = (req: AuthedRequest, allAdminLines = false) => {
+    const sessionIds = allAdminLines ? reportsScopeFor(req.user!) : sessionScopeFor(req.user!);
     const visible = manager.list().filter((s) => sessionIds === null || sessionIds.includes(s.id));
     const requested = typeof req.query.session === 'string' ? req.query.session : '';
     const selected = visible.some((s) => s.id === requested) ? requested : '';
@@ -1710,7 +1715,7 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
   );
 
   const buildReports = (req: AuthedRequest) => {
-    const { scope, visible, selected } = followupScope(req);
+    const { scope, visible, selected } = followupScope(req, true);
     const period = resolvePeriod({ period: qstr(req, 'period'), from: qstr(req, 'from'), to: qstr(req, 'to') }, '30d');
     const filters = { programa: qstr(req, 'programa'), account: qstr(req, 'account'), area: qstr(req, 'area'), tipo: qstr(req, 'tipo') };
     const attention = attentionData(scope, period);
@@ -1796,7 +1801,7 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
           }),
         );
       }
-      const { scope, visible, selected } = followupScope(req);
+      const { scope, visible, selected } = followupScope(req, true);
       const period = resolvePeriod({ period: qstr(req, 'period'), from: qstr(req, 'from'), to: qstr(req, 'to') }, '30d');
       const filters = {
         programa: qstr(req, 'programa'),

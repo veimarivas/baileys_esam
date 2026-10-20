@@ -429,30 +429,50 @@ export function renderReports(v: ReportsView): string {
     ${dataScript({ kind: 'reports', daily: a.byDay, tipos: [], programas: [] })}${APEX}`;
   } else if (v.tab === 'equipo') {
     const detailHref = (id: number) => `/reports/users/${id}?${keepQuery({ ...keep, tab: 'equipo' })}`;
+    const personRow = (u: UserPerformance, member?: UserRow) => {
+      const use = v.lastUse.get(u.id);
+      const area = member ? esamAreaLabel(member) : null;
+      const sub = [
+        area,
+        use ? `Última actividad ${relTime(use.at)}` : 'Sin actividad registrada',
+      ].filter(Boolean).join(' · ');
+      return [
+        `<div class="team-person">
+          <span class="avatar-xs rounded-circle av-${u.id % 8}">${esc(initials(u.name))}</span>
+          <div class="min-w-0"><a class="team-link" href="${esc(detailHref(u.id))}">${esc(u.name)}</a>
+            <div class="adm-sub">${esc(sub)}</div></div>
+        </div>`,
+        `<b class="team-metric">${u.responses}</b>`,
+        `<span class="team-metric">${u.chats}</span>`,
+        `<span class="team-muted">${esc(fmtMinutes(u.avgFirstResponseMin))}</span>`,
+        `<b>${u.notesCreated}</b> <span class="team-muted">creadas</span>
+          <div class="adm-sub">${u.notesResolved} resueltas</div>`,
+        u.notesOverdue ? `<span class="ab-pill ab-danger"><i class="ri-alarm-warning-line"></i>${u.notesOverdue}</span>` : '<span class="team-muted">0</span>',
+        `<a class="btn btn-soft-secondary btn-sm team-open" href="${esc(detailHref(u.id))}" title="Ver ficha y seguimiento">Ver ficha <i class="ri-arrow-right-line"></i></a>`,
+      ];
+    };
+    const activeIds = new Set(v.users.map((u) => u.id));
+    const inactive = [...v.team.values()]
+      .filter((m) => !activeIds.has(m.id))
+      .sort((a, b) => (a.name ?? a.username ?? '').localeCompare(b.name ?? b.username ?? '', 'es'))
+      .map((member) =>
+        personRow(
+          {
+            id: member.id,
+            name: member.name ?? member.username ?? `Usuario ${member.id}`,
+            responses: 0,
+            chats: 0,
+            avgFirstResponseMin: null,
+            notesCreated: 0,
+            notesResolved: 0,
+            notesOverdue: 0,
+          },
+          member,
+        ),
+      );
     const rows = [
-      ...v.users.map((u) => {
-        const member = v.team.get(u.id);
-        const use = v.lastUse.get(u.id);
-        const area = member ? esamAreaLabel(member) : null;
-        const sub = [
-          area,
-          use ? `Última actividad ${relTime(use.at)}` : 'Sin actividad registrada',
-        ].filter(Boolean).join(' · ');
-        return [
-          `<div class="team-person">
-            <span class="avatar-xs rounded-circle av-${u.id % 8}">${esc(initials(u.name))}</span>
-            <div class="min-w-0"><a class="team-link" href="${esc(detailHref(u.id))}">${esc(u.name)}</a>
-              <div class="adm-sub">${esc(sub)}</div></div>
-          </div>`,
-          `<b class="team-metric">${u.responses}</b>`,
-          `<span class="team-metric">${u.chats}</span>`,
-          `<span class="team-muted">${esc(fmtMinutes(u.avgFirstResponseMin))}</span>`,
-          `<b>${u.notesCreated}</b> <span class="team-muted">creadas</span>
-            <div class="adm-sub">${u.notesResolved} resueltas</div>`,
-          u.notesOverdue ? `<span class="ab-pill ab-danger"><i class="ri-alarm-warning-line"></i>${u.notesOverdue}</span>` : '<span class="team-muted">0</span>',
-          `<a class="btn btn-soft-secondary btn-sm team-open" href="${esc(detailHref(u.id))}" title="Ver ficha y seguimiento">Ver ficha <i class="ri-arrow-right-line"></i></a>`,
-        ];
-      }),
+      ...v.users.map((u) => personRow(u, v.team.get(u.id))),
+      ...inactive,
       ...a.responders
         .filter((r) => r.key === 'phone')
         .map((r) => [

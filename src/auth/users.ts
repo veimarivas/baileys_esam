@@ -119,6 +119,8 @@ export function esamAreaLabel(user: UserRow): string {
  *   sesiones cuyo `expected_phone`/`phone` coincide exactamente con su número.
  * - Usuario sin número: sesiones de su `owner_uid`.
  * - Usuario sin número ni `owner_uid`: ninguna (lista vacía).
+ *
+ * Para las vistas de Reportes, ver `reportsScopeFor` (el Super Admin ve todo).
  */
 export function sessionScopeFor(user: UserRow): string[] | null {
   // Solo la cuenta local administra todas las sesiones. Los usuarios de
@@ -151,6 +153,14 @@ export function sessionScopeFor(user: UserRow): string[] | null {
  */
 export function sessionIdsFor(user: UserRow): string[] | null {
   return sessionScopeFor(user);
+}
+
+/**
+ * Alcance de Reportes: el Super Admin ve todas las líneas, no solo la suya.
+ * El historial del inbox y el resto de las vistas conservan `sessionScopeFor`.
+ */
+export function reportsScopeFor(user: UserRow): string[] | null {
+  return esamEsAdmin(user) ? null : sessionScopeFor(user);
 }
 
 // ── Consultas ─────────────────────────────────────────────────────────────────

@@ -2431,6 +2431,9 @@
       syntheticConv: null,
       participants: [],
       memberFilter: '',
+      contactTab: 'info',
+      contactGroups: null,
+      contactGroupsLoading: false,
       directory: null,
       directoryLoading: null,
       directoryTotal: 0,
@@ -2899,6 +2902,9 @@
       state.syntheticConv = synthetic || null;
       state.participants = [];
       state.memberFilter = '';
+      state.contactTab = 'info';
+      state.contactGroups = null;
+      state.contactGroupsLoading = false;
       state.notes = [];
       state.noteDraft = emptyNoteDraft();
       state.person = null;
@@ -3352,20 +3358,24 @@
             '<div class="rp-body">' + waRichHtml(state.replyTo.body || '[' + state.replyTo.content_type + ']') + '</div></div>' +
             '<button type="button" id="cancel-reply" aria-label="Cancelar respuesta"><span class="ri-close-line"></span></button></div>'
         : '';
+      // El campo de texto ocupa toda la fila y las herramientas van abajo: así
+      // hay espacio real para escribir sin que los botones lo compriman.
       return '<div class="composer">' + reply +
         '<div id="quick-list" class="quick-pop d-none"></div>' +
         '<div class="composer-row">' +
+          '<div class="composer-field">' +
+            '<textarea class="composer-input" id="composer-input" rows="2" placeholder="Escribí un mensaje…"></textarea>' +
+            '<div id="emoji-list" class="emoji-pop2 d-none"></div>' +
+          '</div>' +
+          '<button type="button" class="btn btn-primary btn-icon btn-send" id="btn-send" title="Enviar"><span class="ri-send-plane-2-fill fs-5"></span></button>' +
+        '</div>' +
+        '<div class="composer-tools">' +
           '<button type="button" class="btn btn-icon btn-soft-secondary" id="btn-attach" title="Adjuntar archivo"><span class="ri-attachment-2 fs-5"></span></button>' +
           '<input type="file" id="attach-input" hidden accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt" />' +
           '<span id="recorder-slot"></span>' +
           '<button type="button" class="btn btn-icon btn-soft-secondary" id="btn-quick" title="Plantillas rápidas"><span class="ri-flashlight-line fs-5"></span></button>' +
           '<button type="button" class="btn btn-icon btn-soft-secondary" id="btn-poll" title="Crear encuesta"><span class="ri-bar-chart-horizontal-line fs-5"></span></button>' +
-          '<div class="composer-field">' +
-            '<textarea class="composer-input" id="composer-input" rows="1" placeholder="Escribí un mensaje…"></textarea>' +
-            '<div id="emoji-list" class="emoji-pop2 d-none"></div>' +
-          '</div>' +
-          '<button type="button" class="btn btn-icon btn-soft-secondary" id="btn-emoji" title="Emoji"><span class="ri-emotion-line fs-5"></span></button>' +
-          '<button type="button" class="btn btn-primary btn-icon btn-send" id="btn-send" title="Enviar"><span class="ri-send-plane-2-fill fs-5"></span></button>' +
+          '<button type="button" class="btn btn-icon btn-soft-secondary composer-emoji" id="btn-emoji" title="Emoji"><span class="ri-emotion-line fs-5"></span></button>' +
         '</div></div>';
     }
 
@@ -3398,6 +3408,8 @@
       input.addEventListener('keydown', function (ev) {
         if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); sendText(); }
       });
+      // Altura inicial de dos líneas: el campo se ve cómodo antes de escribir.
+      autoGrow(input);
 
       els.pane.querySelector('#btn-send').addEventListener('click', sendText);
       els.pane.querySelector('#btn-attach').addEventListener('click', function () { els.pane.querySelector('#attach-input').click(); });
@@ -3468,7 +3480,7 @@
     function autoGrow(el) {
       if (!el || el.tagName !== 'TEXTAREA') return;
       el.style.height = 'auto';
-      el.style.height = Math.min(el.scrollHeight, 140) + 'px';
+      el.style.height = Math.min(el.scrollHeight, 180) + 'px';
     }
 
     function sendText() {
@@ -4041,6 +4053,51 @@
         .catch(function () { if (token !== state.chatToken) return; state.participants = []; });
     }
 
+    // Grupos de la persona en todas las líneas del usuario (solapa «Grupos»).
+    function loadContactGroups() {
+      if (!state.selectedChat) return;
+      var token = state.chatToken;
+      state.contactGroupsLoading = true;
+      renderContact();
+      api('/inbox/' + encodeURIComponent(state.selectedSession) + '/' + encodeURIComponent(state.selectedChat) + '/groups')
+        .then(function (d) {
+          if (token !== state.chatToken) return;
+          state.contactGroups = (d && d.groups) || [];
+          state.contactGroupsLoading = false;
+          renderContact();
+        })
+        .catch(function (e) {
+          if (token !== state.chatToken) return;
+          state.contactGroups = [];
+          state.contactGroupsLoading = false;
+          renderContact();
+          toast((e && e.message) || 'No se pudieron cargar los grupos.', true);
+        });
+    }
+
+    // Abre un grupo (aunque todavía no tenga conversación en la lista).
+    function openGroupChat(g) {
+      if (!g || !g.chat_id) return;
+      var exact = state.conversations.filter(function (c) {
+        return c.session_id === g.session_id && c.chat_id === g.chat_id;
+      })[0];
+      if (exact) { openChat(exact.session_id, exact.chat_id, true); return; }
+      openChat(g.session_id, g.chat_id, true, {
+        id: 0,
+        session_id: g.session_id,
+        chat_id: g.chat_id,
+        status: 'open',
+        unread_count: 0,
+        last_message_text: null,
+        last_message_at: null,
+        last_direction: null,
+        created_at: null,
+        contact: { id: null, name: g.name || null, phone: g.chat_id, email: null, company: null, avatar_path: null },
+        person: { full_name: null, programas: [] },
+        team: null,
+      });
+    }
+
     // Abre la conversación existente con un contacto o crea una si no la hay.
     // Resuelve variantes de JID (@lid, @s.whatsapp.net) al chat ya guardado.
     function openContactChat(jid, name, person) {
@@ -4089,6 +4146,58 @@
       return (p.team && p.team.name) || p.full_name || p.name || p.phone || memberPhone(p.id) || String(p.id || '').split('@')[0];
     }
 
+    /** Contenido de la solapa «Grupos» de la ficha de una persona. */
+    function contactGroupsHtml() {
+      if (state.contactGroupsLoading) {
+        return '<div class="cg-state"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Buscando grupos…</div>';
+      }
+      if (!Array.isArray(state.contactGroups)) {
+        return '<div class="cg-state">Cargando grupos…</div>';
+      }
+      if (!state.contactGroups.length) {
+        return '<div class="cg-empty"><span class="ri-group-line" aria-hidden="true"></span>' +
+          '<p>No comparte ningún grupo con tus líneas.</p>' +
+          '<small>Se buscan los grupos de las líneas de WhatsApp a las que tenés acceso.</small></div>';
+      }
+      return '<p class="cg-hint">Grupos en los que está esta persona, en tus líneas de WhatsApp. Tocá uno para entrar.</p>' +
+        '<div class="cg-list">' + state.contactGroups.map(function (g) {
+          var line = g.session_name || fmtPhone(g.session_phone) || '';
+          var meta = (g.participant_count ? g.participant_count + ' miembros' : 'Grupo') +
+            (line ? ' · ' + escapeHtml(line) : '');
+          return '<button type="button" class="cg-item" data-group-session="' + escapeHtml(g.session_id) + '" data-group-chat="' + escapeHtml(g.chat_id) + '" title="Abrir el grupo ' + escapeHtml(g.name) + '">' +
+            '<span class="cg-avatar"><span class="ri-group-line" aria-hidden="true"></span></span>' +
+            '<span class="cg-main"><span class="cg-name">' + escapeHtml(g.name) + '</span>' +
+              '<span class="cg-meta">' + meta + '</span></span>' +
+            '<span class="ri-arrow-right-s-line cg-go" aria-hidden="true"></span></button>';
+        }).join('') + '</div>';
+    }
+
+    /** Cambia entre «Información» y «Grupos», cargando los grupos la primera vez. */
+    function bindContactTabs() {
+      Array.prototype.forEach.call(els.contact.querySelectorAll('.contact-tab'), function (btn) {
+        btn.addEventListener('click', function () {
+          var tab = btn.getAttribute('data-ctab');
+          if (!tab || tab === state.contactTab) return;
+          state.contactTab = tab;
+          if (tab === 'groups' && state.contactGroups === null && !state.contactGroupsLoading) {
+            loadContactGroups();
+            return;
+          }
+          renderContact();
+        });
+      });
+      Array.prototype.forEach.call(els.contact.querySelectorAll('.cg-item'), function (btn) {
+        btn.addEventListener('click', function () {
+          var sessionId = btn.getAttribute('data-group-session');
+          var chatId = btn.getAttribute('data-group-chat');
+          var group = (state.contactGroups || []).filter(function (g) {
+            return g.session_id === sessionId && g.chat_id === chatId;
+          })[0];
+          if (group) openGroupChat(group);
+        });
+      });
+    }
+
     function renderContact() {
       var c = selectedConversation();
       if (!c) return;
@@ -4106,6 +4215,37 @@
       }
 
       var headProgs = convPrograms(c);
+      var isGroupOpen = isGroupChat(c);
+      var infoBody = '<div class="person-fill" id="person-fill"></div>' +
+        notesSectionHtml() +
+        '<div class="panel-section contact-meta"><h6>Conversación</h6><dl>' +
+          '<dt>Inicio</dt><dd>' + (c.created_at ? new Date(c.created_at).toLocaleDateString() : '—') + '</dd>' +
+          '<dt>Último mensaje</dt><dd>' + timeAgo(c.last_message_at) + '</dd>' +
+        '</dl></div>';
+
+      // En una persona (no en un grupo) la ficha tiene dos solapas: sus datos y
+      // los grupos donde está, para entrar directo al grupo desde ahí.
+      var tabsHtml = '';
+      var bodyHtml = '<div class="person-fill" id="person-fill"></div>' + membersHtml + notesSectionHtml() +
+        '<div class="panel-section contact-meta"><h6>Conversación</h6><dl>' +
+          '<dt>Inicio</dt><dd>' + (c.created_at ? new Date(c.created_at).toLocaleDateString() : '—') + '</dd>' +
+          '<dt>Último mensaje</dt><dd>' + timeAgo(c.last_message_at) + '</dd>' +
+        '</dl></div>';
+      if (!isGroupOpen) {
+        var activeGroups = state.contactTab === 'groups';
+        var groupCount = Array.isArray(state.contactGroups) ? state.contactGroups.length : null;
+        tabsHtml = '<div class="contact-tabs" role="tablist" aria-label="Ficha de la persona">' +
+          '<button type="button" class="contact-tab' + (!activeGroups ? ' active' : '') + '" data-ctab="info" role="tab" aria-selected="' + (!activeGroups) + '">' +
+            '<span class="ri-user-line" aria-hidden="true"></span> Información</button>' +
+          '<button type="button" class="contact-tab' + (activeGroups ? ' active' : '') + '" data-ctab="groups" role="tab" aria-selected="' + activeGroups + '">' +
+            '<span class="ri-group-line" aria-hidden="true"></span> Grupos' +
+            (groupCount !== null ? ' <span class="contact-tab-count">' + groupCount + '</span>' : '') +
+          '</button></div>';
+        bodyHtml = '<div class="contact-tab-panel" id="contact-info"' + (activeGroups ? ' hidden' : '') + '>' + infoBody + '</div>' +
+          '<div class="contact-tab-panel contact-groups" id="contact-groups"' + (activeGroups ? '' : ' hidden') + '>' +
+            contactGroupsHtml() + '</div>';
+      }
+
       els.contact.innerHTML =
         '<button type="button" class="contact-close" id="contact-close" aria-label="Cerrar la ficha"><span class="ri-close-line"></span></button>' +
         '<div class="contact-head">' + avatarHtml(name, 'avatar-xl', chatPhoto(c)) +
@@ -4118,17 +4258,12 @@
           (isHiddenNumber(c) ? '<div class="contact-hidden-hint">WhatsApp no comparte su número. Podés responderle igual y registrar su nombre.</div>' : '') +
           (ct.email ? '<div class="contact-email">' + escapeHtml(ct.email) + '</div>' : '') +
         '</div>' +
-        '<div class="person-fill" id="person-fill"></div>' +
-        membersHtml +
-        notesSectionHtml() +
-        '<div class="panel-section contact-meta"><h6>Conversación</h6><dl>' +
-          '<dt>Inicio</dt><dd>' + (c.created_at ? new Date(c.created_at).toLocaleDateString() : '—') + '</dd>' +
-          '<dt>Último mensaje</dt><dd>' + timeAgo(c.last_message_at) + '</dd>' +
-        '</dl></div>';
+        tabsHtml + bodyHtml;
 
       bindNameEditor(c);
       var closeBtn = els.contact.querySelector('#contact-close');
       if (closeBtn) closeBtn.addEventListener('click', function () { root.classList.add('contact-hidden'); });
+      bindContactTabs();
 
       // Notas internas: compositor (con borrador) y lista.
       renderNoteComposer();

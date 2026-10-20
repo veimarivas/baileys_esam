@@ -20,6 +20,7 @@ import { logger, baileysLogger } from '../logger.js';
 import { delay, randInt } from '../util/async.js';
 import { phoneFromJid, typeForMime } from '../core/phone.js';
 import { rememberLid, resolveChatId, phoneForLid } from '../core/lid.js';
+import { phoneKeyOf } from '../core/person.js';
 import {
   contactMeta,
   contactsArrayMeta,
@@ -1308,6 +1309,35 @@ export class WaSession extends EventEmitter {
       subject: g.subject,
       participantCount: g.participants?.length ?? 0,
     }));
+  }
+
+  /**
+   * Grupos de esta línea en los que participa una persona (por `phone_key`).
+   * Se resuelve con una sola llamada a los grupos participantes y comparando
+   * el JID de teléfono o el LID de cada miembro.
+   */
+  async groupsForPhone(phoneKey: string): Promise<Array<{ id: string; name: string; participantCount: number }>> {
+    if (!this.sock) return [];
+    const key = phoneKeyOf(phoneKey);
+    if (!key) return [];
+    const all = await this.sock.groupFetchAllParticipating();
+    const found: Array<{ id: string; name: string; participantCount: number }> = [];
+    for (const group of Object.values(all ?? {}) as any[]) {
+      const participants = (group?.participants ?? []) as any[];
+      const member = participants.some((p) => {
+        const { pnJid, lid } = this.participantPair(p);
+        const keys = [phoneKeyOf(pnJid), phoneKeyOf(lid)];
+        if (lid) keys.push(phoneKeyOf(phoneForLid(lid)));
+        return keys.includes(key);
+      });
+      if (!member) continue;
+      found.push({
+        id: String(group.id),
+        name: group.subject || String(group.id),
+        participantCount: participants.length,
+      });
+    }
+    return found.sort((a, b) => a.name.localeCompare(b.name, 'es'));
   }
 
   async groupJoinInfo(code: string): Promise<{ id: string; name: string }> {

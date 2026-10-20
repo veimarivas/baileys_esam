@@ -513,6 +513,64 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
     }),
   );
 
+  // Grupos de una persona en las líneas del usuario (solapa «Grupos» de la ficha).
+  // Se consulta solo al abrir la solapa: recorrer los grupos de todas las líneas
+  // puede tardar y no debe frenar la carga de la conversación.
+  app.get(
+    '/inbox/:session/:chat/groups',
+    ...auth,
+    ah(async (req, res) => {
+      const resolved = resolveAuthorized(req, res, String(req.params.session), String(req.params.chat));
+      if (!resolved) return;
+      if (resolved.chatId.endsWith('@g.us')) return res.json({ groups: [] });
+      const contact = getOrCreateContact(resolved.session.id, resolved.chatId);
+      const key = contact.phone_key ?? phoneKeyOf(resolved.chatId);
+      if (!key) return res.json({ groups: [] });
+
+      const scope = sessionScopeFor(req.user!);
+      const sessions = all<{ id: string; name: string; phone: string | null }>(
+        'SELECT id, name, phone FROM sessions',
+      )
+        .filter((s) => scope === null || scope.includes(s.id))
+        // La línea del chat abierto primero: si el grupo está en varias, se
+        // muestra esa y no se duplica.
+        .sort((a, b) => Number(b.id === resolved.session.id) - Number(a.id === resolved.session.id));
+
+      const groups: Array<{
+        id: string;
+        chat_id: string;
+        name: string;
+        participant_count: number;
+        session_id: string;
+        session_name: string | null;
+        session_phone: string | null;
+      }> = [];
+      const seen = new Set<string>();
+      for (const line of sessions) {
+        try {
+          const found = await manager.groupsForPhone(line.id, key);
+          for (const g of found) {
+            if (seen.has(g.id)) continue;
+            seen.add(g.id);
+            groups.push({
+              id: g.id,
+              chat_id: g.id,
+              name: g.name,
+              participant_count: g.participantCount,
+              session_id: line.id,
+              session_name: line.name,
+              session_phone: line.phone,
+            });
+          }
+        } catch {
+          // Línea desconectada o sin grupos: se sigue con las demás.
+        }
+      }
+      groups.sort((a, b) => a.name.localeCompare(b.name, 'es'));
+      res.json({ groups });
+    }),
+  );
+
   app.post(
     '/inbox/:session/:chat/avatar',
     ...auth,

@@ -271,6 +271,10 @@ export class SessionManager implements OutboundSender {
     return (await this.instance(sessionId)).groupParticipants(chatId);
   }
 
+  async groupsForPhone(sessionId: string, phoneKey: string) {
+    return (await this.instance(sessionId)).groupsForPhone(phoneKey);
+  }
+
   async groupJoinInfo(sessionId: string, code: string) {
     return (await this.instance(sessionId)).groupJoinInfo(code);
   }

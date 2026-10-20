@@ -20,6 +20,13 @@ import { logger, baileysLogger } from '../logger.js';
 import { delay, randInt } from '../util/async.js';
 import { phoneFromJid, typeForMime } from '../core/phone.js';
 import { rememberLid, resolveChatId, phoneForLid } from '../core/lid.js';
+import {
+  contactMeta,
+  contactsArrayMeta,
+  contactPreview,
+  metaJson,
+  pollMeta,
+} from '../core/message-meta.js';
 import { applySignalPatch } from './signal-patch.js';
 
 applySignalPatch();
@@ -124,6 +131,8 @@ export interface InboundMessage {
   pushName: string | null;
   type: string;
   body: string | null;
+  /** JSON con contactos, encuestas u otros datos especiales. */
+  meta?: string | null;
   timestamp: number;
   mediaMime: string | null;
   mediaBuffer: Buffer | null;
@@ -301,7 +310,15 @@ function unwrapMessage(message: any): any {
   return message;
 }
 
-function describe(message: any): { type: string; body: string | null; mime: string | null; filename: string | null; seconds: number | null } {
+function describe(message: any): {
+  type: string;
+  body: string | null;
+  mime: string | null;
+  filename: string | null;
+  seconds: number | null;
+  /** JSON de contactos/encuestas para `messages.content_meta`. */
+  meta?: string | null;
+} {
   const m = unwrapMessage(message);
   if (m.conversation) return { type: 'text', body: m.conversation, mime: null, filename: null, seconds: null };
   if (m.extendedTextMessage) return { type: 'text', body: m.extendedTextMessage.text ?? null, mime: null, filename: null, seconds: null };
@@ -326,7 +343,50 @@ function describe(message: any): { type: string; body: string | null; mime: stri
   }
   if (m.stickerMessage) return { type: 'sticker', body: null, mime: m.stickerMessage.mimetype ?? 'image/webp', filename: null, seconds: null };
   if (m.locationMessage) return { type: 'location', body: null, mime: null, filename: null, seconds: null };
-  if (m.contactMessage) return { type: 'contact', body: m.contactMessage.displayName ?? null, mime: null, filename: null, seconds: null };
+  if (m.contactMessage) {
+    const meta = contactMeta(m.contactMessage.displayName, m.contactMessage.vcard);
+    return {
+      type: 'contact',
+      body: contactPreview(meta),
+      mime: null,
+      filename: null,
+      seconds: null,
+      meta: metaJson(meta),
+    };
+  }
+  if (m.contactsArrayMessage) {
+    const meta = contactsArrayMeta(m.contactsArrayMessage.contacts);
+    return {
+      type: 'contact',
+      body: contactPreview(meta),
+      mime: null,
+      filename: null,
+      seconds: null,
+      meta: metaJson(meta),
+    };
+  }
+  // Encuestas: WhatsApp usa versiones distintas según selección única/múltiple
+  // (V2/V3) y versión de la app. V4 llega envuelta en un FutureProofMessage.
+  if (m.pollCreationMessageV4?.message) {
+    const nested = describe(m.pollCreationMessageV4.message);
+    if (nested.type === 'poll') return nested;
+  }
+  const poll =
+    m.pollCreationMessage ??
+    m.pollCreationMessageV2 ??
+    m.pollCreationMessageV3 ??
+    m.pollCreationMessageV5;
+  if (poll) {
+    const meta = pollMeta(poll.name, poll.options, poll.selectableOptionsCount);
+    return {
+      type: 'poll',
+      body: meta.question,
+      mime: null,
+      filename: null,
+      seconds: null,
+      meta: metaJson(meta),
+    };
+  }
   if (m.reactionMessage) return { type: 'reaction', body: m.reactionMessage.text ?? null, mime: null, filename: null, seconds: null };
   if (m.protocolMessage) return { type: 'protocol', body: null, mime: null, filename: null, seconds: null };
   return { type: 'unknown', body: null, mime: null, filename: null, seconds: null };
@@ -911,6 +971,7 @@ export class WaSession extends EventEmitter {
       pushName: raw.pushName ?? null,
       type: desc.type,
       body: desc.body,
+      meta: desc.meta ?? null,
       timestamp: Number(raw.messageTimestamp ?? Math.floor(Date.now() / 1000)),
       mediaMime: desc.mime,
       mediaBuffer,
@@ -1060,6 +1121,30 @@ export class WaSession extends EventEmitter {
     quoted?: QuotedRef | null,
   ): Promise<{ messageId?: string; timestamp?: number }> {
     return this.doSend(chatId, { text: text.slice(0, 4096) }, quoted);
+  }
+
+  /**
+   * Envía una encuesta. `selectableCount` 1 = una respuesta; 0 = varias, que es
+   * la convención que usa WhatsApp/Baileys para las encuestas de opción múltiple.
+   */
+  async sendPoll(
+    chatId: string,
+    question: string,
+    options: string[],
+    selectableCount: number,
+    quoted?: QuotedRef | null,
+  ): Promise<{ messageId?: string; timestamp?: number }> {
+    return this.doSend(
+      chatId,
+      {
+        poll: {
+          name: question.slice(0, 255),
+          values: options.slice(0, 12).map((option) => option.slice(0, 100)),
+          selectableCount: selectableCount === 1 ? 1 : 0,
+        },
+      },
+      quoted,
+    );
   }
 
   async sendMedia(

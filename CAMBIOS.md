@@ -1747,6 +1747,27 @@ Se distingue **cuándo alguien ingresó** de **cuándo trabajó por última vez*
 
 ---
 
+## 49. Contactos, mensajes fijados y encuestas en Conversaciones (2026-10-19)
+
+Tres mejoras del inbox para acercarlo a WhatsApp. La interfaz y los textos siguen en español.
+
+- **Contactos compartidos (`src/baileys/session.ts`, `src/core/message-meta.ts`, `public/app.js`):**
+  - los mensajes `contactMessage` y `contactsArrayMessage` ahora guardan en `messages.content_meta` el nombre y el teléfono extraídos del vCard (`waid` o `TEL`);
+  - se dibujan como tarjetas con avatar, nombre, número y botón **Abrir chat**; al tocar la tarjeta se abre la conversación existente o se inicia una nueva en la misma línea;
+  - los mensajes viejos que solo tenían el nombre se siguen viendo como tarjeta, pero sin número (no se puede recuperar el teléfono que no se guardó); si WhatsApp vuelve a entregar el mensaje al re-sincronizar el historial, se completan sus metadatos.
+- **Mensajes fijados (API y panel):**
+  - columnas `messages.pinned_at` y `messages.pinned_by`, con migración idempotente e índice por conversación;
+  - se pueden fijar hasta **3 mensajes por chat** (el mismo límite de WhatsApp), con acción de pin en cada burbuja y aviso desplegable arriba del hilo;
+  - el aviso muestra quién fijó, la vista previa y permite ir al mensaje o desfijarlo; se actualiza por SSE para todo el equipo;
+  - es un fijado **interno del panel**: no se sincroniza con el teléfono del cliente porque Baileys no expone una API estable para eso.
+- **Encuestas:**
+  - botón **Crear encuesta** en el compositor: pregunta, entre 2 y 12 opciones, una o varias respuestas y envío con cita si se estaba respondiendo;
+  - se muestra la encuesta con el diseño de WhatsApp (pregunta, opciones y modo de respuesta), tanto las enviadas como las recibidas;
+  - el alcance implementado es crear, enviar y ver. Los votos y resultados se consultan en WhatsApp; el panel no los procesa.
+- **Pruebas:** `test/message-meta.test.ts` cubre vCards (waid, TEL, N, líneas plegadas) y encuestas; `test/message-pins.test.ts` cubre el límite de 3, el desfijado y el aislamiento por chat/línea. `npm run typecheck`, `npm test` (106/106), `npm run build` y `npm run check:assets` limpios.
+
+---
+
 ## Notas de operación
 
 - En producción usar `start-baileys.bat` / pm2 / systemd (no `npm run dev`).

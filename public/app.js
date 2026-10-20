@@ -825,10 +825,89 @@
       // Adjunto sin archivo ni forma de recuperarlo (mensajes antiguos).
       frag.appendChild(mediaUnavailable(msg, type));
       if (msg.body && type !== 'sticker') frag.appendChild(paragraph(msg.body, ctx));
+    } else if (type === 'contact') {
+      frag.appendChild(buildContactCards(msg, ctx));
+    } else if (type === 'poll') {
+      frag.appendChild(buildPollCard(msg));
     } else {
       frag.appendChild(paragraph(msg.body != null ? msg.body : '[' + type + ']', ctx));
     }
     return frag;
+  }
+
+  /* ── Tarjetas de contacto compartido (una o varias) ── */
+  function contactCardList(msg) {
+    var meta = msg.meta || {};
+    var list = Array.isArray(meta.contacts) ? meta.contacts : [];
+    if (!list.length) list = [{ name: msg.body || 'Contacto', phone: null }];
+    return list;
+  }
+
+  function contactJid(phone) {
+    var digits = String(phone || '').replace(/\D+/g, '');
+    return digits ? digits + '@s.whatsapp.net' : '';
+  }
+
+  function buildContactCards(msg, ctx) {
+    var wrap = document.createElement('div');
+    wrap.className = 'wa-contact-list';
+    contactCardList(msg).forEach(function (contact) {
+      var phone = contact.phone ? String(contact.phone).replace(/\D+/g, '') : '';
+      var name = contact.name || (phone ? fmtPhone(phone) : 'Contacto');
+      var card = document.createElement('div');
+      card.className = 'wa-contact-card' + (phone ? ' is-clickable' : '');
+      card.innerHTML = '<span class="wa-contact-avatar">' + avatarHtml(name, 'avatar-sm') + '</span>' +
+        '<span class="wa-contact-info">' +
+          '<span class="wa-contact-name">' + escapeHtml(name) + '</span>' +
+          (phone
+            ? '<span class="wa-contact-phone"><span class="ri-whatsapp-line" aria-hidden="true"></span> ' + escapeHtml(fmtPhone(phone)) + '</span>'
+            : '<span class="wa-contact-phone is-missing">Número no disponible</span>') +
+        '</span>' +
+        (phone
+          ? '<button type="button" class="wa-contact-open" title="Abrir conversación con ' + escapeHtml(name) + '">' +
+              '<span class="ri-chat-3-line" aria-hidden="true"></span><span>Abrir chat</span>' +
+            '</button>'
+          : '');
+      if (phone) {
+        var jid = contactJid(phone);
+        card.addEventListener('click', function (ev) {
+          if (ev.target.closest && ev.target.closest('button')) return;
+          ctx.onOpenContact(jid, name);
+        });
+        card.querySelector('.wa-contact-open').addEventListener('click', function (ev) {
+          ev.stopPropagation();
+          ctx.onOpenContact(jid, name);
+        });
+      }
+      wrap.appendChild(card);
+    });
+    return wrap;
+  }
+
+  /* ── Encuestas: pregunta, opciones y modo de respuesta ── */
+  function buildPollCard(msg) {
+    var meta = msg.meta || {};
+    var question = meta.question || msg.body || 'Encuesta';
+    var options = Array.isArray(meta.options) ? meta.options : [];
+    var selectable = Number(meta.selectable_count);
+    var single = !Number.isFinite(selectable) || selectable === 1;
+    var card = document.createElement('div');
+    card.className = 'wa-poll' + (single ? ' is-single' : ' is-multiple');
+    var optionsHtml = options.map(function (option) {
+      return '<div class="wa-poll-option">' +
+        '<span class="wa-poll-mark" aria-hidden="true"></span>' +
+        '<span class="wa-poll-option-name">' + escapeHtml(option) + '</span>' +
+      '</div>';
+    }).join('');
+    card.innerHTML = '<div class="wa-poll-head"><span class="ri-bar-chart-horizontal-line" aria-hidden="true"></span> Encuesta</div>' +
+      '<div class="wa-poll-question">' + escapeHtml(question) + '</div>' +
+      (optionsHtml ? '<div class="wa-poll-options">' + optionsHtml + '</div>' : '') +
+      '<div class="wa-poll-foot">' +
+        '<span class="' + (single ? 'ri-checkbox-circle-line' : 'ri-checkbox-multiple-line') + '" aria-hidden="true"></span>' +
+        '<span>' + (single ? 'Una respuesta' : 'Varias respuestas') + '</span>' +
+        '<span class="wa-poll-note">Los votos se ven en WhatsApp</span>' +
+      '</div>';
+    return card;
   }
 
   /* ── PDF con vista previa (primera página, como las imágenes) ── */
@@ -1006,11 +1085,15 @@
           ? '<button type="button" class="act-note" title="Guardar como nota o tarea">' +
               '<svg class="w-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h4M7 3h10a2 2 0 012 2v14l-4-3H7a2 2 0 01-2-2V5a2 2 0 012-2z"/></svg>' +
             '</button>'
-          : '');
+          : '') +
+        '<button type="button" class="act-pin' + (msg.pinned_at ? ' is-pinned' : '') + '" title="' + (msg.pinned_at ? 'Desfijar mensaje' : 'Fijar mensaje') + '">' +
+          '<svg class="w-icon" viewBox="0 0 24 24" fill="' + (msg.pinned_at ? 'currentColor' : 'none') + '" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 17v5M9 3h6l-1 6 3 3v2H7v-2l3-3-1-6z"/></svg>' +
+        '</button>';
       box.querySelector('.act-reply').addEventListener('click', function () { ctx.onReply(msg); });
       box.querySelector('.act-speak').addEventListener('click', function () { ctx.onSpeak(msg); });
       var noteBtn = box.querySelector('.act-note');
       if (noteBtn) noteBtn.addEventListener('click', function () { ctx.onNote(msg); });
+      box.querySelector('.act-pin').addEventListener('click', function () { ctx.onPin(msg); });
       var reactBtn = box.querySelector('.act-react');
       reactBtn.addEventListener('click', function (ev) {
         ev.stopPropagation();
@@ -2339,6 +2422,7 @@
       tab: 'individual',
       quickReplies: [],
       replyTo: null,
+      pinned: [],
       messages: [],
       messagesAfter: 0,
       oldest: null,
@@ -2636,6 +2720,7 @@
       // Desde «Equipo» se queda en esa pestaña para seguir eligiendo compañeros.
       state.tab = /@g\.us$/.test(chatId) ? 'group' : (state.tab === 'team' ? 'team' : 'individual');
       state.replyTo = null;
+      state.pinned = [];
       state.messages = [];
       state.messagesAfter = 0;
       state.oldest = null;
@@ -2685,6 +2770,18 @@
       return api(url).then(function (data) {
         if (token !== state.chatToken) return; // se cambió de chat: respuesta obsoleta
         var msgs = data.messages || [];
+        if (Array.isArray(data.pinned)) {
+          state.pinned = data.pinned;
+          var pinnedById = {};
+          data.pinned.forEach(function (p) { pinnedById[p.id] = p; });
+          state.messages.forEach(function (m) {
+            var p = pinnedById[m.id];
+            m.pinned_at = p ? p.pinned_at : null;
+            m.pinned_by_name = p ? p.pinned_by_name : null;
+          });
+          renderPinned();
+          syncPinButtons();
+        }
         if (reset) {
           // El backend puede resolver el chat a otro id (@s.whatsapp.net -> @c.us):
           // se adopta el id real para que enviar/refrescar apunten al mismo chat.
@@ -2851,7 +2948,7 @@
       chatName: function () { var c = selectedConversation(); return c ? convoName(c) : ''; },
       onReply: function (msg) { state.replyTo = msg; renderPane(); focusComposer(); },
       onGoto: function (id) { goToMessage(id); },
-      onOpenContact: function (chatId) { if (chatId) openContactChat(chatId); },
+      onOpenContact: function (chatId, name) { if (chatId) openContactChat(chatId, name); },
       onReact: function (msg, emoji) {
         jsonApi('/inbox/' + encodeURIComponent(state.selectedSession) + '/' + encodeURIComponent(state.selectedChat) + '/reaction', 'POST', { message_id: msg.id, emoji: emoji })
           .then(function () { reloadStream(); })
@@ -2862,6 +2959,7 @@
         if (text) speakText(text);
       },
       onNote: function (msg) { noteFromMessage(msg); },
+      onPin: function (msg) { togglePin(msg); },
     };
 
     // Avisos de mensaje nuevo: se silencian si el chat ya está abierto a la
@@ -2916,6 +3014,113 @@
     function isCompact() { return window.matchMedia('(max-width: 1199.98px)').matches; }
     function isMobile() { return window.matchMedia('(max-width: 991.98px)').matches; }
 
+    // Texto breve de un mensaje para la barra de fijados.
+    function pinnedPreview(msg) {
+      if (!msg) return '';
+      var type = msg.content_type || 'text';
+      if (type === 'text') return msg.body || '';
+      if (type === 'poll') return 'Encuesta: ' + ((msg.meta && msg.meta.question) || msg.body || '');
+      if (type === 'contact') {
+        var contacts = (msg.meta && msg.meta.contacts) || [];
+        var first = contacts[0] || {};
+        return 'Contacto: ' + (first.name || first.phone || msg.body || '');
+      }
+      var labels = { image: 'Imagen', video: 'Video', audio: 'Audio', document: 'Documento', sticker: 'Sticker' };
+      return labels[type] ? '[' + labels[type] + ']' : '[' + type + ']';
+    }
+
+    function pinnedWho(msg) {
+      if (!msg) return '';
+      // El aviso es interno: interesa quién lo fijó, no quién escribió el mensaje.
+      return msg.pinned_by_name || 'Equipo';
+    }
+
+    // Aviso de mensajes fijados arriba del hilo, con lista desplegable.
+    function renderPinned() {
+      var host = els.pane.querySelector('#chat-pinned');
+      if (!host) return;
+      if (!state.pinned || !state.pinned.length) {
+        host.innerHTML = '';
+        return;
+      }
+      var latest = state.pinned[0];
+      var count = state.pinned.length;
+      var bar = document.createElement('div');
+      bar.className = 'pinned-bar';
+      bar.innerHTML = '<button type="button" class="pinned-summary" aria-expanded="false" title="Ver mensajes fijados">' +
+          '<span class="pinned-ic ri-pushpin-2-fill" aria-hidden="true"></span>' +
+          '<span class="pinned-summary-text">' +
+            '<span class="pinned-title">' + count + ' mensaje' + (count === 1 ? '' : 's') + ' fijado' + (count === 1 ? '' : 's') + '</span>' +
+            '<span class="pinned-preview">' + escapeHtml(pinnedPreview(latest)) + '</span>' +
+          '</span>' +
+          '<span class="pinned-chevron ri-arrow-down-s-line" aria-hidden="true"></span>' +
+        '</button>' +
+        '<div class="pinned-list"></div>';
+      var list = bar.querySelector('.pinned-list');
+      state.pinned.forEach(function (msg) {
+        var item = document.createElement('div');
+        item.className = 'pinned-item';
+        item.innerHTML = '<button type="button" class="pinned-jump" title="Ir al mensaje fijado">' +
+            '<span class="pinned-item-top">Fijado por ' + escapeHtml(pinnedWho(msg)) +
+              '<span class="pinned-item-time">' + fmtTime(msg.pinned_at || msg.occurred_at) + '</span>' +
+            '</span>' +
+            '<span class="pinned-item-body">' + escapeHtml(pinnedPreview(msg)) + '</span>' +
+          '</button>' +
+          '<button type="button" class="pinned-unpin" title="Desfijar mensaje" aria-label="Desfijar mensaje">' +
+            '<span class="ri-unpin-line" aria-hidden="true"></span>' +
+          '</button>';
+        item.querySelector('.pinned-jump').addEventListener('click', function () { goToMessage(msg.id); });
+        item.querySelector('.pinned-unpin').addEventListener('click', function () { togglePin(msg, true); });
+        list.appendChild(item);
+      });
+      var summary = bar.querySelector('.pinned-summary');
+      summary.addEventListener('click', function () {
+        var open = bar.classList.toggle('open');
+        summary.setAttribute('aria-expanded', open ? 'true' : 'false');
+      });
+      host.innerHTML = '';
+      host.appendChild(bar);
+    }
+
+    // Refresca el icono de pin de las burbujas ya dibujadas (por ejemplo, si
+    // otro agente fijó o desfijó el mensaje y llegó el aviso por SSE).
+    function syncPinButtons() {
+      state.messages.forEach(function (m) {
+        var btn = els.pane.querySelector('.bubble-row[data-id="' + m.id + '"] .act-pin');
+        if (!btn) return;
+        var pinned = !!m.pinned_at;
+        btn.classList.toggle('is-pinned', pinned);
+        btn.title = pinned ? 'Desfijar mensaje' : 'Fijar mensaje';
+        var path = btn.querySelector('path');
+        if (path) path.setAttribute('fill', pinned ? 'currentColor' : 'none');
+      });
+    }
+
+    function togglePin(msg, forceUnpin) {
+      if (!msg) return;
+      var pinned = forceUnpin ? false : !msg.pinned_at;
+      var url = '/inbox/' + encodeURIComponent(state.selectedSession) + '/' + encodeURIComponent(state.selectedChat) +
+        '/messages/' + msg.id + '/pin';
+      jsonApi(url, 'PATCH', { pinned: pinned })
+        .then(function (data) {
+          var at = pinned ? new Date().toISOString() : null;
+          msg.pinned_at = at;
+          state.messages.forEach(function (m) { if (m.id === msg.id) m.pinned_at = at; });
+          state.pinned = data.pinned || [];
+          renderPinned();
+          var row = els.pane.querySelector('.bubble-row[data-id="' + msg.id + '"]');
+          var btn = row && row.querySelector('.act-pin');
+          if (btn) {
+            btn.classList.toggle('is-pinned', pinned);
+            btn.title = pinned ? 'Desfijar mensaje' : 'Fijar mensaje';
+            var path = btn.querySelector('path');
+            if (path) path.setAttribute('fill', pinned ? 'currentColor' : 'none');
+          }
+          toast(pinned ? 'Mensaje fijado' : 'Mensaje desfijado');
+        })
+        .catch(function (e) { toast(e.message, true); });
+    }
+
     function renderPane() {
       var c = selectedConversation();
       if (!c) {
@@ -2923,12 +3128,13 @@
         root.classList.add('contact-hidden'); root.classList.remove('has-chat');
         return;
       }
-      els.pane.innerHTML = chatHeaderHtml(c) + '<div id="chat-notes-banner"></div><div class="chat-body"></div>' + composerHtml(c);
+      els.pane.innerHTML = chatHeaderHtml(c) + '<div id="chat-pinned"></div><div id="chat-notes-banner"></div><div class="chat-body"></div>' + composerHtml(c);
       els.contact.classList.remove('d-none');
       root.classList.add('has-chat');
       // En pantallas grandes la ficha se ve al costado; en las chicas se abre a pedido.
       root.classList.toggle('contact-hidden', isCompact());
       bindPane(c);
+      renderPinned();
       renderNotesBanner();
       // La ficha se redibuja entera: si no, conservaba la cabecera del chat anterior.
       renderContact();
@@ -2983,6 +3189,7 @@
           '<input type="file" id="attach-input" hidden accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt" />' +
           '<span id="recorder-slot"></span>' +
           '<button type="button" class="btn btn-icon btn-soft-secondary" id="btn-quick" title="Plantillas rápidas"><span class="ri-flashlight-line fs-5"></span></button>' +
+          '<button type="button" class="btn btn-icon btn-soft-secondary" id="btn-poll" title="Crear encuesta"><span class="ri-bar-chart-horizontal-line fs-5"></span></button>' +
           '<div class="composer-field">' +
             '<textarea class="composer-input" id="composer-input" rows="1" placeholder="Escribí un mensaje…"></textarea>' +
             '<div id="emoji-list" class="emoji-pop2 d-none"></div>' +
@@ -3033,6 +3240,9 @@
       var quickBtn = els.pane.querySelector('#btn-quick');
       var quickList = els.pane.querySelector('#quick-list');
       quickBtn.addEventListener('click', function () { renderQuickList(quickList, input); quickList.classList.toggle('d-none'); });
+
+      // Encuestas
+      els.pane.querySelector('#btn-poll').addEventListener('click', openPollDialog);
 
       // Emojis
       var emojiBtn = els.pane.querySelector('#btn-emoji');
@@ -3107,6 +3317,128 @@
         })
         .catch(function (e) { toast(e.message, true); })
         .finally(function () { state.sending = false; input.focus(); });
+    }
+
+    // Diálogo para crear una encuesta con pregunta, opciones y modo de respuesta.
+    function openPollDialog() {
+      var wrap = document.createElement('div');
+      wrap.className = 'pl-dialog-backdrop';
+      wrap.innerHTML = '<div class="pl-dialog poll-dialog" role="dialog" aria-modal="true" aria-labelledby="poll-dlg-title">' +
+        '<h6 id="poll-dlg-title"><span class="ri-bar-chart-horizontal-line"></span> Crear encuesta</h6>' +
+        '<p class="pl-dialog-sub">Preguntá algo y agregá hasta 12 opciones.</p>' +
+        '<label class="poll-label" for="poll-question">Pregunta</label>' +
+        '<input id="poll-question" class="form-control poll-question" maxlength="255" placeholder="¿Qué querés preguntar?">' +
+        '<label class="poll-label">Opciones</label>' +
+        '<div class="poll-options"></div>' +
+        '<button type="button" class="poll-add"><span class="ri-add-line" aria-hidden="true"></span> Agregar opción</button>' +
+        '<div class="poll-mode" role="radiogroup" aria-label="Tipo de respuesta">' +
+          '<label><input type="radio" name="poll-mode" value="1" checked><span>Una respuesta</span></label>' +
+          '<label><input type="radio" name="poll-mode" value="0"><span>Varias respuestas</span></label>' +
+        '</div>' +
+        '<div class="pl-dialog-actions">' +
+          '<button type="button" class="btn btn-light btn-sm" data-act="cancel">Cancelar</button>' +
+          '<button type="button" class="btn btn-primary btn-sm" data-act="ok">Enviar encuesta</button>' +
+        '</div></div>';
+      document.body.appendChild(wrap);
+      var optionsBox = wrap.querySelector('.poll-options');
+      var question = wrap.querySelector('#poll-question');
+      var addButton = wrap.querySelector('.poll-add');
+      var okButton = wrap.querySelector('[data-act="ok"]');
+
+      function renumber() {
+        Array.prototype.forEach.call(optionsBox.querySelectorAll('.poll-option-row'), function (row, index) {
+          var n = row.querySelector('.poll-option-n');
+          if (n) n.textContent = String(index + 1);
+          var input = row.querySelector('.poll-option');
+          if (input && !input.value) input.placeholder = 'Opción ' + (index + 1);
+          var del = row.querySelector('.poll-option-del');
+          if (del) del.disabled = optionsBox.children.length <= 2;
+        });
+      }
+
+      function addRow(value) {
+        if (optionsBox.children.length >= 12) {
+          toast('Podés agregar hasta 12 opciones.', true);
+          return;
+        }
+        var row = document.createElement('div');
+        row.className = 'poll-option-row';
+        row.innerHTML = '<span class="poll-option-n"></span>' +
+          '<input class="form-control poll-option" maxlength="100" placeholder="Opción ' + (optionsBox.children.length + 1) + '">' +
+          '<button type="button" class="poll-option-del" title="Quitar opción" aria-label="Quitar opción"><span class="ri-close-line"></span></button>';
+        var input = row.querySelector('input');
+        if (value) input.value = value;
+        row.querySelector('.poll-option-del').addEventListener('click', function () {
+          if (optionsBox.children.length <= 2) return;
+          row.remove();
+          renumber();
+        });
+        input.addEventListener('keydown', function (ev) {
+          if (ev.key === 'Enter') {
+            ev.preventDefault();
+            addRow();
+          }
+        });
+        optionsBox.appendChild(row);
+        renumber();
+        if (!value) input.focus();
+      }
+
+      addRow();
+      addRow();
+      question.focus();
+      addButton.addEventListener('click', function () { addRow(); });
+
+      var close = function () {
+        document.removeEventListener('keydown', onKey);
+        wrap.remove();
+      };
+      var onKey = function (ev) {
+        if (ev.key === 'Escape') close();
+      };
+      document.addEventListener('keydown', onKey);
+      wrap.addEventListener('click', function (ev) { if (ev.target === wrap) close(); });
+      wrap.querySelector('[data-act="cancel"]').addEventListener('click', close);
+
+      okButton.addEventListener('click', function () {
+        var text = question.value.trim();
+        var options = Array.prototype.map.call(optionsBox.querySelectorAll('.poll-option'), function (input) {
+          return input.value.trim();
+        }).filter(Boolean);
+        if (!text) {
+          question.focus();
+          toast('Escribí la pregunta de la encuesta.', true);
+          return;
+        }
+        if (options.length < 2) {
+          toast('Agregá al menos dos opciones.', true);
+          return;
+        }
+        var normalized = options.map(function (option) { return option.toLocaleLowerCase(); });
+        if (new Set(normalized).size !== normalized.length) {
+          toast('Las opciones no pueden repetirse.', true);
+          return;
+        }
+        var mode = wrap.querySelector('input[name="poll-mode"]:checked');
+        okButton.disabled = true;
+        jsonApi('/inbox/' + encodeURIComponent(state.selectedSession) + '/' + encodeURIComponent(state.selectedChat) + '/poll', 'POST', {
+          question: text,
+          options: options,
+          selectable_count: mode && mode.value === '1' ? 1 : 0,
+          reply_to_wa_id: state.replyTo ? state.replyTo.wa_message_id : null,
+        }).then(function () {
+          close();
+          state.replyTo = null;
+          var preview = els.pane.querySelector('.reply-preview');
+          if (preview) preview.remove();
+          reloadStream();
+          loadConversations();
+          toast('Encuesta enviada');
+        }).catch(function (e) {
+          okButton.disabled = false;
+          toast(e.message, true);
+        });
+      });
     }
 
     function sendFile(file, isVoice) {

@@ -87,6 +87,11 @@ export interface MessageRow {
   direction: string;
   content_type: string;
   body: string | null;
+  /** JSON con datos de contactos, encuestas u otros mensajes especiales. */
+  content_meta: string | null;
+  /** Fijado interno del panel (no se sincroniza con WhatsApp). */
+  pinned_at: string | null;
+  pinned_by: number | null;
   media_mime: string | null;
   media_path: string | null;
   media_filename: string | null;

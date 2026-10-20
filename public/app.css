@@ -4676,3 +4676,148 @@ html[data-bs-theme="dark"] .batch-who { background: rgba(255, 255, 255, 0.05); }
 @media (max-width: 1199.98px) { .notes-page.board-mode .np-board { grid-template-columns: repeat(4, minmax(250px, 300px)); } }
 .np-board { scroll-snap-type: x proximity; }
 .np-board .pl-col { scroll-snap-align: start; }
+
+/* -- Mensajes fijados (aviso interno del equipo) -- */
+#chat-pinned { flex-shrink: 0; }
+.pinned-bar { background: var(--ib-surface); border-bottom: 1px solid var(--ib-line); }
+.pinned-summary {
+  width: 100%; display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.45rem 1rem; border: 0; background: transparent;
+  text-align: left; cursor: pointer;
+}
+.pinned-ic { color: var(--ib-brand); font-size: 1rem; flex-shrink: 0; }
+.pinned-summary-text { min-width: 0; flex: 1; display: flex; align-items: baseline; gap: 0.55rem; }
+.pinned-title {
+  font-size: 0.64rem; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 0.055em; color: var(--ib-brand); white-space: nowrap;
+}
+.pinned-preview { min-width: 0; font-size: 0.75rem; color: var(--ib-ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pinned-chevron { color: var(--ib-ink-mute); flex-shrink: 0; transition: transform 0.15s ease; }
+.pinned-bar.open .pinned-chevron { transform: rotate(180deg); }
+.pinned-list { display: none; padding: 0 0.65rem 0.45rem; }
+.pinned-bar.open .pinned-list { display: block; }
+.pinned-item { display: flex; align-items: stretch; gap: 0.25rem; border-top: 1px solid var(--ib-line); }
+.pinned-jump {
+  flex: 1; min-width: 0; border: 0; background: transparent; text-align: left;
+  padding: 0.42rem 0.35rem; cursor: pointer; border-radius: 8px;
+}
+.pinned-jump:hover { background: var(--ib-brand-soft); }
+.pinned-item-top { display: flex; align-items: center; gap: 0.4rem; font-size: 0.62rem; color: var(--ib-ink-mute); }
+.pinned-item-time { margin-left: auto; flex-shrink: 0; }
+.pinned-item-body { display: block; font-size: 0.76rem; color: var(--ib-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pinned-unpin {
+  flex-shrink: 0; border: 0; background: transparent; color: var(--ib-ink-mute);
+  cursor: pointer; padding: 0 0.35rem; border-radius: 8px;
+}
+.pinned-unpin:hover { color: #dc3545; background: rgba(220, 53, 69, 0.08); }
+html[data-bs-theme="dark"] .pinned-bar { background: #111a26; }
+.bubble-actions .act-pin.is-pinned { color: var(--ib-brand); }
+
+/* -- Tarjetas de contacto compartido -- */
+.wa-contact-list { display: flex; flex-direction: column; gap: 0.4rem; min-width: 230px; max-width: 100%; }
+.wa-contact-card {
+  display: flex; align-items: center; gap: 0.55rem; min-width: 0;
+  padding: 0.5rem; border: 1px solid var(--ib-line); border-radius: 12px;
+  background: var(--ib-surface); color: var(--ib-ink);
+}
+.wa-contact-card.is-clickable { cursor: pointer; }
+.wa-contact-card.is-clickable:hover { border-color: var(--ib-brand); box-shadow: 0 6px 18px -12px rgba(6, 32, 63, 0.55); }
+.wa-contact-avatar { flex-shrink: 0; display: inline-flex; }
+.wa-contact-info { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.wa-contact-name { font-size: 0.84rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wa-contact-phone { display: flex; align-items: center; gap: 0.25rem; font-size: 0.69rem; color: var(--ib-ink-mute); white-space: nowrap; }
+.wa-contact-phone .ri-whatsapp-line { color: #25d366; }
+.wa-contact-phone.is-missing { font-style: italic; }
+.wa-contact-open {
+  flex-shrink: 0; display: inline-flex; align-items: center; gap: 0.3rem;
+  border: 0; border-radius: 9px; padding: 0.4rem 0.55rem;
+  background: var(--ib-brand-soft); color: var(--ib-brand);
+  font-size: 0.7rem; font-weight: 700; cursor: pointer;
+}
+.wa-contact-open:hover { filter: brightness(0.96); }
+html[data-bs-theme="dark"] .wa-contact-card { background: #16202d; border-color: rgba(120, 190, 220, 0.18); }
+
+/* -- Encuestas -- */
+.wa-poll { min-width: 250px; max-width: 340px; }
+.wa-poll-head {
+  display: flex; align-items: center; gap: 0.3rem;
+  font-size: 0.62rem; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--ib-ink-mute);
+}
+.wa-poll-head .ri-bar-chart-horizontal-line { color: var(--ib-brand); font-size: 0.9rem; }
+.wa-poll-question { margin: 0.22rem 0 0.55rem; font-size: 0.92rem; font-weight: 700; line-height: 1.3; color: var(--ib-ink); }
+.wa-poll-options { display: flex; flex-direction: column; gap: 0.3rem; }
+.wa-poll-option {
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.5rem 0.6rem; border: 1px solid var(--ib-line); border-radius: 10px;
+  background: var(--ib-surface); color: var(--ib-ink); font-size: 0.8rem;
+}
+.wa-poll-mark {
+  flex-shrink: 0; width: 15px; height: 15px; border: 1.5px solid var(--ib-ink-mute);
+  border-radius: 50%; background: transparent;
+}
+.wa-poll.is-multiple .wa-poll-mark { border-radius: 4px; }
+.wa-poll-option-name { min-width: 0; line-height: 1.3; }
+.wa-poll-foot {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 0.3rem;
+  margin-top: 0.55rem; font-size: 0.65rem; color: var(--ib-ink-mute);
+}
+.wa-poll-foot .ri-checkbox-circle-line, .wa-poll-foot .ri-checkbox-multiple-line { color: var(--ib-brand); }
+.wa-poll-note { margin-left: auto; font-style: italic; }
+html[data-bs-theme="dark"] .wa-poll-option { background: #16202d; border-color: rgba(120, 190, 220, 0.18); }
+
+/* Diálogo para crear encuestas */
+.poll-dialog { max-width: 480px; }
+.poll-dialog .poll-label {
+  display: block; margin: 0.7rem 0 0.25rem;
+  font-size: 0.64rem; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 0.055em; color: var(--esam-muted);
+}
+.poll-dialog .form-control {
+  border-radius: 10px; font-size: 0.85rem;
+  background: var(--esam-surface-2); color: var(--esam-ink); border-color: var(--esam-line-strong);
+}
+.poll-dialog .form-control::placeholder { color: var(--esam-muted); }
+.poll-dialog .form-control:focus {
+  background: var(--esam-surface); color: var(--esam-ink);
+  border-color: var(--brand); box-shadow: var(--esam-ring);
+}
+html[data-bs-theme="dark"] .poll-dialog .form-control { border-color: var(--esam-line-strong); }
+html[data-bs-theme="dark"] .poll-dialog .form-control:focus { border-color: var(--brand-400); box-shadow: 0 0 0 3px rgba(79, 179, 214, 0.2); }
+.poll-options { display: flex; flex-direction: column; gap: 0.35rem; }
+.poll-option-row { display: flex; align-items: center; gap: 0.4rem; }
+.poll-option-n { width: 1.2rem; flex-shrink: 0; text-align: center; font-size: 0.7rem; font-weight: 700; color: var(--esam-muted); }
+.poll-option { flex: 1; min-width: 0; }
+.poll-option-del {
+  flex-shrink: 0; width: 28px; height: 28px; border: 0; border-radius: 8px;
+  background: transparent; color: var(--esam-muted); cursor: pointer;
+}
+.poll-option-del:hover:not(:disabled) { color: #dc3545; background: rgba(220, 53, 69, 0.1); }
+.poll-option-del:disabled { opacity: 0.25; cursor: default; }
+.poll-add {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  border: 0; background: transparent; color: var(--brand);
+  font-size: 0.78rem; font-weight: 700; padding: 0.38rem 0; cursor: pointer;
+}
+.poll-add:hover { text-decoration: underline; }
+.poll-mode { display: flex; gap: 0.4rem; margin-top: 0.85rem; }
+.poll-mode label {
+  flex: 1; display: flex; align-items: center; gap: 0.4rem;
+  padding: 0.48rem 0.55rem; border: 1px solid var(--esam-line); border-radius: 10px;
+  background: var(--esam-surface-2); font-size: 0.75rem; cursor: pointer;
+}
+.poll-mode label:has(input:checked) { border-color: var(--brand); background: var(--brand-soft, rgba(4, 84, 116, 0.08)); color: var(--brand); font-weight: 700; }
+.poll-mode input { accent-color: var(--brand); flex-shrink: 0; }
+
+@media (max-width: 575.98px) {
+  .pinned-summary { padding: 0.4rem 0.65rem; }
+  .pinned-summary-text { flex-direction: column; align-items: flex-start; gap: 0.05rem; }
+  .pinned-title { font-size: 0.59rem; }
+  .wa-contact-list { min-width: 0; }
+  .wa-contact-open { width: 34px; height: 34px; padding: 0; justify-content: center; }
+  .wa-contact-open span:last-child { display: none; }
+  .wa-poll { min-width: 0; width: 100%; }
+  .wa-poll-note { width: 100%; margin-left: 0; }
+  .poll-dialog { max-width: 100%; }
+  .poll-mode { flex-direction: column; }
+}

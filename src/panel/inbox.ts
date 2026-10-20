@@ -447,7 +447,12 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       // Los stickers pendientes se bajan en segundo plano (son chicos): al abrir
       // el chat se ven solos, como en WhatsApp.
       manager.prefetchStickers(resolved.session.id, resolved.chatId);
-      res.json({ chatId: resolved.chatId, messages: page.messages, hasMore: page.hasMore });
+      res.json({
+        chatId: resolved.chatId,
+        messages: page.messages,
+        hasMore: page.hasMore,
+        pinned: conversations.listPinned(resolved.session.id, resolved.chatId),
+      });
     }),
   );
 
@@ -594,6 +599,51 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
   );
 
   app.post(
+    '/inbox/:session/:chat/poll',
+    ...auth,
+    ctx.rateLimit(60, 60_000),
+    ah(async (req, res) => {
+      const resolved = resolveAuthorized(req, res, String(req.params.session), String(req.params.chat));
+      if (!resolved) return;
+      const question = String(req.body?.question ?? '').trim();
+      const options: string[] = (Array.isArray(req.body?.options) ? req.body.options : [])
+        .map((option: unknown) => String(option ?? '').trim())
+        .filter((option: string) => !!option);
+      if (!question) return res.status(422).json({ error: 'La encuesta necesita una pregunta.' });
+      if (question.length > 255) {
+        return res.status(422).json({ error: 'La pregunta es demasiado larga (máx. 255 caracteres).' });
+      }
+      if (options.length < 2) {
+        return res.status(422).json({ error: 'La encuesta necesita al menos dos opciones.' });
+      }
+      if (options.length > 12) {
+        return res.status(422).json({ error: 'La encuesta admite hasta 12 opciones.' });
+      }
+      if (options.some((option) => option.length > 100)) {
+        return res.status(422).json({ error: 'Cada opción puede tener hasta 100 caracteres.' });
+      }
+      if (new Set(options.map((option) => option.toLocaleLowerCase())).size !== options.length) {
+        return res.status(422).json({ error: 'Las opciones no pueden repetirse.' });
+      }
+      const selectableCount = Number(req.body?.selectable_count) === 1 ? 1 : 0;
+      const replyTo = req.body?.reply_to_wa_id ? String(req.body.reply_to_wa_id) : null;
+      let result: { messageId?: string };
+      try {
+        result = await manager.sendPoll(
+          resolved.session.id,
+          resolved.chatId,
+          { question, options, selectableCount },
+          null,
+          { quoteWaId: replyTo, senderUid: req.user!.id, human: true },
+        );
+      } catch (err) {
+        return res.status(502).json({ error: (err as Error).message });
+      }
+      res.json({ ok: true, messageId: result.messageId ?? null });
+    }),
+  );
+
+  app.post(
     '/inbox/:session/:chat/media',
     ...auth,
     ctx.rateLimit(60, 60_000),
@@ -728,6 +778,36 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
         messageId,
       });
       res.json({ ok: true, reactions: conversations.reactionsFor(messageId, resolved.session.id) });
+    }),
+  );
+
+  // Fijado interno: un aviso del equipo, no un cambio en WhatsApp.
+  app.patch(
+    '/inbox/:session/:chat/messages/:id/pin',
+    ...auth,
+    ah((req, res) => {
+      const resolved = resolveAuthorized(req, res, String(req.params.session), String(req.params.chat));
+      if (!resolved) return;
+      const messageId = Number(req.params.id ?? 0);
+      if (!Number.isFinite(messageId) || messageId <= 0) {
+        return res.status(422).json({ error: 'Mensaje inválido.' });
+      }
+      const result = conversations.setMessagePinned(
+        resolved.session.id,
+        resolved.chatId,
+        messageId,
+        parseFlag(req.body?.pinned),
+        req.user!.id,
+      );
+      if (!result.ok) return res.status(422).json({ error: result.error });
+      panelBus.publish('conversation', {
+        sessionId: resolved.session.id,
+        chatId: resolved.chatId,
+      });
+      res.json({
+        ok: true,
+        pinned: conversations.listPinned(resolved.session.id, resolved.chatId),
+      });
     }),
   );
 

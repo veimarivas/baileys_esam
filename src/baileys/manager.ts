@@ -18,6 +18,7 @@ import { getPolicy, resetTrust } from '../core/anti-ban.js';
 import { personChatsByKeys, personTagsByKeys, phoneKeyOf, tagPerson } from '../core/person.js';
 import { alertSessionDown } from '../core/notifications.js';
 import { lidForPhone, resolveChatId } from '../core/lid.js';
+import { metaJson, pollMeta } from '../core/message-meta.js';
 import { panelBus } from '../panel/events.js';
 import type { OutboundSender, SessionRow } from '../types.js';
 
@@ -27,6 +28,8 @@ const INLINE_MEDIA_LIMIT = 4 * 1024 * 1024;
 /** Vista previa del último mensaje para la lista del inbox. */
 function messagePreview(body: string | null, contentType: string): string {
   if (contentType === 'text' && body) return body.slice(0, 160);
+  if (contentType === 'poll' && body) return `Encuesta: ${body}`.slice(0, 160);
+  if (contentType === 'contact' && body) return `Contacto: ${body}`.slice(0, 160);
   return `[${contentType}]`;
 }
 
@@ -309,6 +312,57 @@ export class SessionManager implements OutboundSender {
       senderUid: opts.senderUid ?? null,
     });
     panelBus.publish('message', { sessionId, chatId, direction: 'out', body: text, content_type: 'text', occurred_at: nowIso() });
+    return { messageId: result.messageId };
+  }
+
+  async sendPoll(
+    sessionId: string,
+    chatId: string,
+    opts: { question: string; options: string[]; selectableCount: number },
+    contactName?: string | null,
+    sendOpts: SendOptions = {},
+  ) {
+    const quote = this.quoteRef(sessionId, sendOpts.quoteWaId);
+    let result: { messageId?: string };
+    try {
+      result = await this.guardedSend(
+        sessionId,
+        chatId,
+        { preview: `Encuesta: ${opts.question}`, typing: 'composing', human: !!sendOpts.human },
+        (session) => session.sendPoll(chatId, opts.question, opts.options, opts.selectableCount, quote),
+      );
+    } catch (err) {
+      this.handleSendFailure(sessionId, chatId, err);
+      throw err;
+    }
+    const meta = pollMeta(opts.question, opts.options.map((optionName) => ({ optionName })), opts.selectableCount);
+    this.persistOutbound(
+      sessionId,
+      chatId,
+      contactName ?? null,
+      'poll',
+      opts.question,
+      null,
+      null,
+      result.messageId ?? null,
+      null,
+      null,
+      'panel',
+      undefined,
+      {
+        replyToWaId: sendOpts.quoteWaId ?? null,
+        senderUid: sendOpts.senderUid ?? null,
+        contentMeta: metaJson(meta),
+      },
+    );
+    panelBus.publish('message', {
+      sessionId,
+      chatId,
+      direction: 'out',
+      body: opts.question,
+      content_type: 'poll',
+      occurred_at: nowIso(),
+    });
     return { messageId: result.messageId };
   }
 
@@ -755,6 +809,7 @@ export class SessionManager implements OutboundSender {
       // se completa la referencia para poder descargar el archivo.
       this.backfillMediaRef(sessionId, msg);
       this.backfillSender(sessionId, msg);
+      this.backfillContentMeta(sessionId, msg);
       return;
     }
 
@@ -787,7 +842,7 @@ export class SessionManager implements OutboundSender {
         msg.filename,
         'phone',
         msg.timestamp,
-        { mediaRef: msg.mediaRef ?? null, replyToWaId: msg.quotedWaId ?? null },
+        { mediaRef: msg.mediaRef ?? null, replyToWaId: msg.quotedWaId ?? null, contentMeta: msg.meta ?? null },
       );
       if (!mediaPath && msg.mediaRef && msg.offline) this.queueMediaDownload(rowId);
       // Avisar al panel: antes los enviados desde el teléfono no refrescaban el chat.
@@ -1184,6 +1239,24 @@ export class SessionManager implements OutboundSender {
     return null;
   }
 
+  /**
+   * Completa los metadatos (contacto/encuesta) de un mensaje ya guardado por una
+   * versión anterior. Solo actúa si el mensaje no tenía metadatos.
+   */
+  private backfillContentMeta(sessionId: string, msg: InboundMessage): void {
+    if (!msg.meta || !msg.id) return;
+    try {
+      run(
+        'UPDATE messages SET content_meta = ? WHERE session_id = ? AND wa_message_id = ? AND content_meta IS NULL',
+        msg.meta,
+        sessionId,
+        msg.id,
+      );
+    } catch (err) {
+      logger.warn({ err: (err as Error).message }, 'No se pudieron completar los metadatos del mensaje');
+    }
+  }
+
   /** Completa la referencia de media de un mensaje ya guardado sin ella. */
   private backfillMediaRef(sessionId: string, msg: InboundMessage): void {
     if (!msg.mediaRef || !msg.id) return;
@@ -1237,6 +1310,7 @@ export class SessionManager implements OutboundSender {
       // se completa la referencia para poder descargar el archivo.
       this.backfillMediaRef(sessionId, msg);
       this.backfillSender(sessionId, msg);
+      this.backfillContentMeta(sessionId, msg);
       return;
     }
 
@@ -1256,6 +1330,7 @@ export class SessionManager implements OutboundSender {
       this.persistOutbound(sessionId, msg.chatId, null, msg.type, msg.body, msg.mediaMime, mediaPath, msg.id, msg.seconds, msg.filename, 'phone', msg.timestamp, {
         mediaRef: msg.mediaRef ?? null,
         replyToWaId: msg.quotedWaId ?? null,
+        contentMeta: msg.meta ?? null,
       });
     } else {
       // Entrante del historial: se guarda como leído (no genera tildes azules al
@@ -1310,14 +1385,15 @@ export class SessionManager implements OutboundSender {
     status: 'received' | 'read' = 'received',
   ): number {
     const result = run(
-      `INSERT INTO messages (session_id, session_phone, chat_id, contact_name, direction, content_type, body, media_mime, media_path, media_filename, media_seconds, wa_message_id, reply_to_wa_id, sender_jid, media_ref, media_state, sender_type, status, occurred_at, created_at)
-       VALUES (?, ?, ?, ?, 'in', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'customer', ?, ?, ?)`,
+      `INSERT INTO messages (session_id, session_phone, chat_id, contact_name, direction, content_type, body, content_meta, media_mime, media_path, media_filename, media_seconds, wa_message_id, reply_to_wa_id, sender_jid, media_ref, media_state, sender_type, status, occurred_at, created_at)
+       VALUES (?, ?, ?, ?, 'in', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'customer', ?, ?, ?)`,
       sessionId,
       sessionPhone,
       msg.chatId,
       msg.pushName,
       msg.type,
       msg.body,
+      msg.meta ?? null,
       msg.mediaMime,
       mediaPath,
       msg.filename,
@@ -1467,19 +1543,25 @@ export class SessionManager implements OutboundSender {
     filename: string | null = null,
     origin: string | null = null,
     timestampSec?: number,
-    extra: { replyToWaId?: string | null; senderUid?: number | null; mediaRef?: string | null } = {},
+    extra: {
+      replyToWaId?: string | null;
+      senderUid?: number | null;
+      mediaRef?: string | null;
+      contentMeta?: string | null;
+    } = {},
   ): number {
     const row = this.byId(sessionId);
     const occurredAt = timestampSec ? new Date(timestampSec * 1000).toISOString() : nowIso();
     const result = run(
-      `INSERT INTO messages (session_id, session_phone, chat_id, contact_name, direction, content_type, body, media_mime, media_path, media_filename, media_seconds, wa_message_id, origin, reply_to_wa_id, media_ref, media_state, sender_type, sender_uid, status, occurred_at, created_at)
-       VALUES (?, ?, ?, ?, 'out', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'agent', ?, 'sent', ?, ?)`,
+      `INSERT INTO messages (session_id, session_phone, chat_id, contact_name, direction, content_type, body, content_meta, media_mime, media_path, media_filename, media_seconds, wa_message_id, origin, reply_to_wa_id, media_ref, media_state, sender_type, sender_uid, status, occurred_at, created_at)
+       VALUES (?, ?, ?, ?, 'out', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'agent', ?, 'sent', ?, ?)`,
       sessionId,
       row?.phone ?? null,
       chatId,
       contactName,
       contentType,
       body,
+      extra.contentMeta ?? null,
       mediaMime,
       mediaPath,
       filename,

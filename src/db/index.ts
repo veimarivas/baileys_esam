@@ -80,6 +80,11 @@ export function migrate(): void {
   // (NULL = sin intentar, 'ok', 'missing' = no disponible en WhatsApp).
   addColumnIfMissing('messages', 'media_ref', 'TEXT');
   addColumnIfMissing('messages', 'media_state', 'TEXT');
+  // Contactos, encuestas y fijado interno del panel.
+  addColumnIfMissing('messages', 'content_meta', 'TEXT');
+  addColumnIfMissing('messages', 'pinned_at', 'TEXT');
+  addColumnIfMissing('messages', 'pinned_by', 'INTEGER');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_messages_pinned ON messages(session_id, chat_id, pinned_at)');
   // Políticas anti-baneo ampliadas (envío humano y protección de reputación).
   addColumnIfMissing('anti_ban_policies', 'typing_simulation', 'INTEGER NOT NULL DEFAULT 1');
   addColumnIfMissing('anti_ban_policies', 'min_gap_seconds', 'INTEGER NOT NULL DEFAULT 3');

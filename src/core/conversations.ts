@@ -59,6 +59,12 @@ export interface MessageDTO {
   direction: string;
   content_type: string;
   body: string | null;
+  /** Datos de contactos/encuestas guardados como JSON en `content_meta`. */
+  meta: Record<string, unknown> | null;
+  /** Fijado interno del panel (no se sincroniza con WhatsApp). */
+  pinned_at: string | null;
+  /** Nombre del agente que fijó el mensaje. */
+  pinned_by_name: string | null;
   media_path: string | null;
   media_mime: string | null;
   media_filename: string | null;
@@ -259,6 +265,75 @@ export function messageInChat(messageId: number, sessionId: string, chatId: stri
   return !!get('SELECT 1 FROM messages WHERE id = ? AND session_id = ? AND chat_id = ?', messageId, sessionId, chatId);
 }
 
+/** Mensajes fijados de una conversación, del más reciente al más antiguo. */
+export function listPinned(sessionId: string, chatId: string): MessageDTO[] {
+  const rows = all<MessageJoinRow>(
+    `${MSG_SELECT}
+     WHERE m.session_id = ? AND m.chat_id = ? AND m.pinned_at IS NOT NULL
+     ORDER BY m.pinned_at DESC, m.id DESC
+     LIMIT ?`,
+    sessionId,
+    chatId,
+    MAX_PINNED_MESSAGES,
+  );
+  if (!rows.length) return [];
+  fillGroupSenderNames(rows);
+  const reactions = messageReactions(rows.map((row) => row.id), sessionId);
+  return rows.map((row) => mapMessage(row, reactions.get(row.id) ?? []));
+}
+
+/**
+ * Fija o desfija un mensaje del panel. Es un aviso interno para el equipo: no
+ * cambia el estado del mensaje en WhatsApp. Se permiten hasta 3 por chat.
+ */
+export function setMessagePinned(
+  sessionId: string,
+  chatId: string,
+  messageId: number,
+  pinned: boolean,
+  userId: number,
+): { ok: true } | { ok: false; error: string } {
+  const row = get<{ pinned_at: string | null }>(
+    'SELECT pinned_at FROM messages WHERE id = ? AND session_id = ? AND chat_id = ?',
+    messageId,
+    sessionId,
+    chatId,
+  );
+  if (!row) return { ok: false, error: 'Mensaje no encontrado en esta conversación.' };
+
+  if (!pinned) {
+    run(
+      'UPDATE messages SET pinned_at = NULL, pinned_by = NULL WHERE id = ? AND session_id = ? AND chat_id = ?',
+      messageId,
+      sessionId,
+      chatId,
+    );
+    return { ok: true };
+  }
+
+  if (row.pinned_at) return { ok: true };
+  const count = get<{ c: number }>(
+    'SELECT COUNT(*) c FROM messages WHERE session_id = ? AND chat_id = ? AND pinned_at IS NOT NULL',
+    sessionId,
+    chatId,
+  );
+  if ((count?.c ?? 0) >= MAX_PINNED_MESSAGES) {
+    return {
+      ok: false,
+      error: `Solo se pueden fijar ${MAX_PINNED_MESSAGES} mensajes por conversación.`,
+    };
+  }
+  run(
+    'UPDATE messages SET pinned_at = ?, pinned_by = ? WHERE id = ? AND session_id = ? AND chat_id = ?',
+    nowIso(),
+    userId,
+    messageId,
+    sessionId,
+    chatId,
+  );
+  return { ok: true };
+}
+
 /** DTO de una conversacion puntual (con contacto y agente). */
 export function conversationDTO(sessionId: string, chatId: string): ConversationDTO | undefined {
   const row = get<ConvJoinRow>(
@@ -381,6 +456,20 @@ interface MessageJoinRow extends MessageRow {
   reply_direction: string | null;
   reply_agent: string | null;
   sender_name: string | null;
+  pinned_by_name: string | null;
+}
+
+/** Cantidad máxima de mensajes fijados por conversación (como WhatsApp). */
+export const MAX_PINNED_MESSAGES = 3;
+
+function parseContentMeta(raw: string | null): Record<string, unknown> | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 const MEDIA_TYPES = new Set(['image', 'video', 'audio', 'document', 'sticker']);
@@ -421,6 +510,9 @@ function mapMessage(row: MessageJoinRow, reactions: MessageDTO['reactions']): Me
     direction: row.direction,
     content_type: row.content_type,
     body: row.body,
+    meta: parseContentMeta(row.content_meta),
+    pinned_at: row.pinned_at ?? null,
+    pinned_by_name: row.pinned_by_name ?? null,
     media_path: row.media_path,
     media_mime: row.media_mime,
     media_filename: row.media_filename,
@@ -443,10 +535,11 @@ function mapMessage(row: MessageJoinRow, reactions: MessageDTO['reactions']): Me
 const MSG_SELECT = `SELECT m.*, r.id AS reply_id, r.body AS reply_body, r.content_type AS reply_type,
     r.contact_name AS reply_contact, r.sender_jid AS reply_sender_jid, r.chat_id AS reply_chat_id,
     r.direction AS reply_direction, ru.name AS reply_agent,
-    u.name AS sender_name
+    u.name AS sender_name, pu.name AS pinned_by_name
   FROM messages m
   LEFT JOIN messages r ON r.wa_message_id = m.reply_to_wa_id AND r.session_id = m.session_id
   LEFT JOIN users ru ON ru.id = r.sender_uid
+  LEFT JOIN users pu ON pu.id = m.pinned_by
   LEFT JOIN users u ON u.id = m.sender_uid`;
 
 export interface MessagePage {

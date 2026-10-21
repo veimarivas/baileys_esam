@@ -152,10 +152,6 @@ export function createBatch(opts: CreateBatchOptions, runner: BatchRunner): Crea
   return { batchId, total: prepared.length, skipped, dryRun: false };
 }
 
-function run0(ref: string): boolean {
-  return runCheck(ref);
-}
-
 function runCheck(ref: string): boolean {
   return !!(get<{ c: number }>(
     "SELECT COUNT(*) AS c FROM batch_items WHERE external_ref = ? AND status IN ('pending','sent')",

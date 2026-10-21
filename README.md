@@ -1,5 +1,7 @@
 # baileys_esam
 
+[![CI](https://github.com/veimarivas/baileys_esam/actions/workflows/ci.yml/badge.svg)](https://github.com/veimarivas/baileys_esam/actions/workflows/ci.yml)
+
 Gateway de WhatsApp basado en **Baileys** (WebSocket, **sin Chromium**) para
 **Seguimiento ESAM**. Reemplaza de forma liviana a OpenWA y al motor de envíos de
 `openwa_basico`, y es *drop-in*: expone el mismo contrato REST que consume
@@ -80,6 +82,7 @@ npm run dev
 | `npm run restart` | Compila y, si compila bien, reinicia el servicio en marcha |
 | `npm run backup` | Respaldo manual de la base y las credenciales |
 | `npm run check:assets` | Verifica que esté la plantilla Velzon |
+| `npm run lint` | ESLint (panel, scripts y TypeScript) |
 | `npm run admin:password -- <clave> [usuario]` | Cambia la clave de un usuario local |
 | `npm run typecheck` | Verificación de tipos |
 | `start-baileys.bat` | Windows: servicio en segundo plano (pm2 o wrapper) |

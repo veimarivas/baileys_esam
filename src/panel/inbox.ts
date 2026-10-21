@@ -42,7 +42,7 @@ import { listNotifications, markNoteRead, markRead, notify, supervisorIds, unrea
 import * as noteTemplates from '../core/note-templates.js';
 import * as quickReplies from '../core/quick-replies.js';
 import { getSticker } from '../core/stickers.js';
-import { storeIncoming, storeNoteAudio } from '../core/media.js';
+import { storeNoteAudio } from '../core/media.js';
 import { typeForMime } from '../core/phone.js';
 import { transcribe } from '../core/transcriber.js';
 

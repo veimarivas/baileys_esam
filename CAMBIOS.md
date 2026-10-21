@@ -1783,6 +1783,20 @@ Tres mejoras del inbox para acercarlo a WhatsApp. La interfaz y los textos sigue
 
 ---
 
+## 51. CI, lint y dependencias (2026-10-20)
+
+- **Integración continua (`.github/workflows/ci.yml`):** en cada push a `main` y en cada PR corre `npm ci`, `npm run lint`, `npm run typecheck`, `npm test` y `npm run build` con Node 24. Las corridas viejas de la misma rama se cancelan para no encolar trabajo.
+- **ESLint 10 (configuración plana, `eslint.config.js`):**
+  - `public/`: scripts de navegador con `eslint:recommended` y los globals del layout (Bootstrap, Chart, ApexCharts, FilePond, Swal, Shepherd, Swiper);
+  - `scripts/` y `ecosystem.config.cjs`: CommonJS con globals de Node;
+  - `src/` y `test/`: TypeScript con `typescript-eslint` recomendado, sin reglas que necesiten tipos (eso ya lo cubre `tsc`).
+  - No se aplica Prettier a propósito: reformatear `app.js` y `app.css` generaría un diff imposible de revisar.
+- **Código muerto que encontró el lint:** se quitaron `ParsedCookie` (`src/auth/sessions.ts`), el import de `typeForMime` (`src/baileys/session.ts`), el wrapper `run0` (`src/core/batch-service.ts`), el import de `get` (`src/core/scheduler.ts`), el import de `storeIncoming` (`src/panel/inbox.ts`), `isWin` (`scripts/run-forever.cjs`) y el estado `mode`/`isOpus` del grabador de voz (`public/app.js`).
+- **Dependencias:** `sharp` 0.35.4 → 0.35.5 por la vulnerabilidad de librsvg (GHSA-wq5f-xc86-pv6w); `npm audit` queda sin hallazgos.
+- **Pruebas:** `npm run lint`, `npm run typecheck`, `npm test` (122/122) y `npm run build` limpios; `npm ci --dry-run` confirma que el lockfile está sincronizado.
+
+---
+
 ## Notas de operación
 
 - En producción usar `start-baileys.bat` / pm2 / systemd (no `npm run dev`).

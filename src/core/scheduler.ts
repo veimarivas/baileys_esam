@@ -1,4 +1,4 @@
-import { all, get, run } from '../db/index.js';
+import { all, run } from '../db/index.js';
 import { nowIso } from '../util/async.js';
 import { logger } from '../logger.js';
 import type { BatchRunner } from './batches.js';

@@ -138,6 +138,7 @@
     s = s.replace(new RegExp(BOUND + '_(?!\\s)([^\\s_](?:[^_\\n]*[^\\s_])?)_' + END, 'g'), '$1<em>$2</em>');
     s = s.replace(new RegExp(BOUND + '~(?!\\s)([^\\s~](?:[^~\\n]*[^\\s~])?)~' + END, 'g'), '$1<s>$2</s>');
     // Vuelve el monospace protegido.
+    // eslint-disable-next-line no-control-regex -- \u0001 marca los fragmentos de código al protegerlos.
     s = s.replace(/\u0001(\d+)\u0001/g, function (_m, i) { return '<code>' + codes[Number(i)] + '</code>'; });
     return s;
   }
@@ -1507,7 +1508,7 @@
 
   function VoiceRecorder(onSend, onCancel) {
     var wrap = document.createElement('span');
-    var rec = null, timer = null, seconds = 0, mode = 'opus';
+    var rec = null, timer = null, seconds = 0;
 
     function renderIdle() {
       wrap.className = '';
@@ -1524,7 +1525,6 @@
     // Opus → OGG/Opus, el formato que espera WhatsApp para notas de voz.
     function startOpus(Recorder) {
       try {
-        mode = 'opus';
         rec = new Recorder({
           encoderPath: '/assets/libs/opus-recorder/encoderWorker.min.js',
           numberOfChannels: 1,
@@ -1544,7 +1544,7 @@
           }
           renderIdle();
         };
-        rec.start().then(function () { tickRec(true); })
+        rec.start().then(function () { tickRec(); })
           .catch(function () { startFallback(); });
       } catch (e) { startFallback(); }
     }
@@ -1553,7 +1553,6 @@
       navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
         var chunks = [];
         var mr = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
-        mode = 'webm';
         mr.ondataavailable = function (e) { if (e.data.size) chunks.push(e.data); };
         mr.onstop = function () {
           stream.getTracks().forEach(function (t) { t.stop(); });
@@ -1567,11 +1566,11 @@
           cancel: function () { mr.onstop = null; mr.stop(); stream.getTracks().forEach(function (t) { t.stop(); }); },
         };
         mr.start();
-        tickRec(false);
+        tickRec();
       }).catch(function () { toast('No se pudo acceder al micrófono.', true); renderIdle(); });
     }
 
-    function tickRec(isOpus) {
+    function tickRec() {
       seconds = 0;
       clearInterval(timer);
       timer = setInterval(function () { seconds++; renderRec(); }, 1000);

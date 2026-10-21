@@ -11,10 +11,6 @@ export interface WebSession {
   expires_at: string;
 }
 
-interface ParsedCookie {
-  userId: number;
-}
-
 /**
  * Sesiones del panel: cookie firmada (HMAC) + fila en `web_sessions`.
  * Cada request verifica la firma y la expiración.

@@ -6,7 +6,6 @@ const path = require('node:path');
  * Evita que un error puntual deje el gateway y la API caídos.
  */
 const root = path.resolve(__dirname, '..');
-const isWin = process.platform === 'win32';
 const tsxCli = path.join(root, 'node_modules', 'tsx', 'dist', 'cli.mjs');
 const distEntry = path.join(root, 'dist', 'index.js');
 const fs = require('node:fs');

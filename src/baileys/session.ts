@@ -18,7 +18,7 @@ import QRCode from 'qrcode';
 import { config } from '../config.js';
 import { logger, baileysLogger } from '../logger.js';
 import { delay, randInt } from '../util/async.js';
-import { phoneFromJid, typeForMime } from '../core/phone.js';
+import { phoneFromJid } from '../core/phone.js';
 import { rememberLid, resolveChatId, phoneForLid } from '../core/lid.js';
 import { phoneKeyOf } from '../core/person.js';
 import {

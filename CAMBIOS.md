@@ -1797,6 +1797,16 @@ Tres mejoras del inbox para acercarlo a WhatsApp. La interfaz y los textos sigue
 
 ---
 
+## 52. Avisos de escritorio y búsqueda en el chat (2026-10-20)
+
+- **Notificación del sistema:** cuando llega un mensaje entrante y la pestaña está en segundo plano, se muestra una notificación del sistema con el nombre del contacto y el texto (o el tipo de archivo). Es una sola por conversación: el `tag` reemplaza la anterior para no acumular avisos de un chat activo. Al hacer clic se enfoca la ventana y se abre la conversación. No se dispara durante una sincronización masiva (más de 5 mensajes en 3 s), igual que el aviso interno.
+- **Permiso:** si el navegador todavía no lo concedió, la primera vez se ofrece un aviso con el botón «Activar» (los navegadores exigen un clic). Se recuerda en `localStorage` (`msg-notify-asked`) para no repetirlo.
+- **Buscar en la conversación:** botón de lupa en la cabecera del chat y atajo `Ctrl+F` (también `Cmd+F`). La barra busca en **todo el historial del chat** contra el servidor, no solo en lo cargado, y muestra la cantidad de coincidencias, flechas para recorrerlas (Enter = anterior, Shift+Enter = siguiente) y una lista con fecha, sentido y el fragmento resaltado. Al elegir un resultado se cargan las páginas anteriores necesarias y se resalta el mensaje en el hilo.
+- **Backend:** `searchChatMessages()` en `src/core/conversations.ts` busca en `body` y en la transcripción de las notas de voz, escapa `%`, `_` y `\` (la búsqueda es literal) y devuelve total + hasta 100 resultados del más nuevo al más viejo. Ruta `GET /inbox/:session/:chat/search?q=` con límite de 60 consultas por minuto. No colisiona con el buscador global existente (`searchMessages(user, q)`).
+- **Pruebas:** `test/message-search.test.ts` (6) cubre orden, total vs. recorte, comodines escapados, alcance por chat/línea, transcripciones y mínimo de 2 letras. `npm run lint`, `npm run typecheck` y `npm test` (128/128) limpios.
+
+---
+
 ## Notas de operación
 
 - En producción usar `start-baileys.bat` / pm2 / systemd (no `npm run dev`).

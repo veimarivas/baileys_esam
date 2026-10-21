@@ -607,6 +607,72 @@ export function listMessages(sessionId: string, chatId: string, query: MessageQu
 }
 
 /**
+ * Busca texto en el historial de un chat (cuerpo y transcripciones).
+ *
+ * `LIKE` no distingue mayúsculas en ASCII; las tildes se comparan tal cual. Se
+ * escapan `%`, `_` y `\` para que la búsqueda sea literal, y los resultados
+ * vuelven del más nuevo al más viejo.
+ */
+export function searchChatMessages(
+  sessionId: string,
+  chatId: string,
+  term: string,
+  limit = 30,
+): { total: number; results: MessageSearchHit[] } {
+  const q = term.trim();
+  if (q.length < 2) return { total: 0, results: [] };
+  const pattern = `%${q.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
+  const max = Math.min(Math.max(limit, 1), 100);
+  const where = `m.session_id = ? AND m.chat_id = ?
+    AND (COALESCE(m.body, '') LIKE ? ESCAPE '\\' OR COALESCE(m.transcription, '') LIKE ? ESCAPE '\\')`;
+
+  const total = get<{ c: number }>(
+    `SELECT COUNT(*) AS c FROM messages m WHERE ${where}`,
+    sessionId,
+    chatId,
+    pattern,
+    pattern,
+  );
+
+  const rows = all<{
+    id: number;
+    occurred_at: string;
+    direction: string;
+    content_type: string;
+    body: string | null;
+    transcription: string | null;
+  }>(
+    `SELECT m.id, m.occurred_at, m.direction, m.content_type, m.body, m.transcription
+     FROM messages m WHERE ${where}
+     ORDER BY m.occurred_at DESC, m.id DESC LIMIT ?`,
+    sessionId,
+    chatId,
+    pattern,
+    pattern,
+    max,
+  );
+
+  return {
+    total: total?.c ?? 0,
+    results: rows.map((r) => ({
+      id: r.id,
+      occurredAt: r.occurred_at,
+      direction: r.direction,
+      contentType: r.content_type,
+      text: (r.body || r.transcription || '').slice(0, 300),
+    })),
+  };
+}
+
+export interface MessageSearchHit {
+  id: number;
+  occurredAt: string;
+  direction: string;
+  contentType: string;
+  text: string;
+}
+
+/**
  * Mensajes de grupo con autor pero sin nombre (el historial no trae el
  * «pushName»): se toma el último nombre que esa persona usó en cualquier
  * mensaje, su nombre completo de cronogramas o el de su ficha de contacto.

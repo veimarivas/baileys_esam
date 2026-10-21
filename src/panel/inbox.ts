@@ -477,6 +477,25 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
     }),
   );
 
+  // Buscar dentro de la conversación: devuelve las coincidencias del historial
+  // completo (no solo lo cargado) para saltar a ellas.
+  app.get(
+    '/inbox/:session/:chat/search',
+    ...auth,
+    ctx.rateLimit(60, 60_000),
+    ah((req, res) => {
+      const resolved = resolveAuthorized(req, res, String(req.params.session), String(req.params.chat));
+      if (!resolved) return;
+      const term = typeof req.query.q === 'string' ? req.query.q : '';
+      if (term.trim().length < 2) {
+        res.json({ total: 0, results: [], term: term.trim() });
+        return;
+      }
+      const limit = Number(req.query.limit ?? 30) || 30;
+      res.json({ term: term.trim(), ...conversations.searchChatMessages(resolved.session.id, resolved.chatId, term, limit) });
+    }),
+  );
+
   app.get(
     '/inbox/:session/:chat/participants',
     ...auth,

@@ -436,7 +436,32 @@
     playMessageSound();
     // Más de 5 mensajes en 3 s: es una sincronización, no una conversación.
     if (msgAlert.recent.length > 5) { showBurstAlert(msgAlert.recent.length); return; }
+    notifyDesktop(d);
     showMessageAlert(d);
+  }
+
+  // Aviso del sistema cuando la pestaña está en segundo plano, como WhatsApp Web.
+  // Una sola notificación por conversación (el `tag` reemplaza la anterior).
+  function notifyDesktop(d) {
+    if (!document.hidden || !('Notification' in window) || Notification.permission !== 'granted') return;
+    var info = (msgAlert.enrich && msgAlert.enrich(d)) || {};
+    var name = info.name || d.contact_name || fmtPhone(String(d.chatId || '').split('@')[0]) || 'Contacto';
+    try {
+      var n = new Notification(name, {
+        body: alertText(d),
+        tag: 'msg-' + d.sessionId + '-' + d.chatId,
+        icon: info.photo || undefined,
+      });
+      n.onclick = function () {
+        window.focus();
+        n.close();
+        if (!msgAlert.openChat || !msgAlert.openChat(d.sessionId, d.chatId)) {
+          location.href = '/conversations/' + encodeURIComponent(d.chatId);
+        }
+      };
+    } catch (_) {
+      // Algunos navegadores la bloquean; el aviso dentro del panel ya se mostró.
+    }
   }
 
   // Alerta de mensajes entrantes (cualquier página del panel con SSE activo).
@@ -448,6 +473,20 @@
       if (!d || d.direction !== 'in' || d.history) return; // el historial no avisa
       pushMessageAlert(d);
     });
+
+    // Sin permiso no hay aviso del sistema. Se ofrece una sola vez y con un clic
+    // (los navegadores exigen un gesto del usuario para pedirlo).
+    var asked = false;
+    try { asked = localStorage.getItem('msg-notify-asked') === '1'; } catch (_) {}
+    if (!asked && 'Notification' in window && Notification.permission === 'default') {
+      setTimeout(function () {
+        try { localStorage.setItem('msg-notify-asked', '1'); } catch (_) {}
+        toast('Activá los avisos de escritorio', false, {
+          label: 'Activar',
+          run: function () { Notification.requestPermission(); },
+        });
+      }, 3500);
+    }
   }
 
   function api(url, options) {
@@ -2426,6 +2465,14 @@
       pendingFileUrl: '',
       // Borradores por conversación: cambiar de chat o responder no borra lo escrito.
       drafts: {},
+      // Búsqueda dentro del chat abierto.
+      searchOpen: false,
+      searchTerm: '',
+      searchResults: [],
+      searchTotal: 0,
+      searchIndex: 0,
+      searchTimer: null,
+      searchToken: 0,
       pinned: [],
       messages: [],
       messagesAfter: 0,
@@ -2898,6 +2945,7 @@
       state.tab = /@g\.us$/.test(chatId) ? 'group' : (state.tab === 'team' ? 'team' : 'individual');
       state.replyTo = null;
       clearPendingFile();
+      resetChatSearch();
       state.pinned = [];
       state.messages = [];
       state.messagesAfter = 0;
@@ -3033,9 +3081,12 @@
       }).catch(function () { return false; }).finally(function () { state.loadingOlder = false; });
     }
 
-    // Salta al mensaje citado; si no está cargado, va trayendo páginas anteriores.
-    function goToMessage(targetId, attempts) {
+    // Salta a un mensaje; si no está cargado, va trayendo páginas anteriores.
+    // `kind` ajusta el aviso ('citado' para respuestas, 'buscado' para la búsqueda).
+    function goToMessage(targetId, attempts, kind, maxPages) {
       attempts = attempts || 0;
+      var what = kind || 'citado';
+      var limitPages = maxPages || 40;
       var body = els.pane.querySelector('.chat-body');
       if (!body) return;
       var el = body.querySelector('.bubble-row[data-id="' + targetId + '"]');
@@ -3045,15 +3096,178 @@
         setTimeout(function () { el.classList.remove('bubble-highlight'); }, 1600);
         return;
       }
-      if (state.hasMore && attempts < 40) {
+      if (state.hasMore && attempts < limitPages) {
         loadOlder().then(function (ok) {
-          if (ok) goToMessage(targetId, attempts + 1);
-          else toast('No se encontró el mensaje citado.', true);
+          if (ok) goToMessage(targetId, attempts + 1, kind, maxPages);
+          else toast('No se encontró el mensaje ' + what + '.', true);
         });
         return;
       }
-      toast('El mensaje citado no está en el historial cargado.', true);
+      toast('El mensaje ' + what + ' no está en el historial cargado.', true);
     }
+
+    /* ── Buscar dentro de la conversación ── */
+    function resetChatSearch() {
+      state.searchOpen = false;
+      state.searchTerm = '';
+      state.searchResults = [];
+      state.searchTotal = 0;
+      state.searchIndex = 0;
+      state.searchToken++;
+      clearTimeout(state.searchTimer);
+      var box = els.pane.querySelector('#chat-search');
+      if (box) { box.classList.add('d-none'); box.innerHTML = ''; }
+    }
+
+    function toggleChatSearch() {
+      if (!state.selectedChat) return;
+      if (state.searchOpen) { resetChatSearch(); return; }
+      state.searchOpen = true;
+      state.searchToken++;
+      renderChatSearch();
+      var input = els.pane.querySelector('#chat-search-input');
+      if (input) input.focus();
+    }
+
+    function renderChatSearch() {
+      var box = els.pane.querySelector('#chat-search');
+      if (!box) return;
+      if (!state.searchOpen) { box.classList.add('d-none'); box.innerHTML = ''; return; }
+      box.classList.remove('d-none');
+      box.innerHTML =
+        '<div class="cs-bar">' +
+          '<span class="cs-ico ri-search-line" aria-hidden="true"></span>' +
+          '<input type="search" id="chat-search-input" class="cs-input" placeholder="Buscar en esta conversación…" autocomplete="off" />' +
+          '<span class="cs-count" id="chat-search-count" aria-live="polite"></span>' +
+          '<button type="button" class="cs-nav" id="chat-search-older" title="Resultado anterior (Enter)" aria-label="Resultado anterior"><span class="ri-arrow-up-line"></span></button>' +
+          '<button type="button" class="cs-nav" id="chat-search-newer" title="Resultado siguiente (Shift+Enter)" aria-label="Resultado siguiente"><span class="ri-arrow-down-line"></span></button>' +
+          '<button type="button" class="cs-close" id="chat-search-close" title="Cerrar búsqueda (Esc)" aria-label="Cerrar búsqueda"><span class="ri-close-line"></span></button>' +
+        '</div>' +
+        '<div class="cs-results d-none" id="chat-search-results"></div>';
+      var input = box.querySelector('#chat-search-input');
+      input.value = state.searchTerm;
+      input.addEventListener('input', function () {
+        state.searchTerm = input.value;
+        clearTimeout(state.searchTimer);
+        state.searchTimer = setTimeout(runChatSearch, 250);
+      });
+      input.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Escape') { ev.preventDefault(); resetChatSearch(); }
+        else if (ev.key === 'Enter') { ev.preventDefault(); moveSearchResult(ev.shiftKey ? -1 : 1); }
+      });
+      box.querySelector('#chat-search-older').addEventListener('click', function () { moveSearchResult(1); });
+      box.querySelector('#chat-search-newer').addEventListener('click', function () { moveSearchResult(-1); });
+      box.querySelector('#chat-search-close').addEventListener('click', resetChatSearch);
+      renderSearchResults();
+      if (state.searchTerm.trim().length >= 2) runChatSearch();
+    }
+
+    function runChatSearch() {
+      var term = state.searchTerm.trim();
+      var token = ++state.searchToken;
+      if (term.length < 2) {
+        state.searchResults = []; state.searchTotal = 0; state.searchIndex = 0;
+        renderSearchResults();
+        return;
+      }
+      setSearchCount('Buscando…');
+      var url = '/inbox/' + encodeURIComponent(state.selectedSession) + '/' + encodeURIComponent(state.selectedChat) +
+        '/search?q=' + encodeURIComponent(term);
+      api(url).then(function (d) {
+        if (token !== state.searchToken) return; // respuesta vieja: se ignoró
+        state.searchResults = d.results || [];
+        state.searchTotal = d.total || 0;
+        state.searchIndex = -1; // sin selección: el primer Enter salta al más reciente
+        renderSearchResults();
+      }).catch(function (e) {
+        if (token !== state.searchToken) return;
+        state.searchResults = []; state.searchTotal = 0;
+        renderSearchResults();
+        toast(e.message, true);
+      });
+    }
+
+    function setSearchCount(text) {
+      var el = els.pane.querySelector('#chat-search-count');
+      if (el) el.textContent = text;
+    }
+
+    function renderSearchResults() {
+      var list = els.pane.querySelector('#chat-search-results');
+      var count = els.pane.querySelector('#chat-search-count');
+      if (!list || !count) return;
+      var term = state.searchTerm.trim();
+      var results = state.searchResults || [];
+      if (term.length < 2) {
+        count.textContent = term ? 'Escribí al menos 2 letras' : '';
+        list.classList.add('d-none'); list.innerHTML = '';
+        return;
+      }
+      if (!results.length) {
+        count.textContent = 'Sin resultados';
+        list.classList.add('d-none'); list.innerHTML = '';
+        return;
+      }
+      count.textContent = (state.searchIndex < 0 ? 1 : state.searchIndex + 1) + ' de ' + results.length +
+        (state.searchTotal > results.length ? ' (' + state.searchTotal + ' en total)' : '');
+      list.classList.remove('d-none');
+      list.innerHTML = results.map(function (r, i) {
+        return '<button type="button" class="cs-hit' + (i === state.searchIndex ? ' is-active' : '') + '" data-i="' + i + '">' +
+          '<span class="cs-hit-top">' +
+            '<span class="cs-hit-when">' + escapeHtml(fmtDateTime(r.occurredAt)) + '</span>' +
+            '<span class="cs-hit-dir">' + (r.direction === 'out' ? 'Enviado' : 'Recibido') + '</span>' +
+          '</span>' +
+          '<span class="cs-hit-text">' + highlightTerm(r.text || '', term) + '</span>' +
+        '</button>';
+      }).join('');
+      Array.prototype.forEach.call(list.querySelectorAll('.cs-hit'), function (b) {
+        b.addEventListener('click', function () { jumpToSearchResult(Number(b.getAttribute('data-i'))); });
+      });
+    }
+
+    // Escapa el HTML y resalta el término buscado sin romper el marcado.
+    function highlightTerm(text, term) {
+      var safe = escapeHtml(text || '');
+      var needle = escapeHtml(term).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (!needle) return safe;
+      try { return safe.replace(new RegExp('(' + needle + ')', 'ig'), '<mark>$1</mark>'); }
+      catch (_) { return safe; }
+    }
+
+    // dir 1 = resultado anterior (más viejo); -1 = siguiente (más nuevo).
+    function moveSearchResult(dir) {
+      if (!state.searchResults.length) return;
+      if (state.searchIndex < 0) {
+        jumpToSearchResult(dir > 0 ? 0 : state.searchResults.length - 1);
+        return;
+      }
+      var next = state.searchIndex + dir;
+      if (next < 0) next = 0;
+      if (next >= state.searchResults.length) next = state.searchResults.length - 1;
+      jumpToSearchResult(next);
+    }
+
+    function jumpToSearchResult(i) {
+      var r = state.searchResults[i];
+      if (!r) return;
+      state.searchIndex = i;
+      renderSearchResults();
+      goToMessage(r.id, 0, 'buscado', 60);
+    }
+
+    // Ctrl+F abre la búsqueda del chat abierto (como en WhatsApp Web).
+    document.addEventListener('keydown', function (ev) {
+      if (!(ev.ctrlKey || ev.metaKey) || ev.shiftKey || ev.altKey) return;
+      if (String(ev.key).toLowerCase() !== 'f' || !state.selectedChat) return;
+      var t = ev.target;
+      if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
+      ev.preventDefault();
+      if (!state.searchOpen) toggleChatSearch();
+      else {
+        var input = els.pane.querySelector('#chat-search-input');
+        if (input) input.focus();
+      }
+    });
 
     // Redibuja el hilo desde state.messages con separadores por día.
     // mode: 'bottom' (ir al final), 'keep' (preservar scroll), 'auto' (si estaba abajo).
@@ -3309,7 +3523,7 @@
         root.classList.add('contact-hidden'); root.classList.remove('has-chat');
         return;
       }
-      els.pane.innerHTML = chatHeaderHtml(c) + '<div id="chat-pinned"></div><div id="chat-notes-banner"></div><div class="chat-body"></div>' + composerHtml(c);
+      els.pane.innerHTML = chatHeaderHtml(c) + '<div id="chat-search" class="chat-search d-none"></div>' + '<div id="chat-pinned"></div><div id="chat-notes-banner"></div><div class="chat-body"></div>' + composerHtml(c);
       els.contact.classList.remove('d-none');
       root.classList.add('has-chat');
       // En pantallas grandes la ficha se ve al costado; en las chicas se abre a pedido.
@@ -3349,6 +3563,7 @@
               ? '<span class="chat-waname" title="Nombre en WhatsApp"> · ' + escapeHtml(c.contact.name) + '</span>' : '') +
             '<span id="typing-hint" class="typing-hint"></span></div></div>' +
         '<div class="chat-actions">' +
+          '<button type="button" class="btn btn-icon btn-soft-secondary" id="toggle-search" title="Buscar en la conversación (Ctrl+F)"><span class="ri-search-line"></span></button>' +
           '<button type="button" class="btn btn-soft-primary btn-sm" id="sync-history" title="Sincronizar historial"><span class="ri-refresh-line"></span><span class="d-none d-md-inline ms-1">Sincronizar</span></button>' +
           '<button type="button" class="btn btn-icon btn-soft-secondary" id="toggle-contact" title="Ficha del contacto"><span class="ri-user-line"></span></button>' +
         '</div></div>';
@@ -3405,6 +3620,10 @@
       if (toggleContact) toggleContact.addEventListener('click', function () {
         root.classList.toggle('contact-hidden');
       });
+      var searchBtn = els.pane.querySelector('#toggle-search');
+      if (searchBtn) searchBtn.addEventListener('click', toggleChatSearch);
+      // Al redibujar el compositor (responder, fijar) la búsqueda abierta sigue ahí.
+      renderChatSearch();
 
       var cancelReply = els.pane.querySelector('#cancel-reply');
       if (cancelReply) cancelReply.addEventListener('click', function () { state.replyTo = null; renderPane(); });

@@ -1768,6 +1768,21 @@ Tres mejoras del inbox para acercarlo a WhatsApp. La interfaz y los textos sigue
 
 ---
 
+## 50. Pegar capturas, archivos del chat y sesiones (2026-10-20)
+
+- **Pegar capturas en el compositor (`public/app.js`, `public/app.css`):** copiar una captura y pegarla con Ctrl+V ya no la envía de golpe:
+  - aparece una **vista previa** arriba del campo con miniatura, nombre y peso; se confirma con el botón de enviar o Enter y se cancela con la X;
+  - el texto escrito viaja como **pie de foto** y se limpia solo si el envío sale bien;
+  - el pegado de texto sigue igual y no se dispara desde buscadores ni formularios;
+  - se avisa con un mensaje claro si la imagen supera el máximo permitido.
+- **Archivos del chat (`src/panel/server.ts`):** el inbox tenía el mismo tope de 6 MB que los stickers, así que cualquier video real fallaba. Ahora usa su propio límite de **64 MB** (`uploadInbox`) y los errores de subida responden **JSON** (413/400) para que el panel muestre el motivo en vez de "Error al enviar".
+- **Fotos grandes (`public/app.js`):** antes de subir, las imágenes de más de 1,5 MB se reducen a 1920 px y se recomprimen a JPEG 0.85 solo si el resultado pesa menos; los GIF y lo que el navegador no pueda decodificar se mandan tal cual.
+- **Borradores por conversación (`public/app.js`):** lo escrito se guarda por chat y sobrevive a cambiar de conversación, responder un mensaje o recibir uno nuevo; se borra al enviar.
+- **Sesiones del panel (`src/auth/sessions.ts`):** una cookie con firma de largo distinto hacía que `timingSafeEqual` lanzara y el pedido terminara en 500. Ahora se compara el largo antes y la sesión se rechaza como corresponde.
+- **Pruebas:** `test/web-sessions.test.ts` cubre cookie válida, firma truncada/alargada/alterada, sesión vencida y cierre de sesión. `npm run typecheck` y `npm test` (122/122) limpios.
+
+---
+
 ## Notas de operación
 
 - En producción usar `start-baileys.bat` / pm2 / systemd (no `npm run dev`).

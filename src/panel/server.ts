@@ -188,6 +188,9 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
   app.use(express.json());
   const uploadSticker = multer({ storage: multer.memoryStorage(), limits: { fileSize: 6 * 1024 * 1024 } });
   const uploadCsv = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024 } });
+  // Archivos del chat (imagen, video, audio, documento): WhatsApp admite bastante
+  // más que un sticker, así que el inbox tiene su propio tope.
+  const uploadInbox = multer({ storage: multer.memoryStorage(), limits: { fileSize: 64 * 1024 * 1024 } });
   // Estáticos: Velzon vive en public/assets; los propios (app.css/js) en public/.
   app.use('/assets', express.static(path.resolve('public', 'assets')));
   app.use(express.static(path.resolve('public'), { index: false }));
@@ -1577,7 +1580,7 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     requireSection,
     rateLimit,
     resolveChatParam,
-    upload: uploadSticker,
+    upload: uploadInbox,
   });
 
   // ── Biblioteca de stickers ───────────────────────────────────────────────────
@@ -1888,8 +1891,19 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
   });
 
   app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
-    logger.warn({ err: err.message, url: req.originalUrl }, 'Error en el panel');
-    res.status(500).send(renderPlain('Error', err.message));
+    const uploadError = err instanceof multer.MulterError;
+    const tooLarge = uploadError && err.code === 'LIMIT_FILE_SIZE';
+    const status = tooLarge ? 413 : uploadError ? 400 : 500;
+    const message = tooLarge
+      ? 'El archivo es demasiado grande (máximo 64 MB).'
+      : uploadError
+        ? `No se pudo leer el archivo: ${err.message}`
+        : err.message;
+    logger.warn({ err: err.message, code: uploadError ? err.code : undefined, url: req.originalUrl }, 'Error en el panel');
+    // Las rutas del panel esperan JSON: si devolviéramos HTML, el cliente solo
+    // mostraría «Error al enviar» sin decir qué pasó.
+    if (wantsJson(req)) return res.status(status).json({ error: message });
+    res.status(status).send(renderPlain('Error', message));
   });
 
   return app;

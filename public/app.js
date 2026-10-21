@@ -2425,6 +2425,8 @@
       // Imagen pegada (captura) esperando confirmación; se envía con el texto del campo como pie de foto.
       pendingFile: null,
       pendingFileUrl: '',
+      // Borradores por conversación: cambiar de chat o responder no borra lo escrito.
+      drafts: {},
       pinned: [],
       messages: [],
       messagesAfter: 0,
@@ -3409,7 +3411,9 @@
       if (cancelReply) cancelReply.addEventListener('click', function () { state.replyTo = null; renderPane(); });
 
       var input = els.pane.querySelector('#composer-input');
-      input.addEventListener('input', function () { autoGrow(input); });
+      // Lo escrito en esta conversación se recupera al volver a ella.
+      input.value = draftValue();
+      input.addEventListener('input', function () { autoGrow(input); saveDraft(input); });
       input.addEventListener('keydown', function (ev) {
         if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); sendText(); }
       });
@@ -3440,7 +3444,7 @@
       EMOJI_LIST.forEach(function (e) {
         var b = document.createElement('button');
         b.type = 'button'; b.className = 'emoji-btn'; b.textContent = e;
-        b.addEventListener('click', function () { input.value += e; autoGrow(input); input.focus(); });
+        b.addEventListener('click', function () { input.value += e; autoGrow(input); saveDraft(input); input.focus(); });
         emojiList.appendChild(b);
       });
       emojiBtn.addEventListener('click', function () { emojiList.classList.toggle('d-none'); });
@@ -3464,7 +3468,7 @@
         b.addEventListener('click', function () {
           input.value = renderVars(r.content);
           container.classList.add('d-none');
-          autoGrow(input); input.focus();
+          autoGrow(input); saveDraft(input); input.focus();
         });
         container.appendChild(b);
       });
@@ -3491,8 +3495,8 @@
       el.style.height = Math.min(el.scrollHeight, 180) + 'px';
     }
 
-    // El servidor corta las subidas a 6 MB (uploadSticker en src/panel/server.ts).
-    var MAX_UPLOAD_BYTES = 6 * 1024 * 1024;
+    // El servidor corta las subidas del chat a 64 MB (uploadInbox en src/panel/server.ts).
+    var MAX_UPLOAD_BYTES = 64 * 1024 * 1024;
 
     function fmtBytes(bytes) {
       if (!bytes) return '0 KB';
@@ -3521,7 +3525,7 @@
       if (!file) return;
       ev.preventDefault();
       if (file.size > MAX_UPLOAD_BYTES) {
-        toast('La imagen pesa ' + fmtBytes(file.size) + ' y el máximo es 6 MB.', true);
+        toast('La imagen pesa ' + fmtBytes(file.size) + ' y el máximo es ' + fmtBytes(MAX_UPLOAD_BYTES) + '.', true);
         return;
       }
       setPendingFile(file);
@@ -3557,6 +3561,62 @@
       box.querySelector('#attach-preview-cancel').addEventListener('click', function () { clearPendingFile(); });
     }
 
+    // ── Borradores por conversación ───────────────────────────────────────────
+    // Cambiar de chat, responder un mensaje o recibir uno nuevo rehace el
+    // compositor; el texto escrito tiene que sobrevivir a eso.
+    function draftKey(sessionId, chatId) { return (sessionId || '') + '\u0000' + (chatId || ''); }
+
+    function draftValue() {
+      return state.drafts[draftKey(state.selectedSession, state.selectedChat)] || '';
+    }
+
+    function saveDraft(input) {
+      if (!input) return;
+      var key = draftKey(state.selectedSession, state.selectedChat);
+      if (input.value) state.drafts[key] = input.value;
+      else delete state.drafts[key];
+    }
+
+    function clearDraft(sessionId, chatId) {
+      delete state.drafts[draftKey(sessionId, chatId)];
+    }
+
+    // Una foto de celular pesa varios MB y tarda en subir: se reduce a 1920 px y
+    // se recomprime solo si el resultado es más chico. Los GIF quedan intactos.
+    function shouldCompressImage(file) {
+      return /^image\/(jpeg|jpg|png|webp)$/i.test(file.type || '') && file.size > 1.5 * 1024 * 1024;
+    }
+
+    function compressImage(file) {
+      return new Promise(function (resolve) {
+        var url = URL.createObjectURL(file);
+        var img = new Image();
+        img.onload = function () {
+          URL.revokeObjectURL(url);
+          var w = img.naturalWidth, h = img.naturalHeight;
+          if (!w || !h) { resolve(file); return; }
+          var scale = Math.min(1, 1920 / Math.max(w, h));
+          var canvas = document.createElement('canvas');
+          canvas.width = Math.round(w * scale);
+          canvas.height = Math.round(h * scale);
+          var ctx = canvas.getContext('2d');
+          if (!ctx) { resolve(file); return; }
+          // Fondo blanco: el JPEG no tiene transparencia.
+          ctx.fillStyle = '#fff';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          canvas.toBlob(function (blob) {
+            if (!blob || blob.size >= file.size) { resolve(file); return; }
+            var name = (file.name || 'imagen').replace(/\.[^.]+$/, '') + '.jpg';
+            try { resolve(new File([blob], name, { type: 'image/jpeg', lastModified: Date.now() })); }
+            catch (_) { resolve(file); }
+          }, 'image/jpeg', 0.85);
+        };
+        img.onerror = function () { URL.revokeObjectURL(url); resolve(file); };
+        img.src = url;
+      });
+    }
+
     function sendText() {
       var input = els.pane.querySelector('#composer-input');
       if (!input) return;
@@ -3564,12 +3624,15 @@
       if (state.pendingFile) { sendFile(state.pendingFile); return; }
       var text = input.value.trim();
       if (!text || state.sending) return;
+      var sessionId = state.selectedSession;
+      var chatId = state.selectedChat;
       state.sending = true;
       var payload = { text: text, reply_to_wa_id: state.replyTo ? state.replyTo.wa_message_id : null };
-      jsonApi('/inbox/' + encodeURIComponent(state.selectedSession) + '/' + encodeURIComponent(state.selectedChat) + '/send', 'POST', payload)
+      jsonApi('/inbox/' + encodeURIComponent(sessionId) + '/' + encodeURIComponent(chatId) + '/send', 'POST', payload)
         .then(function () {
           input.value = ''; autoGrow(input);
-          state.replyTo = null;
+          clearDraft(sessionId, chatId);
+          if (state.selectedSession === sessionId && state.selectedChat === chatId) state.replyTo = null;
           reloadStream();
           loadConversations();
         })
@@ -3702,25 +3765,36 @@
     function sendFile(file, isVoice) {
       if (!file || state.sending) return;
       state.sending = true;
-      var fd = new FormData();
-      var endpoint = isVoice ? '/voice' : '/media';
-      var field = isVoice ? 'audio' : 'file';
-      fd.append(field, file);
-      var captionInput = null;
-      if (!isVoice) {
-        captionInput = els.pane.querySelector('#composer-input');
-        if (captionInput && captionInput.value.trim()) fd.append('caption', captionInput.value.trim());
+      // Se fijan línea y chat al empezar: comprimir tarda y el usuario podría
+      // cambiar de conversación mientras tanto.
+      var sessionId = state.selectedSession;
+      var chatId = state.selectedChat;
+      var input = els.pane.querySelector('#composer-input');
+      var caption = !isVoice && input ? input.value.trim() : '';
+      var sameChat = function () { return state.selectedSession === sessionId && state.selectedChat === chatId; };
+
+      function upload(f) {
+        var fd = new FormData();
+        fd.append(isVoice ? 'audio' : 'file', f);
+        if (caption) fd.append('caption', caption);
+        return fetch('/inbox/' + encodeURIComponent(sessionId) + '/' + encodeURIComponent(chatId) + (isVoice ? '/voice' : '/media'), {
+          method: 'POST', body: fd, headers: { 'Accept': 'application/json' }, credentials: 'same-origin',
+        }).then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) {
+          if (!r.ok) throw new Error(d.error || 'Error al enviar');
+          // El pie de foto y el borrador se limpian solo si el envío salió bien.
+          if (!isVoice) {
+            clearDraft(sessionId, chatId);
+            if (sameChat() && input) { input.value = ''; autoGrow(input); }
+            if (sameChat()) clearPendingFile();
+          }
+          reloadStream(); loadConversations();
+        }); }).catch(function (e) { toast(e.message, true); })
+          .finally(function () { state.sending = false; if (sameChat() && input) input.focus(); });
       }
-      fetch('/inbox/' + encodeURIComponent(state.selectedSession) + '/' + encodeURIComponent(state.selectedChat) + endpoint, {
-        method: 'POST', body: fd, headers: { 'Accept': 'application/json' }, credentials: 'same-origin',
-      }).then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) {
-        if (!r.ok) throw new Error(d.error || 'Error al enviar');
-        // El pie de foto se limpia solo si el envío salió bien: así no se pierde al fallar.
-        if (captionInput) { captionInput.value = ''; autoGrow(captionInput); }
-        clearPendingFile();
-        reloadStream(); loadConversations();
-      }); }).catch(function (e) { toast(e.message, true); })
-        .finally(function () { state.sending = false; if (captionInput) captionInput.focus(); });
+
+      // Las fotos grandes se reducen antes de subirlas; si algo falla, se manda igual.
+      if (!isVoice && shouldCompressImage(file)) compressImage(file).then(upload, function () { return upload(file); });
+      else upload(file);
     }
 
     /* ── Panel de contacto ── */

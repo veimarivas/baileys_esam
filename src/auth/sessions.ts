@@ -48,7 +48,11 @@ export class SessionStore {
     if (!cookie) return null;
     const [id, signature] = cookie.split('.');
     if (!id || !signature) return null;
-    if (!crypto.timingSafeEqual(Buffer.from(this.sign(id)), Buffer.from(signature))) return null;
+    // timingSafeEqual exige el mismo largo: una firma manipulada de otro tamaño
+    // debe rechazarse, no hacer explotar el pedido con un 500.
+    const expected = Buffer.from(this.sign(id));
+    const given = Buffer.from(signature);
+    if (expected.length !== given.length || !crypto.timingSafeEqual(expected, given)) return null;
     const row = get<WebSession>('SELECT * FROM web_sessions WHERE id = ?', id);
     if (!row) return null;
     if (new Date(row.expires_at).getTime() < Date.now()) return null;

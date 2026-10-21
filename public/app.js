@@ -2422,6 +2422,9 @@
       tab: 'individual',
       quickReplies: [],
       replyTo: null,
+      // Imagen pegada (captura) esperando confirmación; se envía con el texto del campo como pie de foto.
+      pendingFile: null,
+      pendingFileUrl: '',
       pinned: [],
       messages: [],
       messagesAfter: 0,
@@ -2893,6 +2896,7 @@
       // Desde «Equipo» se queda en esa pestaña para seguir eligiendo compañeros.
       state.tab = /@g\.us$/.test(chatId) ? 'group' : (state.tab === 'team' ? 'team' : 'individual');
       state.replyTo = null;
+      clearPendingFile();
       state.pinned = [];
       state.messages = [];
       state.messagesAfter = 0;
@@ -3361,6 +3365,7 @@
       // El campo de texto ocupa toda la fila y las herramientas van abajo: así
       // hay espacio real para escribir sin que los botones lo compriman.
       return '<div class="composer">' + reply +
+        '<div id="attach-preview" class="attach-preview d-none"></div>' +
         '<div id="quick-list" class="quick-pop d-none"></div>' +
         '<div class="composer-row">' +
           '<div class="composer-field">' +
@@ -3408,8 +3413,11 @@
       input.addEventListener('keydown', function (ev) {
         if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); sendText(); }
       });
+      // Pegar una captura: se muestra la vista previa en vez de enviarla de una.
+      els.pane.querySelector('.composer').addEventListener('paste', handlePaste);
       // Altura inicial de dos líneas: el campo se ve cómodo antes de escribir.
       autoGrow(input);
+      renderAttachPreview();
 
       els.pane.querySelector('#btn-send').addEventListener('click', sendText);
       els.pane.querySelector('#btn-attach').addEventListener('click', function () { els.pane.querySelector('#attach-input').click(); });
@@ -3483,9 +3491,77 @@
       el.style.height = Math.min(el.scrollHeight, 180) + 'px';
     }
 
+    // El servidor corta las subidas a 6 MB (uploadSticker en src/panel/server.ts).
+    var MAX_UPLOAD_BYTES = 6 * 1024 * 1024;
+
+    function fmtBytes(bytes) {
+      if (!bytes) return '0 KB';
+      return bytes >= 1024 * 1024 ? (bytes / (1024 * 1024)).toFixed(1) + ' MB' : Math.max(1, Math.round(bytes / 1024)) + ' KB';
+    }
+
+    // Pegar una captura (Ctrl+V) deja la imagen en vista previa en vez de mandarla
+    // de una: se confirma con el botón de enviar o Enter. El pegado de texto sigue igual.
+    function handlePaste(ev) {
+      var dt = ev.clipboardData;
+      if (!dt) return;
+      // Solo el campo de escribir (u otro punto del compositor), no buscadores ni formularios.
+      if (ev.target && /^(INPUT|SELECT)$/.test(ev.target.tagName)) return;
+      var file = null;
+      var i;
+      if (dt.items) {
+        for (i = 0; i < dt.items.length; i++) {
+          if (dt.items[i].kind === 'file' && /^image\//.test(dt.items[i].type)) { file = dt.items[i].getAsFile(); break; }
+        }
+      }
+      if (!file && dt.files) {
+        for (i = 0; i < dt.files.length; i++) {
+          if (/^image\//.test(dt.files[i].type)) { file = dt.files[i]; break; }
+        }
+      }
+      if (!file) return;
+      ev.preventDefault();
+      if (file.size > MAX_UPLOAD_BYTES) {
+        toast('La imagen pesa ' + fmtBytes(file.size) + ' y el máximo es 6 MB.', true);
+        return;
+      }
+      setPendingFile(file);
+    }
+
+    function setPendingFile(file) {
+      clearPendingFile();
+      state.pendingFile = file;
+      state.pendingFileUrl = URL.createObjectURL(file);
+      renderAttachPreview();
+      focusComposer();
+    }
+
+    function clearPendingFile() {
+      if (state.pendingFileUrl) { URL.revokeObjectURL(state.pendingFileUrl); state.pendingFileUrl = ''; }
+      state.pendingFile = null;
+      renderAttachPreview();
+    }
+
+    function renderAttachPreview() {
+      var box = els.pane.querySelector('#attach-preview');
+      if (!box) return;
+      var f = state.pendingFile;
+      if (!f || !state.pendingFileUrl) { box.classList.add('d-none'); box.innerHTML = ''; return; }
+      box.classList.remove('d-none');
+      box.innerHTML = '<div class="ap-thumb"><img src="' + state.pendingFileUrl + '" alt="Vista previa de la imagen pegada"></div>' +
+        '<div class="ap-info">' +
+          '<div class="ap-title">Imagen lista para enviar</div>' +
+          '<div class="ap-sub">' + escapeHtml(f.name || 'imagen pegada') + ' · ' + fmtBytes(f.size) + '</div>' +
+          '<div class="ap-hint">El texto del campo se envía como pie de foto.</div>' +
+        '</div>' +
+        '<button type="button" class="ap-cancel" id="attach-preview-cancel" aria-label="Quitar imagen"><span class="ri-close-line"></span></button>';
+      box.querySelector('#attach-preview-cancel').addEventListener('click', function () { clearPendingFile(); });
+    }
+
     function sendText() {
       var input = els.pane.querySelector('#composer-input');
       if (!input) return;
+      // Con una imagen pegada, el «enviar» la manda junto al texto del campo.
+      if (state.pendingFile) { sendFile(state.pendingFile); return; }
       var text = input.value.trim();
       if (!text || state.sending) return;
       state.sending = true;
@@ -3630,17 +3706,21 @@
       var endpoint = isVoice ? '/voice' : '/media';
       var field = isVoice ? 'audio' : 'file';
       fd.append(field, file);
+      var captionInput = null;
       if (!isVoice) {
-        var input = els.pane.querySelector('#composer-input');
-        if (input && input.value.trim()) { fd.append('caption', input.value.trim()); input.value = ''; }
+        captionInput = els.pane.querySelector('#composer-input');
+        if (captionInput && captionInput.value.trim()) fd.append('caption', captionInput.value.trim());
       }
       fetch('/inbox/' + encodeURIComponent(state.selectedSession) + '/' + encodeURIComponent(state.selectedChat) + endpoint, {
         method: 'POST', body: fd, headers: { 'Accept': 'application/json' }, credentials: 'same-origin',
       }).then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) {
         if (!r.ok) throw new Error(d.error || 'Error al enviar');
+        // El pie de foto se limpia solo si el envío salió bien: así no se pierde al fallar.
+        if (captionInput) { captionInput.value = ''; autoGrow(captionInput); }
+        clearPendingFile();
         reloadStream(); loadConversations();
       }); }).catch(function (e) { toast(e.message, true); })
-        .finally(function () { state.sending = false; });
+        .finally(function () { state.sending = false; if (captionInput) captionInput.focus(); });
     }
 
     /* ── Panel de contacto ── */

@@ -1385,10 +1385,8 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
       clauses.push(`session_id IN (${ids})`);
       params.push(...scope);
     }
-    if (!esamEsAdmin(user)) {
-      clauses.push('assigned_agent_id = ?');
-      params.push(user.id);
-    }
+    // Mismo alcance que la lista del inbox (sesiones/números del usuario): así
+    // el badge del menú coincide con lo que ve y baja al marcar como leído.
     const row = get<{ c: number }>(
       `SELECT COALESCE(SUM(unread_count), 0) c FROM conversations WHERE ${clauses.join(' AND ')}`,
       ...params,

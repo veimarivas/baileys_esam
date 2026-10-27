@@ -706,6 +706,9 @@ body { min-width: 0; }
 }
 .app-menu .navbar-nav .nav-link.menu-link:hover { background: rgba(255, 255, 255, 0.07); }
 .app-menu .navbar-nav .nav-link.menu-link .badge { margin-left: auto; }
+/* El badge del menú existe siempre y se oculta con el atributo `hidden`; sin
+   esta regla, el `display: inline-flex` de `.badge` lo dejaría visible en 0. */
+.app-menu .navbar-nav .nav-link.menu-link .badge[hidden] { display: none !important; }
 
 .page-title-box {
   padding-bottom: 1.1rem;
@@ -1692,8 +1695,11 @@ html[data-bs-theme="dark"] .bubble-row .bubble.has-sticker { background: transpa
 .rx-pop-id { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
 .rx-pop-name { color: var(--ib-ink, #101828); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rx-pop-phone { color: var(--ib-ink-mute, #98a2b3); font-size: 0.66rem; font-variant-numeric: tabular-nums; }
-html[data-bs-theme="dark"] .rx-pop { background: #1d2a3d; color: #e6edf3; border-color: #2a3a52; }
-html[data-bs-theme="dark"] .rx-pop .rx-pop-av { color: #cfe4ff; }
+html[data-bs-theme="dark"] .rx-pop { background: #1d2a3d; color: #e6edf3; border-color: #2a3a52; box-shadow: 0 18px 44px -14px rgba(0, 0, 0, 0.7); }
+html[data-bs-theme="dark"] .rx-pop .rx-pop-title { color: #c4cfdd; border-bottom-color: #2a3a52; }
+html[data-bs-theme="dark"] .rx-pop .rx-pop-name { color: #f1f5fb; }
+html[data-bs-theme="dark"] .rx-pop .rx-pop-phone { color: #8fa0b6; }
+html[data-bs-theme="dark"] .rx-pop .rx-pop-av { background: rgba(79, 179, 214, 0.16); color: #cfe4ff; }
 
 /* Cita */
 .quote {
@@ -2242,7 +2248,21 @@ html[data-bs-theme="dark"] .bubble .media-missing .mm-retry { color: #8fd0ea; }
   box-shadow: 0 18px 40px -20px rgba(6, 32, 63, 0.5);
   padding: 0.4rem;
 }
-.composer .emoji-pop2 { left: auto; right: 0; width: 244px; display: flex; flex-wrap: wrap; gap: 0.15rem; max-height: 224px; overflow-y: auto; }
+.composer .emoji-pop2 { left: auto; right: 0; width: 244px; display: block; max-height: 224px; overflow-y: auto; }
+.composer .emoji-pop2 .emoji-sec {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.1rem 0.2rem 0.24rem;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--ib-ink-mute);
+}
+.composer .emoji-pop2 .emoji-sec-row,
+.composer .emoji-pop2 .emoji-all { display: flex; flex-wrap: wrap; gap: 0.15rem; }
+.composer .emoji-pop2 .emoji-sec-row { padding-bottom: 0.3rem; margin-bottom: 0.24rem; border-bottom: 1px solid var(--ib-line); }
 .composer .quick-item { display: block; width: 100%; text-align: left; border: 0; background: transparent; padding: 0.45rem 0.55rem; border-radius: 8px; cursor: pointer; }
 .composer .quick-item:hover { background: var(--ib-brand-soft); }
 .composer .quick-item code { background: rgba(4, 84, 116, 0.12); color: var(--ib-brand); border-radius: 6px; padding: 0.05rem 0.38rem; font-size: 0.68rem; font-weight: 700; }

@@ -383,6 +383,7 @@ CREATE TABLE IF NOT EXISTS message_reactions (
   chat_id    TEXT NOT NULL,
   actor_type TEXT NOT NULL,   -- customer | agent
   actor_id   TEXT,            -- users.id (agente) o chat_id (cliente)
+  actor_name TEXT,            -- nombre visible informado por WhatsApp (pushName)
   emoji      TEXT NOT NULL,
   created_at TEXT NOT NULL,
   UNIQUE(message_id, actor_type, actor_id)

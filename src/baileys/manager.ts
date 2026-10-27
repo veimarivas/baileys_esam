@@ -1469,7 +1469,7 @@ export class SessionManager implements OutboundSender {
         emoji,
       );
     }
-    setReaction(target.id, sessionId, msg.chatId, actorType, actorId, emoji);
+    setReaction(target.id, sessionId, msg.chatId, actorType, actorId, emoji, msg.fromMe ? null : msg.pushName);
     panelBus.publish('reaction', { sessionId, chatId: msg.chatId, messageId: target.id });
   }
 

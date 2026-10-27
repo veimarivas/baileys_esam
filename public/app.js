@@ -247,6 +247,46 @@
   })();
   var REACTION_EMOJIS = EMOJI_LIST;
 
+  // Emojis más usados (localStorage): se muestran arriba en el compositor y en
+  // la barra rápida de reacciones para no buscarlos en todo el catálogo.
+  var EMOJI_USAGE_KEY = 'baileys-emoji-usage';
+  function readEmojiUsage() {
+    try {
+      var raw = JSON.parse(localStorage.getItem(EMOJI_USAGE_KEY) || '{}');
+      return raw && typeof raw === 'object' ? raw : {};
+    } catch (_) { return {}; }
+  }
+  function bumpEmojiUsage(emoji) {
+    if (!emoji) return;
+    var usage = readEmojiUsage();
+    usage[emoji] = (Number(usage[emoji]) || 0) + 1;
+    try {
+      var keys = Object.keys(usage);
+      // Catálogo acotado: si crece demasiado se quedan los más usados.
+      if (keys.length > 120) {
+        keys.sort(function (a, b) { return (usage[b] || 0) - (usage[a] || 0); })
+          .slice(80)
+          .forEach(function (k) { delete usage[k]; });
+      }
+      localStorage.setItem(EMOJI_USAGE_KEY, JSON.stringify(usage));
+    } catch (_) { /* modo privado / cuota llena */ }
+  }
+  function topEmojis(limit) {
+    var usage = readEmojiUsage();
+    return Object.keys(usage)
+      .filter(function (e) { return EMOJI_LIST.indexOf(e) !== -1 && (Number(usage[e]) || 0) > 0; })
+      .sort(function (a, b) { return (usage[b] || 0) - (usage[a] || 0); })
+      .slice(0, limit || 8);
+  }
+  // Barra rápida de reacciones: primero lo que más se usa y luego las de WhatsApp.
+  function quickReactionEmojis() {
+    var out = [];
+    topEmojis(8).concat(QUICK_EMOJIS).forEach(function (e) {
+      if (out.indexOf(e) === -1) out.push(e);
+    });
+    return out.slice(0, 8);
+  }
+
   // Una sola conexión SSE por página, compartida por el inbox, /notes y los
   // recordatorios. Solo en páginas del panel con acceso a Conversaciones.
   var liveSourceInstance;
@@ -1142,10 +1182,10 @@
         if (existing) { existing.remove(); return; }
         var pop = document.createElement('div');
         pop.className = 'emoji-pop';
-        var pick = function (e) { ctx.onReact(msg, e); pop.remove(); };
+        var pick = function (e) { bumpEmojiUsage(e); ctx.onReact(msg, e); pop.remove(); };
         var row = document.createElement('div');
         row.className = 'emoji-row';
-        QUICK_EMOJIS.forEach(function (e) {
+        quickReactionEmojis().forEach(function (e) {
           var b = document.createElement('button');
           b.type = 'button'; b.textContent = e; b.title = e;
           b.addEventListener('click', function (ev2) { ev2.stopPropagation(); pick(e); });
@@ -2570,9 +2610,45 @@
       return (state.tab === 'group') === isGroupChat(c);
     }
 
+    // Contador del menú lateral (Conversaciones): se recalcula con la lista en
+    // vivo, así baja al leer un chat o cuando WhatsApp marca leído en el teléfono.
+    function syncNavUnread() {
+      var total = state.conversations.reduce(function (sum, c) {
+        return sum + (Number(c.unread_count) || 0);
+      }, 0);
+      var badge = document.querySelector('[data-nav-badge="/conversations"]');
+      if (!badge) return;
+      badge.textContent = total > 99 ? '99+' : String(total);
+      badge.hidden = total === 0;
+      badge.title = total ? total + ' mensaje(s) sin leer' : '';
+    }
+
+    // Acuse de lectura del chat abierto: limpia su contador y el badge del menú.
+    function markChatRead(sessionId, chatId) {
+      if (!sessionId || !chatId) return Promise.resolve();
+      return jsonApi('/inbox/' + encodeURIComponent(sessionId) + '/' + encodeURIComponent(chatId) + '/read', 'POST')
+        .then(function () {
+          state.conversations.forEach(function (c) {
+            if (c.session_id === sessionId && c.chat_id === chatId) c.unread_count = 0;
+          });
+          if (state.syntheticConv && state.syntheticConv.session_id === sessionId && state.syntheticConv.chat_id === chatId) {
+            state.syntheticConv.unread_count = 0;
+          }
+          renderTabs();
+          renderList();
+          syncNavUnread();
+        })
+        .catch(function () {});
+    }
+
     function loadConversations() {
       return api('/inbox/conversations')
-        .then(function (rows) { state.conversations = rows; renderTabs(); renderList(); })
+        .then(function (rows) {
+          state.conversations = rows;
+          renderTabs();
+          renderList();
+          syncNavUnread();
+        })
         .catch(function () {});
     }
 
@@ -3024,12 +3100,11 @@
       }
       if (state.tab === 'group') loadParticipants();
       if (push) history.pushState({ chat: chatId }, '', '/conversations/' + encodeURIComponent(chatId));
-      // Acuse de lectura (local + WhatsApp).
-      jsonApi('/inbox/' + encodeURIComponent(sessionId) + '/' + encodeURIComponent(chatId) + '/read', 'POST').then(function () {
-        var c = selectedConversation();
-        if (c) c.unread_count = 0;
-        renderList();
-      }).catch(function () {});
+      // Al entrar a la conversación (también desde un enlace directo) el cursor
+      // queda en el campo de texto, listo para escribir.
+      focusComposer();
+      // Acuse de lectura (local + WhatsApp) y badge del menú.
+      markChatRead(sessionId, chatId);
     }
 
     function messagesUrl(params) {
@@ -3704,16 +3779,48 @@
       // Encuestas
       els.pane.querySelector('#btn-poll').addEventListener('click', openPollDialog);
 
-      // Emojis
+      // Emojis: primero los más usados y abajo el catálogo completo.
       var emojiBtn = els.pane.querySelector('#btn-emoji');
       var emojiList = els.pane.querySelector('#emoji-list');
-      EMOJI_LIST.forEach(function (e) {
+      function emojiButton(e) {
         var b = document.createElement('button');
-        b.type = 'button'; b.className = 'emoji-btn'; b.textContent = e;
-        b.addEventListener('click', function () { input.value += e; autoGrow(input); saveDraft(input); input.focus(); });
-        emojiList.appendChild(b);
+        b.type = 'button'; b.className = 'emoji-btn'; b.textContent = e; b.title = e;
+        b.addEventListener('click', function () {
+          bumpEmojiUsage(e);
+          input.value += e;
+          autoGrow(input);
+          saveDraft(input);
+          input.focus();
+        });
+        return b;
+      }
+      function renderComposerEmojis() {
+        emojiList.innerHTML = '';
+        var top = topEmojis(8);
+        if (top.length) {
+          var head = document.createElement('div');
+          head.className = 'emoji-sec';
+          head.innerHTML = '<span class="ri-time-line" aria-hidden="true"></span> Más usados';
+          emojiList.appendChild(head);
+          var recent = document.createElement('div');
+          recent.className = 'emoji-sec-row';
+          top.forEach(function (e) { recent.appendChild(emojiButton(e)); });
+          emojiList.appendChild(recent);
+          var allHead = document.createElement('div');
+          allHead.className = 'emoji-sec';
+          allHead.textContent = 'Todos';
+          emojiList.appendChild(allHead);
+        }
+        var all = document.createElement('div');
+        all.className = 'emoji-all';
+        EMOJI_LIST.forEach(function (e) { all.appendChild(emojiButton(e)); });
+        emojiList.appendChild(all);
+      }
+      emojiBtn.addEventListener('click', function () {
+        var opening = emojiList.classList.contains('d-none');
+        if (opening) renderComposerEmojis();
+        emojiList.classList.toggle('d-none');
       });
-      emojiBtn.addEventListener('click', function () { emojiList.classList.toggle('d-none'); });
 
       var body = els.pane.querySelector('.chat-body');
       body.addEventListener('scroll', function () {
@@ -3752,7 +3859,10 @@
 
     function focusComposer() {
       var input = els.pane.querySelector('#composer-input');
-      if (input) input.focus();
+      if (!input) return;
+      input.focus();
+      // El cursor queda al final de lo ya escrito (o del borrador recuperado).
+      try { input.setSelectionRange(input.value.length, input.value.length); } catch (_) { /* no soportado */ }
     }
 
     function autoGrow(el) {
@@ -5063,7 +5173,15 @@
             var meta = els.pane.querySelector('#chat-meta');
             if (meta) meta.innerHTML = chatMetaHtml(c);
           });
-          if (state.selectedChat) fetchMessages(false);
+          if (state.selectedChat) {
+            fetchMessages(false).then(function () {
+              // Lo que llega al chat abierto y visible se considera leído:
+              // se limpia el contador local y el badge del menú.
+              if (document.visibilityState === 'visible' && document.hasFocus()) {
+                markChatRead(state.selectedSession, state.selectedChat);
+              }
+            });
+          }
         };
         var queue = function () {
           if (timer) return;
@@ -5133,10 +5251,25 @@
       setInterval(function () {
         loadConversations().then(function () {
           if (state.selectedChat) refreshOpenPerson();
+          if (state.selectedChat && document.visibilityState === 'visible' && document.hasFocus()) {
+            var c = selectedConversation();
+            if (c && c.unread_count > 0) markChatRead(state.selectedSession, state.selectedChat);
+          }
         });
         if (state.selectedChat) fetchMessages(false);
         if (state.directory && (state.tab === 'contacts' || state.search.trim())) loadDirectory(true);
       }, 20000);
+
+      // Al volver a la pestaña (o a la ventana) con un chat abierto, lo que ya
+      // se está viendo queda leído y el contador del menú se actualiza.
+      var markVisibleChatRead = function () {
+        if (!state.selectedChat) return;
+        if (document.visibilityState !== 'visible' || !document.hasFocus()) return;
+        var c = selectedConversation();
+        if (c && c.unread_count > 0) markChatRead(state.selectedSession, state.selectedChat);
+      };
+      document.addEventListener('visibilitychange', markVisibleChatRead);
+      window.addEventListener('focus', markVisibleChatRead);
     }
 
     /* ── Arranque ── */

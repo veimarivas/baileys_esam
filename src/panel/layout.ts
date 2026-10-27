@@ -137,7 +137,9 @@ function navList(user: UserRow, active: string, restrictToSettings = false, badg
   })
     .map((n) => {
       const count = badges[n.href] ?? 0;
-      const badge = count > 0 ? ` <span class="badge rounded-pill bg-danger ms-auto">${count}</span>` : '';
+      // El badge existe siempre (oculto en 0) para que app.js pueda actualizar
+      // el contador de Conversaciones en vivo sin recargar la página.
+      const badge = ` <span class="badge rounded-pill bg-danger ms-auto nav-unread-badge" data-nav-badge="${esc(n.href)}"${count > 0 ? '' : ' hidden'}>${count > 99 ? '99+' : count}</span>`;
       const isActive = n.href === activeHref || (!activeHref && n.section === active);
       return `<li class="nav-item">
           <a class="nav-link menu-link${isActive ? ' active' : ''}" href="${n.href}"${isActive ? ' aria-current="page"' : ''}>

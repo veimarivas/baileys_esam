@@ -91,6 +91,9 @@ export function migrate(): void {
   addColumnIfMissing('messages', 'pinned_at', 'TEXT');
   addColumnIfMissing('messages', 'pinned_by', 'INTEGER');
   db.exec('CREATE INDEX IF NOT EXISTS idx_messages_pinned ON messages(session_id, chat_id, pinned_at)');
+  // Nombre de quien reaccionó (pushName de WhatsApp). Sin esto, en grupos solo
+  // se conocía el JID y la ficha podía no tener nombre: se mostraba el número.
+  addColumnIfMissing('message_reactions', 'actor_name', 'TEXT');
   // Políticas anti-baneo ampliadas (envío humano y protección de reputación).
   addColumnIfMissing('anti_ban_policies', 'typing_simulation', 'INTEGER NOT NULL DEFAULT 1');
   addColumnIfMissing('anti_ban_policies', 'min_gap_seconds', 'INTEGER NOT NULL DEFAULT 3');

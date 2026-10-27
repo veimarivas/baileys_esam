@@ -3,7 +3,7 @@ import { all, get, run } from '../db/index.js';
 import { nowIso } from '../util/async.js';
 import { sessionScopeFor, type UserRow } from '../auth/users.js';
 import { phoneFromChatId } from './phone.js';
-import { resolveChatId } from './lid.js';
+import { lidForPhone, phoneForLid, resolveChatId } from './lid.js';
 import { noteCountsFor, type PersonNoteCounts } from './contacts.js';
 import { personTagsByKeys, phoneKeyOf, type PersonTags } from './person.js';
 import { teamTagFor, type TeamTag } from './team.js';
@@ -382,14 +382,21 @@ function messageReactions(messageIds: number[], sessionId: string): Map<number, 
   const map = new Map<number, MessageDTO['reactions']>();
   if (!messageIds.length) return map;
   const placeholders = messageIds.map(() => '?').join(',');
-  const rows = all<{ message_id: number; emoji: string; actor_type: string; actor_id: string | null }>(
-    `SELECT message_id, emoji, actor_type, actor_id FROM message_reactions WHERE message_id IN (${placeholders})`,
+  const rows = all<{
+    message_id: number;
+    emoji: string;
+    actor_type: string;
+    actor_id: string | null;
+    actor_name: string | null;
+  }>(
+    `SELECT message_id, emoji, actor_type, actor_id, actor_name
+       FROM message_reactions WHERE message_id IN (${placeholders})`,
     ...messageIds,
   );
   const cache = new Map<string, { name: string; phone: string | null }>();
   for (const r of rows) {
     const list = map.get(r.message_id) ?? [];
-    const actor = reactionActor(sessionId, r.actor_type, r.actor_id, cache);
+    const actor = reactionActor(sessionId, r.actor_type, r.actor_id, r.actor_name, cache);
     list.push({
       emoji: r.emoji,
       actor_type: r.actor_type,
@@ -402,21 +409,74 @@ function messageReactions(messageIds: number[], sessionId: string): Map<number, 
   return map;
 }
 
+/** Variantes de un JID para buscar el nombre con el que se guardó un mensaje. */
+function jidVariants(id: string): string[] {
+  const out = new Set<string>([id]);
+  const resolved = resolveChatId(id);
+  if (resolved) out.add(resolved);
+  if (id.endsWith('@lid')) {
+    const pn = phoneForLid(id);
+    if (pn) {
+      out.add(pn);
+      const d = phoneFromChatId(pn);
+      if (d) out.add(`${d}@c.us`);
+    }
+  } else {
+    const d = phoneFromChatId(id);
+    if (d) {
+      out.add(`${d}@c.us`);
+      out.add(`${d}@s.whatsapp.net`);
+    }
+    const lid = lidForPhone(id);
+    if (lid) out.add(lid);
+  }
+  return [...out];
+}
+
+/** Último nombre (pushName) con el que esa persona escribió en la línea. */
+function senderNameFromMessages(sessionId: string, actorId: string): string {
+  const variants = jidVariants(actorId);
+  if (!variants.length) return '';
+  const ph = variants.map(() => '?').join(',');
+  const row = get<{ contact_name: string }>(
+    `SELECT contact_name FROM messages
+      WHERE session_id = ? AND sender_jid IN (${ph})
+        AND contact_name IS NOT NULL AND contact_name <> ''
+      ORDER BY occurred_at DESC, id DESC LIMIT 1`,
+    sessionId,
+    ...variants,
+  );
+  if (row?.contact_name) return row.contact_name.trim();
+  // Misma persona en otra línea (el nombre de WhatsApp es el mismo).
+  const anyLine = get<{ contact_name: string }>(
+    `SELECT contact_name FROM messages
+      WHERE sender_jid IN (${ph})
+        AND contact_name IS NOT NULL AND contact_name <> ''
+      ORDER BY occurred_at DESC, id DESC LIMIT 1`,
+    ...variants,
+  );
+  return anyLine?.contact_name?.trim() ?? '';
+}
+
 /**
  * Quién reaccionó: nombre y número. El compañero del sistema (`users`), el
- * nombre de la ficha, el registrado a mano para esa persona en cualquier línea
- * o su número de WhatsApp. En reacciones guardadas antes de 2026-10-18 en un
- * grupo queda el JID del grupo (WhatsApp solo informa quién reacciona en vivo)
- * y no se puede saber: se devuelve vacío y el panel muestra "Participante".
+ * nombre de la ficha, el pushName con el que reaccionó o el último nombre con
+ * el que escribió en la línea. En reacciones antiguas de grupo solo quedó el
+ * JID del grupo (WhatsApp no informaba el autor) y no se puede saber: se
+ * devuelve vacío y el panel muestra "Participante".
  */
 function reactionActor(
   sessionId: string,
   actorType: string,
   actorId: string | null,
+  actorName: string | null,
   cache: Map<string, { name: string; phone: string | null }>,
 ): { name: string; phone: string | null } {
   const id = String(actorId ?? '').trim();
-  const key = `${actorType}|${id}`;
+  const stored = String(actorName ?? '').replace(/\s+/g, ' ').trim();
+  // El nombre guardado forma parte de la clave: dos reacciones del mismo actor
+  // pueden tener distinto dato (una vieja sin nombre y una nueva con pushName).
+  const key = `${actorType}|${id}|${stored}`;
   const hit = cache.get(key);
   if (hit) return hit;
 
@@ -428,8 +488,11 @@ function reactionActor(
       const user = get<{ name: string | null }>('SELECT name FROM users WHERE id = ?', Number(id) || -1);
       out = { name: user?.name || 'Agente', phone: null };
     }
-  } else if (!id || id.endsWith('@g.us')) {
-    out = { name: '', phone: null };
+  } else if (!id) {
+    out = { name: stored, phone: null };
+  } else if (id.endsWith('@g.us')) {
+    // Reacción vieja sin autor: solo se conocía el grupo.
+    out = { name: stored, phone: null };
   } else {
     const chat = resolveChatId(id);
     const contact = get<{ name: string | null; phone: string | null }>(
@@ -440,7 +503,23 @@ function reactionActor(
     const phone = contact?.phone || phoneFromChatId(chat) || null;
     const personKey = phoneKeyOf(phone || chat);
     const tags = personKey ? personTagsByKeys([personKey]).get(personKey) : undefined;
-    out = { name: contact?.name || tags?.full_name || '', phone };
+    const globalContact = personKey
+      ? get<{ name: string }>(
+          `SELECT name FROM contacts
+            WHERE phone_key = ? AND chat_id NOT LIKE '%@g.us'
+              AND name IS NOT NULL AND name <> ''
+            ORDER BY updated_at DESC LIMIT 1`,
+          personKey,
+        )
+      : undefined;
+    const name =
+      contact?.name ||
+      stored ||
+      senderNameFromMessages(sessionId, id) ||
+      globalContact?.name ||
+      tags?.full_name ||
+      '';
+    out = { name, phone };
   }
   cache.set(key, out);
   return out;
@@ -890,6 +969,7 @@ export function setReaction(
   actorType: 'agent' | 'customer',
   actorId: string,
   emoji: string,
+  actorName?: string | null,
 ): void {
   if (!emoji) {
     run(
@@ -901,14 +981,17 @@ export function setReaction(
     return;
   }
   run(
-    `INSERT INTO message_reactions (message_id, session_id, chat_id, actor_type, actor_id, emoji, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(message_id, actor_type, actor_id) DO UPDATE SET emoji = excluded.emoji`,
+    `INSERT INTO message_reactions (message_id, session_id, chat_id, actor_type, actor_id, actor_name, emoji, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(message_id, actor_type, actor_id) DO UPDATE SET
+       emoji = excluded.emoji,
+       actor_name = COALESCE(excluded.actor_name, message_reactions.actor_name)`,
     messageId,
     sessionId,
     chatId,
     actorType,
     actorId,
+    String(actorName ?? '').replace(/\s+/g, ' ').trim() || null,
     emoji,
     nowIso(),
   );
@@ -917,11 +1000,11 @@ export function setReaction(
 /** Reacciones de un mensaje (para devolver el estado tras reaccionar). */
 export function reactionsFor(messageId: number, sessionId: string): MessageDTO['reactions'] {
   const cache = new Map<string, { name: string; phone: string | null }>();
-  return all<{ emoji: string; actor_type: string; actor_id: string | null }>(
-    'SELECT emoji, actor_type, actor_id FROM message_reactions WHERE message_id = ?',
+  return all<{ emoji: string; actor_type: string; actor_id: string | null; actor_name: string | null }>(
+    'SELECT emoji, actor_type, actor_id, actor_name FROM message_reactions WHERE message_id = ?',
     messageId,
   ).map((r) => {
-    const actor = reactionActor(sessionId, r.actor_type, r.actor_id, cache);
+    const actor = reactionActor(sessionId, r.actor_type, r.actor_id, r.actor_name, cache);
     return { emoji: r.emoji, actor_type: r.actor_type, actor_id: r.actor_id, name: actor.name, phone: actor.phone };
   });
 }

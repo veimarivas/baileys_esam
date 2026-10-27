@@ -188,6 +188,7 @@ export interface MessageReactionRow {
   chat_id: string;
   actor_type: string;
   actor_id: string | null;
+  actor_name: string | null;
   emoji: string;
   created_at: string;
 }

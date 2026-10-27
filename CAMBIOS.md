@@ -1928,6 +1928,28 @@ Objetivo: seguir en la ficha de cada persona todo lo que le envió el sistema (c
 
 ---
 
+## 56. Notas de nivelación por WhatsApp, firma «Atte:» y envíos por área en la ficha (2026-10-26)
+
+- **Firma en todos los mensajes masivos:** `createBatch` acepta `signature` y agrega al final de cada mensaje «Atte: nombre completo» (una sola vez, aunque el texto ya la traiga: `withSignature`).
+  - La API `POST /api/v1/batches` recibe `signature`.
+  - Cronogramas manda el nombre completo de quien envía en todos los lotes (cobranzas, notas, nivelación, asistencia, grupos, participantes, prospectos).
+  - Los recordatorios automáticos no la llevan, porque no los envía una persona.
+- **Ficha › Envíos:** selector **Cronológico** (todos los envíos, del más nuevo al más viejo, con separador por día) o **Por área** (Contabilidad, Académico, Marketing, Otros; cada una en orden cronológico). Se recuerda en `localStorage` (`sends-view`).
+- **Notas de nivelación:** el historial distingue «Notas de nivelación» (`meta.modo = 'nivelacion'`) de «Notas del módulo».
+- **Cronogramas** (repo aparte):
+  - `App\Support\MensajeNotas`: un solo lugar para el texto de las notas. **La vista previa del modal y el envío son el mismo texto**. Antes el modal mostraba un texto y Seguimiento ESAM enviaba otro con su plantilla; ahora va como `body_override`.
+    - **Regular** reprobado: se agrega que debe realizar la nivelación y estar atento al comunicado de la actividad.
+    - **Nivelación** (solo para quienes reprobaron la nota regular): si aprobó, la nota máxima es 71. Si reprobó de nuevo o no tiene nota de nivelación, la siguiente nivelación (2da instancia) tiene un costo y debe comunicarse con el responsable del programa y con el área contable.
+    - Los nombres se limpian de tabuladores y saltos de línea, que rompían la negrita en WhatsApp.
+  - **Botón «Nivelación»** en el tab Módulos del programa, visible cuando el módulo tiene notas de nivelación registradas. Usa el mismo modal con `?modo=nivelacion` y envía con `modo: nivelacion`. La referencia `notas:<modo>:…` no choca con el envío regular del mismo día.
+  - La vista previa del modal muestra también la línea «Atte: …».
+  - El aviso de inasistencia reemplaza «Enviado por:» por la firma «Atte:».
+- **Pruebas:**
+  - baileys: `test/person-sends.test.ts` (+2): firma única y clasificación de nivelación. `npm run lint`, `npm run typecheck` y `npm test` (147/147) limpios;
+  - cronogramas: verificado con el módulo 1249 en una transacción revertida y la API simulada (11/11): textos de cada caso, envío igual a la vista previa, modo, referencia y firma.
+
+---
+
 ## Notas de operación
 
 - En producción usar `start-baileys.bat` / pm2 / systemd (no `npm run dev`).

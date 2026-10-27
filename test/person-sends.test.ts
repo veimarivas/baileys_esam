@@ -89,3 +89,18 @@ describe('envíos del sistema a una persona', () => {
     assert.equal(classifySend({}).category, 'otros');
   });
 });
+
+describe('firma «Atte:» en los mensajes masivos', () => {
+  it('agrega la firma al final una sola vez', async () => {
+    const { withSignature } = await import('../src/core/batch-service.js');
+    assert.equal(withSignature('Hola', 'Ana  Pérez'), 'Hola\n\nAtte: Ana Pérez');
+    assert.equal(withSignature('Hola\n\nAtte: Ana Pérez', 'Ana Pérez'), 'Hola\n\nAtte: Ana Pérez');
+    assert.equal(withSignature('Hola', null), 'Hola');
+    assert.equal(withSignature(null, 'Ana'), null);
+  });
+
+  it('las notas de nivelación se distinguen de las regulares', () => {
+    assert.equal(classifySend({ tipo: 'notas', modo: 'nivelacion' }).title, 'Notas de nivelación');
+    assert.equal(classifySend({ tipo: 'notas', modo: 'regular' }).title, 'Notas del módulo');
+  });
+});

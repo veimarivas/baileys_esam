@@ -92,7 +92,9 @@ export function classifySend(meta: Record<string, any>): { category: SendCategor
       : modo === 'vencidas' ? 'Cuotas vencidas' : modo === 'proximas' ? 'Cuotas próximas a vencer' : 'Cobranza';
     return { category: 'cobranza', area: 'contabilidad', title, automatic };
   }
-  if (tipo === 'notas') return { category: 'notas', area: 'academico', title: 'Notas del módulo', automatic };
+  if (tipo === 'notas') {
+    return { category: 'notas', area: 'academico', title: meta.modo === 'nivelacion' ? 'Notas de nivelación' : 'Notas del módulo', automatic };
+  }
   if (tipo === 'asistencia') return { category: 'asistencia', area: 'academico', title: 'Aviso de inasistencia', automatic };
   if (tipo === 'prospectos') return { category: 'marketing', area: 'marketing', title: 'Mensaje de marketing', automatic };
   if (tipo === 'participantes' || tipo === 'grupo' || tipo === 'grupos' || tipo === 'academico' || meta.category === 'academico') {

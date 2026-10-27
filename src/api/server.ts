@@ -519,6 +519,8 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
             dryRun: !!body.dry_run,
             // Reenvío intencional (el usuario confirmó repetir lo ya enviado hoy).
             allowResend: !!body.allow_resend,
+            // Firma «Atte: nombre completo» de quien pidió el envío.
+            signature: typeof body.signature === 'string' ? body.signature : null,
             // Con confirmación se crea como programado (sin encolar) y enseguida pasa a «esperando confirmación».
             // (siempre la fecha de reserva: si la hora pedida ya pasó, createBatch lo encolaría sin confirmar)
             scheduledAt: needsConfirm ? '9999-12-31T00:00:00.000Z' : body.scheduled_at ?? null,

@@ -5485,3 +5485,16 @@ html[data-bs-theme="dark"] .ps-st.is-off { color: #cbd5e1; background: #23292f; 
 .ps-msg summary { cursor: pointer; font-size: 0.72rem; font-weight: 600; color: var(--esam-brand, #045474); }
 .ps-body { margin-top: 0.3rem; padding: 0.45rem 0.55rem; border-radius: 8px; background: #d9fdd3; color: #111b21; font-size: 0.76rem; white-space: pre-wrap; overflow-wrap: anywhere; }
 html[data-bs-theme="dark"] .ps-body { background: #005c4b; color: #e9edef; }
+.ps-view { display: inline-flex; border: 1px solid var(--ps-line); border-radius: 10px; overflow: hidden; margin-bottom: 0.5rem; }
+.ps-view-btn { border: 0; background: var(--vz-card-bg, #fff); color: var(--ps-ink); font-size: 0.72rem; font-weight: 700; padding: 0.25rem 0.6rem; display: inline-flex; align-items: center; gap: 0.25rem; cursor: pointer; }
+html[data-bs-theme="dark"] .ps-view-btn { background: #1d2125; }
+.ps-view-btn + .ps-view-btn { border-left: 1px solid var(--ps-line); }
+.ps-view-btn.on { background: var(--esam-brand, #045474); color: #fff; }
+.ps-day { font-size: 0.7rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ps-mute); margin: 0.35rem 0 0.1rem; }
+.ps-day:first-child { margin-top: 0; }
+.ps-group + .ps-group { margin-top: 0.7rem; }
+.ps-group { display: flex; flex-direction: column; gap: 0.45rem; }
+.ps-group-h { display: flex; align-items: center; gap: 0.3rem; font-size: 0.78rem; font-weight: 800; margin: 0; color: var(--ps-ink); }
+.ps-group-h b { margin-left: auto; font-size: 0.72rem; color: var(--ps-mute); }
+.ps-a-contabilidad .ps-group-h span { color: #0e9f6e; } .ps-a-academico .ps-group-h span { color: #2563eb; }
+.ps-a-marketing .ps-group-h span { color: #d97706; } .ps-a-otros .ps-group-h span { color: #64748b; }

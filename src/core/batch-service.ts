@@ -27,6 +27,16 @@ export interface CreateBatchOptions {
   scheduledAt?: string | null;
   /** Reenvío intencional: no descarta lo ya enviado con la misma referencia. */
   allowResend?: boolean;
+  /** Nombre completo de quien envía: se agrega al final de cada mensaje como «Atte: …». */
+  signature?: string | null;
+}
+
+/** «Atte: nombre» al final del texto (una sola vez, aunque el texto ya la traiga). */
+export function withSignature(text: string | null, signature: string | null | undefined): string | null {
+  const name = String(signature ?? '').replace(/\s+/g, ' ').trim().slice(0, 120);
+  if (!text || !name) return text;
+  const line = `Atte: ${name}`;
+  return text.trimEnd().endsWith(line) ? text : `${text.trimEnd()}\n\n${line}`;
 }
 
 export interface CreateBatchResult {
@@ -96,6 +106,7 @@ export function createBatch(opts: CreateBatchOptions, runner: BatchRunner): Crea
     if (!text && !media) {
       throw new Error(`El destinatario ${chatId} no tiene mensaje ni media.`);
     }
+    text = withSignature(text, opts.signature);
 
     prepared.push({
       chat_id: chatId,

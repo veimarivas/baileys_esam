@@ -3082,6 +3082,7 @@
       state.contactSends = null;
       state.contactSendsLoading = false;
       state.sendsFilter = 'todos';
+      try { state.sendsView = localStorage.getItem('sends-view') === 'areas' ? 'areas' : 'cronologico'; } catch (_) { state.sendsView = 'cronologico'; }
       state.notes = [];
       state.noteDraft = emptyNoteDraft();
       state.person = null;
@@ -4678,7 +4679,8 @@
           return '<button type="button" class="ps-chip ps-c-' + k + (f === k ? ' on' : '') + '" data-sfilter="' + k + '"><span class="' + SEND_CATS[k].icon + '" aria-hidden="true"></span>' +
             SEND_CATS[k].label + ' <b>' + d.byCategory[k] + '</b></button>';
         }).join('');
-      var list = items.filter(function (i) { return f === 'todos' || i.category === f; }).map(function (i) {
+      var shown = items.filter(function (i) { return f === 'todos' || i.category === f; });
+      var itemHtml = function (i) {
         var cat = SEND_CATS[i.category] || SEND_CATS.otros;
         var sub = [i.programa, i.modulo ? 'Módulo ' + i.modulo : null, i.detail].filter(Boolean).map(escapeHtml).join(' · ');
         var line = i.linePhone ? fmtPhone(i.linePhone) + (i.lineOwner ? ' (' + i.lineOwner + ')' : '') : '';
@@ -4694,14 +4696,55 @@
             (d.can_batches ? '<a class="ps-batch" href="/batches/' + i.batchId + '" target="_blank" rel="noopener">Lote #' + i.batchId + '</a>' : '') + '</div>' +
           (body ? '<details class="ps-msg"><summary>Ver mensaje</summary><div class="ps-body">' + escapeHtml(body) + '</div></details>' : '') +
         '</article>';
-      }).join('');
+      };
+      var view = state.sendsView === 'areas' ? 'areas' : 'cronologico';
+      var list;
+      if (view === 'areas') {
+        // Agrupado por área; dentro de cada una, del más nuevo al más viejo.
+        list = ['contabilidad', 'academico', 'marketing', 'otros'].map(function (a) {
+          var group = shown.filter(function (i) { return i.area === a; });
+          if (!group.length) return '';
+          var info = SEND_AREAS[a] || SEND_AREAS.otros;
+          return '<section class="ps-group ps-a-' + a + '"><h6 class="ps-group-h"><span class="' + info.icon + '" aria-hidden="true"></span>' +
+            info.label + ' <b>' + group.length + '</b></h6>' + group.map(itemHtml).join('') + '</section>';
+        }).join('');
+      } else {
+        // Cronológico general, con separador por día.
+        var lastDay = '';
+        list = shown.map(function (i) {
+          var d = new Date(i.at);
+          var key = d.toDateString();
+          var sep = '';
+          if (key !== lastDay) {
+            lastDay = key;
+            var diff = Math.floor((new Date(new Date().toDateString()) - new Date(key)) / 86400000);
+            var label = diff === 0 ? 'Hoy' : diff === 1 ? 'Ayer' : d.toLocaleDateString('es-BO', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+            sep = '<div class="ps-day">' + escapeHtml(label.charAt(0).toUpperCase() + label.slice(1)) + '</div>';
+          }
+          return sep + itemHtml(i);
+        }).join('');
+      }
+      var toggle = '<div class="ps-view" role="group" aria-label="Vista del historial">' +
+        '<button type="button" class="ps-view-btn' + (view === 'cronologico' ? ' on' : '') + '" data-sview="cronologico" aria-pressed="' + (view === 'cronologico') + '">' +
+          '<span class="ri-time-line" aria-hidden="true"></span> Cronológico</button>' +
+        '<button type="button" class="ps-view-btn' + (view === 'areas' ? ' on' : '') + '" data-sview="areas" aria-pressed="' + (view === 'areas') + '">' +
+          '<span class="ri-layout-grid-line" aria-hidden="true"></span> Por área</button></div>';
       return '<p class="cg-hint">Mensajes que le envió el sistema (cronogramas o el panel), de todas las líneas: quién lo pidió y si le llegó.</p>' +
         '<div class="ps-areas">' + areas + '</div>' +
+        toggle +
         '<div class="ps-chips">' + chips + '</div>' +
-        '<div class="ps-list">' + list + '</div>';
+        '<div class="ps-list">' + (list || '<div class="cg-state">Sin envíos con este filtro.</div>') + '</div>';
     }
 
     function bindContactSends() {
+      Array.prototype.forEach.call(els.contact.querySelectorAll('.ps-view-btn'), function (b) {
+        b.addEventListener('click', function () {
+          state.sendsView = b.getAttribute('data-sview');
+          try { localStorage.setItem('sends-view', state.sendsView); } catch (_) {}
+          var panel = els.contact.querySelector('#contact-sends');
+          if (panel) { panel.innerHTML = contactSendsHtml(); bindContactSends(); }
+        });
+      });
       Array.prototype.forEach.call(els.contact.querySelectorAll('.ps-chip'), function (b) {
         b.addEventListener('click', function () {
           state.sendsFilter = b.getAttribute('data-sfilter');

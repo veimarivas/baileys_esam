@@ -39,7 +39,8 @@
   }
 
   // Polling de progreso de lote.
-  document.querySelectorAll('[data-batch]').forEach(function (el) {
+  // Los lotes ya terminados (data-live="0") no se consultan.
+  document.querySelectorAll('[data-batch]:not([data-live="0"])').forEach(function (el) {
     var id = el.getAttribute('data-batch');
     function tick() {
       fetch('/batches/' + id + '/status')
@@ -1697,6 +1698,20 @@
       return d <= 7 ? 'soon' : 'later';
     }
 
+    // Vigencia del seguimiento: vencida, vence hoy, vigente, sin fecha o resuelta.
+    function vigencia(n) {
+      if (n.done_at) return { key: 'done', label: 'Resuelta', icon: 'ri-check-double-line' };
+      if (!n.due_at) return { key: 'none', label: 'Sin fecha límite', icon: 'ri-calendar-line' };
+      var d = daysFromToday(n.due_at);
+      if (d < 0) return { key: 'overdue', label: d === -1 ? 'Vencida · ayer' : 'Vencida · hace ' + (-d) + ' días', icon: 'ri-alarm-warning-line' };
+      if (d === 0) return { key: 'today', label: 'Vence hoy', icon: 'ri-time-line' };
+      return { key: 'valid', label: d === 1 ? 'Vigente · vence mañana' : 'Vigente · faltan ' + d + ' días', icon: 'ri-checkbox-circle-line' };
+    }
+    function vigenciaHtml(n) {
+      var v = vigencia(n);
+      return '<span class="nk-vig is-' + v.key + '"><span class="' + v.icon + '" aria-hidden="true"></span>' + escapeHtml(v.label) + '</span>';
+    }
+
     function dueLabel(n) {
       if (!n.due_at) return '';
       var d = daysFromToday(n.due_at);
@@ -1868,7 +1883,10 @@
           '</div>'
         : '';
       var due = n.due_at
-        ? '<span class="nk-due nk-due-' + st + '"><span class="' + (st === 'overdue' ? 'ri-alarm-warning-line' : st === 'done' ? 'ri-calendar-check-line' : 'ri-calendar-event-line') + '" aria-hidden="true"></span>' + escapeHtml(dueLabel(n)) + '</span>'
+        ? (opts.vigencia
+          ? '<span class="nk-due nk-due-date" title="Fecha de seguimiento"><span class="ri-calendar-event-line" aria-hidden="true"></span>' +
+              escapeHtml(fmtDay(n.due_at) + (n.due_time ? ' · ' + n.due_time : '')) + '</span>'
+          : '<span class="nk-due nk-due-' + st + '"><span class="' + (st === 'overdue' ? 'ri-alarm-warning-line' : st === 'done' ? 'ri-calendar-check-line' : 'ri-calendar-event-line') + '" aria-hidden="true"></span>' + escapeHtml(dueLabel(n)) + '</span>')
         : '';
       var pinBadge = pinned
         ? '<span class="nk-pin-badge"><span class="ri-pushpin-2-fill" aria-hidden="true"></span>Importante</span>'
@@ -1901,12 +1919,20 @@
           '<button type="button" class="nk-icon nk-del" title="Eliminar nota" aria-label="Eliminar nota"><span class="ri-delete-bin-6-line"></span></button>'
         : '');
       var checkTitle = n.done_at ? 'Reabrir' : (n.due_at ? 'Marcar tarea como hecha' : 'Marcar como resuelta');
-      return '<article class="nk-card nk-' + st + (pinned ? ' nk-pinned' : '') + '" data-id="' + n.id + '">' +
+      // En /notes: franja del color del área, etapa del pipeline y vigencia.
+      var status = (opts.stage || opts.vigencia)
+        ? '<div class="nk-status">' + (opts.vigencia ? vigenciaHtml(n) : '') +
+            (opts.stage ? '<span class="nk-stage is-' + opts.stage.key + '"><span class="' + opts.stage.icon + '" aria-hidden="true"></span>' + escapeHtml(opts.stage.label) + '</span>' : '') +
+          '</div>'
+        : '';
+      var areaStyle = opts.area ? ' style="--area:' + opts.area.color + '"' : '';
+      return '<article class="nk-card nk-' + st + (pinned ? ' nk-pinned' : '') + (opts.area ? ' nk-has-area' : '') + '" data-id="' + n.id + '"' + areaStyle + '>' +
         contact +
         '<div class="nk-row">' +
           '<button type="button" class="nk-check' + (n.done_at ? ' on' : '') + '" title="' + checkTitle + '" aria-label="' + checkTitle + '" aria-pressed="' + !!n.done_at + '">' +
             '<span class="ri-check-line" aria-hidden="true"></span></button>' +
           '<div class="nk-main">' +
+            status +
             '<div class="nk-view">' +
               (n.note_text ? '<p class="nk-text">' + linkifyHtml(escapeHtml(n.note_text)) + '</p>' : '') +
               (n.audio_path ? '<audio controls preload="none" src="/inbox/notes/' + n.id + '/audio"></audio>' : '') +
@@ -2206,6 +2232,8 @@
       cardHtml: cardHtml,
       prospectOf: prospectOf,
       prospectBadge: prospectBadge,
+      vigencia: vigencia,
+      vigenciaHtml: vigenciaHtml,
       bindCards: bindCards,
       bindPickers: bindPickers,
       autosize: autosize,
@@ -5071,6 +5099,13 @@
     var st = { status: 'pending', tag: null, tags: [], colors: ['#045474'], color: '#045474', notes: [], stats: null, managing: false, view: 'list', area: 'all', advisor: 0, supervisor: false, supervisorArea: null };
     try { if (localStorage.getItem('notes-view') === 'board') st.view = 'board'; } catch (_) {}
     try { st.area = localStorage.getItem('notes-area') || 'all'; } catch (_) {}
+    st.group = 'estado';
+    try { st.group = localStorage.getItem('notes-group') || 'estado'; } catch (_) {}
+    els.group = root.querySelector('#notes-group');
+    if (els.group) {
+      if (!els.group.querySelector('option[value="' + st.group + '"]')) st.group = 'estado';
+      els.group.value = st.group;
+    }
     els.board = root.querySelector('#np-board');
     els.areas = root.querySelector('#np-areas');
     // Filtro por asesor dentro de Marketing (gerencia, supervisión y Super Admin).
@@ -5262,6 +5297,66 @@
       if (clear) clear.addEventListener('click', function () { st.tag = null; renderTags(); renderActive(); loadNotes(); });
     }
 
+    /* ── Agrupación de la lista: estado (de siempre), fechas, área o etapa ── */
+    var MONTHS = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+    function ymdOf(iso) {
+      var d = new Date(iso);
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+    function dayTitle(ymd) {
+      var p = ymd.split('-');
+      var d = new Date(+p[0], +p[1] - 1, +p[2]);
+      var txt = d.toLocaleDateString('es-BO', { weekday: 'long', day: 'numeric', month: 'long' });
+      if (d.getFullYear() !== new Date().getFullYear()) txt += ' de ' + d.getFullYear();
+      return txt.charAt(0).toUpperCase() + txt.slice(1);
+    }
+    function relDay(ymd) {
+      var diff = NoteKit.daysFromToday(ymd);
+      return diff === 0 ? 'Hoy' : diff === -1 ? 'Ayer' : diff === 1 ? 'Mañana' : '';
+    }
+    // Grupo de una nota según el modo elegido: clave, título, orden y tono del encabezado.
+    function groupInfo(n) {
+      var g = st.group;
+      if (g === 'dia' || g === 'mes') {
+        if (!n.due_at) return { key: 'z-none', title: 'Sin fecha de seguimiento', sort: '9999', tone: 'none' };
+        var diff = NoteKit.daysFromToday(n.due_at);
+        var tone = diff < 0 ? 'overdue' : diff === 0 ? 'today' : 'valid';
+        if (g === 'mes') {
+          var mp = n.due_at.split('-');
+          var mDiff = (+mp[0] - new Date().getFullYear()) * 12 + (+mp[1] - 1 - new Date().getMonth());
+          var mName = MONTHS[+mp[1] - 1];
+          return { key: 'm' + mp[0] + mp[1], title: mName.charAt(0).toUpperCase() + mName.slice(1) + ' ' + mp[0],
+            sort: mp[0] + mp[1], tone: mDiff < 0 ? 'overdue' : mDiff === 0 ? 'today' : 'valid',
+            sub: mDiff < 0 ? 'Mes anterior' : mDiff === 0 ? 'Este mes' : 'Próximo' };
+        }
+        var rel = relDay(n.due_at);
+        return { key: 'd' + n.due_at, title: dayTitle(n.due_at), sort: n.due_at, tone: tone,
+          sub: (rel ? rel + ' · ' : '') + (tone === 'overdue' ? 'Vencido' : tone === 'today' ? 'Vence hoy' : 'Vigente') };
+      }
+      if (g === 'registro') {
+        var day = ymdOf(n.created_at);
+        var rd = relDay(day);
+        return { key: 'r' + day, title: dayTitle(day), sort: day, tone: 'reg', sub: rd ? 'Registradas ' + rd.toLowerCase() : '' };
+      }
+      if (g === 'area') {
+        var a = areaOf(n);
+        var i = areaInfo(a);
+        var pos = AREA_ORDER.indexOf(a);
+        return { key: 'a' + a, title: i.label, sort: String(pos === -1 ? 50 : pos).padStart(2, '0') + a, color: i.color, icon: i.icon, tone: 'area' };
+      }
+      if (g === 'etapa') {
+        var sk = stageOf(n);
+        var sg = STAGES[STAGE_KEYS.indexOf(sk)];
+        return { key: 's' + sk, title: sg.label, sort: String(STAGE_KEYS.indexOf(sk)), tone: 'st-' + sk, icon: sg.icon };
+      }
+      return null;
+    }
+    function stageTag(n) {
+      var sk = stageOf(n);
+      var sg = STAGES[STAGE_KEYS.indexOf(sk)];
+      return { key: sk, label: sg.label, icon: sg.icon };
+    }
+
     function groupKey(n) {
       if (n.deleted_at) return 'trash';
       if ((els.order.value || 'due') === 'created') {
@@ -5292,15 +5387,26 @@
           '<span class="np-empty-sub">Las notas se registran desde la ficha del contacto, dentro de cada conversación.</span></div>';
         return;
       }
-      var byDue = (els.order.value || 'due') === 'due' || st.status === 'trash' || st.status === 'derived';
+      var custom = st.group !== 'estado' && st.status !== 'trash';
+      var byDue = !custom && ((els.order.value || 'due') === 'due' || st.status === 'trash' || st.status === 'derived');
       var groups = {};
+      var infos = {};
       var order = [];
       notes.forEach(function (n) {
-        var k = groupKey(n);
-        if (!groups[k]) { groups[k] = []; order.push(k); }
+        var info = custom ? groupInfo(n) : null;
+        var k = info ? info.key : groupKey(n);
+        if (!groups[k]) { groups[k] = []; order.push(k); infos[k] = info; }
         groups[k].push(n);
       });
-      if (byDue) order.sort(function (a, b) { return GROUP_ORDER.indexOf(a) - GROUP_ORDER.indexOf(b); });
+      if (custom) {
+        var desc = st.group === 'registro';
+        order.sort(function (a, b) {
+          var x = infos[a].sort, y = infos[b].sort;
+          // Sin fecha siempre al final.
+          if (x === '9999' || y === '9999') return x === y ? 0 : x === '9999' ? 1 : -1;
+          return desc ? (x < y ? 1 : x > y ? -1 : 0) : (x < y ? -1 : x > y ? 1 : 0);
+        });
+      } else if (byDue) order.sort(function (a, b) { return GROUP_ORDER.indexOf(a) - GROUP_ORDER.indexOf(b); });
       var s = st.stats || {};
       var head = focusId
         ? '<div class="np-focus"><span class="ri-notification-3-line" aria-hidden="true"></span>Mostrando la nota del aviso.<button type="button" class="np-clear" id="np-focus-clear">Ver todas</button></div>'
@@ -5312,10 +5418,30 @@
             '</div>'
           : '';
       els.list.innerHTML = head + order.map(function (k) {
-        var label = byDue ? GROUP_LABELS[k] : k;
-        return '<section class="np-group np-group-' + (byDue ? k : 'time') + '">' +
-          '<h6 class="np-group-title">' + escapeHtml(label) + ' <span>' + groups[k].length + '</span></h6>' +
-          '<div class="np-cards">' + groups[k].map(function (n) { return NoteKit.cardHtml(n, { showContact: true, areaBadge: st.area === 'all' ? areaBadge : null, showAdvisor: showAdvisor() }); }).join('') + '</div>' +
+        var list = groups[k];
+        var info = infos[k];
+        var dated = st.group === 'dia';
+        var vencidas = list.filter(function (n) { return NoteKit.vigencia(n).key === 'overdue'; }).length;
+        if (info && info.tone === 'overdue' && !vencidas) {
+          info = { key: info.key, title: info.title, sort: info.sort, tone: 'done', sub: 'Resueltas' };
+        }
+        var hoy = list.filter(function (n) { return NoteKit.vigencia(n).key === 'today'; }).length;
+        var resumen = '<span class="np-g-n">' + list.length + '</span>' +
+          (vencidas && !dated ? '<span class="np-g-chip is-overdue">' + vencidas + ' vencida' + (vencidas === 1 ? '' : 's') + '</span>' : '') +
+          (hoy && !dated ? '<span class="np-g-chip is-today">' + hoy + ' para hoy</span>' : '');
+        var title = info
+          ? '<h6 class="np-group-title np-gt np-gt-' + info.tone + '"' + (info.color ? ' style="--gc:' + info.color + '"' : '') + '>' +
+              (info.icon ? '<span class="np-g-ic ' + info.icon + '" aria-hidden="true"></span>' : '<span class="np-g-dot" aria-hidden="true"></span>') +
+              '<span class="np-g-title">' + escapeHtml(info.title) + '</span>' +
+              (info.sub ? '<small class="np-g-sub">' + escapeHtml(info.sub) + '</small>' : '') + resumen + '</h6>'
+          : '<h6 class="np-group-title">' + escapeHtml(byDue ? GROUP_LABELS[k] : k) + ' ' + resumen + '</h6>';
+        return '<section class="np-group np-group-' + (info ? 'custom' : byDue ? k : 'time') + '">' + title +
+          '<div class="np-cards">' + list.map(function (n) {
+            return NoteKit.cardHtml(n, {
+              showContact: true, areaBadge: st.area === 'all' ? areaBadge : null, showAdvisor: showAdvisor(),
+              area: areaInfo(areaOf(n)), stage: n.deleted_at ? null : stageTag(n), vigencia: !n.deleted_at,
+            });
+          }).join('') + '</div>' +
         '</section>';
       }).join('');
       var clearFocus = els.list.querySelector('#np-focus-clear');
@@ -5386,8 +5512,9 @@
       var tags = (n.tags || []).map(function (t) { return '<span class="pl-tag" style="--tag:' + t.color + '" title="' + escapeHtml(t.name) + '">' + escapeHtml(t.name) + '</span>'; }).join('');
       var movable = canMove(n);
       var idx = STAGE_KEYS.indexOf(stageOf(n));
-      return '<article class="pl-card' + (due === 'overdue' && !n.done_at ? ' is-overdue' : '') + (NoteKit.isPinned(n) && !n.done_at ? ' is-pinned' : '') +
+      return '<article class="pl-card pl-has-area' + (due === 'overdue' && !n.done_at ? ' is-overdue' : '') + (NoteKit.isPinned(n) && !n.done_at ? ' is-pinned' : '') +
           (movable ? '' : ' is-locked') + '"' +
+          ' style="--area:' + areaInfo(areaOf(n)).color + '"' +
           ' data-id="' + n.id + '" tabindex="0">' +
         '<div class="pl-top">' +
           '<a class="pl-contact" href="/conversations/' + encodeURIComponent(n.chat_id) + '" title="Abrir la conversación">' +
@@ -5402,8 +5529,9 @@
         (n.contact_result && n.contacted_at ? '<div class="pl-result"><span class="ri-chat-check-line"></span> ' + escapeHtml(n.contact_result.slice(0, 140)) + '</div>' : '') +
         (tags ? '<div class="pl-tags">' + tags + '</div>' : '') +
         (st.area === 'all' ? '<div class="pl-area-row">' + areaBadge(n) + '</div>' : '') +
+        '<div class="pl-vig">' + NoteKit.vigenciaHtml(n) + '</div>' +
         '<div class="pl-foot">' +
-          (n.due_at ? '<span class="pl-due pl-due-' + (n.done_at ? 'done' : due) + '"><span class="ri-calendar-event-line"></span> ' + escapeHtml(NoteKit.dueLabel(n)) + '</span>' : '') +
+          (n.due_at ? '<span class="pl-due pl-due-date" title="Fecha de seguimiento"><span class="ri-calendar-event-line"></span> ' + escapeHtml(NoteKit.fmtDay(n.due_at) + (n.due_time ? ' · ' + n.due_time : '')) + '</span>' : '') +
           (n.assigned_name ? '<span class="pl-who" title="Responsable"><span class="ri-user-received-2-line"></span> ' + escapeHtml(n.assigned_name) + '</span>'
             : '<span class="pl-who" title="Registró"><span class="ri-user-line"></span> ' + escapeHtml(n.author_name || 'Equipo') + '</span>') +
         '</div>' +
@@ -5603,6 +5731,7 @@
       els.board.hidden = !board;
       els.stats.hidden = board;
       els.order.hidden = board;
+      if (els.group) els.group.hidden = board;
       var trash = root.querySelector('#notes-trash');
       if (trash) trash.hidden = board;
     }
@@ -5728,6 +5857,11 @@
     }
     els.search.addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(loadNotes, 250); });
     els.order.addEventListener('change', loadNotes);
+    if (els.group) els.group.addEventListener('change', function () {
+      st.group = els.group.value;
+      try { localStorage.setItem('notes-group', st.group); } catch (_) {}
+      renderNotes();
+    });
     els.mine.addEventListener('change', loadNotes);
     if (els.assigned) {
       if (location.hash === '#asignadas') els.assigned.checked = true;

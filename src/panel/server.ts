@@ -6,7 +6,9 @@ import { config } from '../config.js';
 import { all, get, run } from '../db/index.js';
 import { logger } from '../logger.js';
 import { SessionManager } from '../baileys/manager.js';
-import { batchList, card, connectionCard, connectionDiagnosis, emptyState, fmtDate, initials, insight, kvList, safeJson, sectionHead, stat, statusBadge, table, type ConnectionDiagnosis } from './views.js';
+import { batchDetailPage, batchesPage } from './batches-view.js';
+import { massActivity, massActivityCsv } from '../core/mass-activity.js';
+import { card, connectionCard, connectionDiagnosis, emptyState, fmtDate, initials, insight, kvList, safeJson, sectionHead, statusBadge, table, type ConnectionDiagnosis } from './views.js';
 import { countNewContactsToday, getPolicy, limitState } from '../core/anti-ban.js';
 import { cancelGroup, canDecide, confirmGroup, getGroup, pendingGroupsFor, type ConfirmGroup } from '../core/batch-confirm.js';
 import { nowIso } from '../util/async.js';
@@ -138,12 +140,30 @@ export function renderNotesPage(): string {
             <option value="due">Por fecha de seguimiento</option>
             <option value="created">Más recientes primero</option>
           </select>
+          <select id="notes-group" class="form-select form-select-sm" aria-label="Agrupar por" title="Cómo se agrupan las notas en la lista">
+            <option value="estado">Agrupar: estado del seguimiento</option>
+            <option value="dia">Agrupar: día de seguimiento</option>
+            <option value="mes">Agrupar: mes de seguimiento</option>
+            <option value="registro">Agrupar: día de registro</option>
+            <option value="area">Agrupar: área</option>
+            <option value="etapa">Agrupar: etapa</option>
+          </select>
           <label class="np-mine"><input type="checkbox" class="form-check-input" id="notes-mine" /> Registradas por mí</label>
           <label class="np-mine"><input type="checkbox" class="form-check-input" id="notes-assigned" /> Asignadas a mí</label>
           <button type="button" id="notes-trash" class="np-trash-btn" aria-pressed="false" title="Notas eliminadas (se pueden restaurar)">
             <span class="ri-delete-bin-6-line" aria-hidden="true"></span> Papelera <span class="np-trash-count"></span></button>
         </div>
         <div id="np-areas" class="np-areas" role="tablist" aria-label="Área"></div>
+        <div class="np-legend" aria-label="Qué significan los colores">
+          <span class="np-legend-t">Vigencia:</span>
+          <span class="nk-vig is-overdue"><span class="ri-alarm-warning-line" aria-hidden="true"></span>Vencida</span>
+          <span class="nk-vig is-today"><span class="ri-time-line" aria-hidden="true"></span>Vence hoy</span>
+          <span class="nk-vig is-valid"><span class="ri-checkbox-circle-line" aria-hidden="true"></span>Vigente</span>
+          <span class="nk-vig is-none"><span class="ri-calendar-line" aria-hidden="true"></span>Sin fecha</span>
+          <span class="nk-vig is-done"><span class="ri-check-double-line" aria-hidden="true"></span>Resuelta</span>
+          <span class="np-legend-sep" aria-hidden="true"></span>
+          <span class="np-legend-t">El borde de color de cada tarjeta indica su área.</span>
+        </div>
         <div id="np-active" class="np-active"></div>
         <div id="notes-list" class="np-list" aria-live="polite"></div>
         <div id="np-board" class="np-board" hidden aria-live="polite"></div>
@@ -964,9 +984,19 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
       const rows = withRequester(
         all<any>(
           `SELECT b.*, s.owner_name AS line_owner, s.name AS line_name, COALESCE(s.phone, s.expected_phone) AS line_phone
-             FROM batches b LEFT JOIN sessions s ON s.id = b.session_id ORDER BY b.id DESC LIMIT 100`,
+             FROM batches b LEFT JOIN sessions s ON s.id = b.session_id ORDER BY b.created_at DESC, b.id DESC LIMIT 200`,
         ),
       );
+      // Indicadores del día (desde las 00:00 locales del servidor).
+      const dayStart = new Date();
+      dayStart.setHours(0, 0, 0, 0);
+      const since = dayStart.toISOString();
+      const today = {
+        batches: get<{ c: number }>('SELECT COUNT(*) AS c FROM batches WHERE created_at >= ?', since)?.c ?? 0,
+        sent: get<{ c: number }>("SELECT COUNT(*) AS c FROM batch_items WHERE status = 'sent' AND updated_at >= ?", since)?.c ?? 0,
+        failed: get<{ c: number }>("SELECT COUNT(*) AS c FROM batch_items WHERE status = 'failed' AND updated_at >= ?", since)?.c ?? 0,
+        active: 0,
+      };
       const pending = pendingGroupsFor(req.user!);
       const pendingCard = pending.length
         ? `<div class="alert alert-warning d-flex flex-column gap-1">
@@ -983,10 +1013,11 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
              <button class="btn btn-danger btn-sm" type="submit"><i class="ri-stop-circle-line me-1"></i>Detener todos los envíos masivos (${active})</button>
            </form>`
         : '';
-      const body = pendingCard + stopAll + batchList(rows);
+      today.active = active;
+      const body = pendingCard + stopAll + batchesPage(rows, today);
       res.send(
         renderLayout('Lotes', req.user!, 'batches', body, {
-          subtitle: 'Seguimiento de envíos por lotes con progreso en vivo.',
+          subtitle: 'Envíos masivos por día: quién los pidió, desde qué línea y cómo avanzan, en vivo.',
           activeHref: '/batches',
         }),
       );
@@ -1019,75 +1050,12 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
       );
       if (!raw) return res.status(404).send(renderPlain('Lote', 'No encontrado'));
       const b = withRequester([raw])[0];
-      const items = all<any>('SELECT * FROM batch_items WHERE batch_id = ? ORDER BY id LIMIT 500', b.id);
-      const meta = safeJson(b.meta ?? '{}') as any;
-      const progress = b.total > 0 ? Math.round(((b.sent + b.failed + b.skipped) / b.total) * 100) : 0;
-      const origen = meta.origen === 'recordatorio_automatico'
-        ? 'Recordatorio automático de cronogramas'
-        : meta.origen_sistema === 'cronogramas' || meta.source === 'integration'
-          ? 'Cronogramas'
-          : meta.source === 'csv' ? 'Importación CSV' : 'Panel';
-      const ficha = kvList([
-        ['Línea que envía', `<span class="ff-monospace">${esc(b.line_phone ?? '—')}</span> · ${esc(b.line_owner ?? b.line_name ?? '—')} ${statusBadge(b.line_status)}`],
-        ['Pedido por', esc(b.requester_name ?? '—')],
-        ['Origen', esc(origen)],
-        ['Programa', esc(meta.programa ?? '—')],
-        ['Tipo', esc(meta.tipo ?? meta.category ?? '—') + (meta.modo ? ` · ${esc(meta.modo)}` : '')],
-        ['Creado', esc(fmtDate(b.created_at))],
-        ['Inició', b.started_at ? esc(fmtDate(b.started_at)) : '—'],
-        ['Terminó', b.finished_at ? esc(fmtDate(b.finished_at)) : '—'],
-        ...(b.scheduled_at && !String(b.scheduled_at).startsWith('9999') ? [['Programado para', esc(fmtDate(b.scheduled_at))] as [string, string]] : []),
-        ...(meta.confirm_group
-          ? [['Confirmación', `<a href="/batches/confirm/${encodeURIComponent(meta.confirm_group)}">${b.status === 'awaiting_confirmation' ? 'Esperando confirmación →' : 'Ver programación →'}</a>`] as [string, string]]
-          : []),
-      ]);
-      const body = `
-        <div class="card" data-batch="${b.id}">
-          <div class="card-header d-flex align-items-center gap-2">
-            <h5 class="card-title mb-0 flex-grow-1">#${b.id} · ${esc(b.name ?? 'Lote')}</h5>${statusBadge(b.status)}
-          </div>
-          <div class="card-body">
-            <div class="mb-3">${ficha}</div>
-            ${b.status === 'paused' && meta.anti_ban_pause
-              ? `<div class="alert alert-warning d-flex gap-2 align-items-start" role="status"><i class="ri-shield-star-line fs-5"></i><div><b>Pausado por el anti-baneo.</b> ${esc(meta.anti_ban_pause)}</div></div>`
-              : ''}
-            <div class="row g-3 mb-3">
-              <div class="col">${stat('Total', b.total)}</div>
-              <div class="col">${stat('Enviados', `<span data-f="sent">${b.sent}</span>`, 'success')}</div>
-              <div class="col">${stat('Fallidos', `<span data-f="failed">${b.failed}</span>`, 'danger')}</div>
-              <div class="col">${stat('Omitidos', `<span data-f="skipped">${b.skipped}</span>`, 'warning')}</div>
-            </div>
-            <div class="progress mb-3"><div class="progress-bar bg-success" style="width:${progress}%"></div></div>
-            <div class="d-flex flex-wrap gap-2">
-              <a class="btn btn-soft-secondary btn-sm" href="/batches"><i class="ri-arrow-left-line me-1"></i>Volver</a>
-              <form method="post" action="/batches/${b.id}/pause"><button class="btn btn-soft-warning btn-sm" type="submit"><i class="ri-pause-line me-1"></i>Pausar</button></form>
-              <form method="post" action="/batches/${b.id}/resume"><button class="btn btn-soft-success btn-sm" type="submit"><i class="ri-play-line me-1"></i>Reanudar</button></form>
-              <form method="post" action="/batches/${b.id}/cancel"><button class="btn btn-soft-danger btn-sm" type="submit"><i class="ri-close-line me-1"></i>Cancelar</button></form>
-              ${b.failed > 0 ? `<form method="post" action="/batches/${b.id}/retry"><button class="btn btn-soft-primary btn-sm" type="submit"><i class="ri-refresh-line me-1"></i>Reintentar fallidos</button></form>` : ''}
-            </div>
-            <form method="post" action="/batches/${b.id}/schedule" class="d-flex align-items-center gap-2 mt-3">
-              <span class="text-muted">Programar para</span>
-              <input type="datetime-local" name="scheduled_at" class="form-control" style="max-width:220px" />
-              <button class="btn btn-soft-primary btn-sm" type="submit">Programar</button>
-              ${b.scheduled_at ? `<span class="badge bg-warning-subtle text-warning">Programado: ${esc(fmtDate(b.scheduled_at))}</span>` : ''}
-            </form>
-          </div>
-        </div>
-        <div class="card"><div class="card-body pt-0">${table(
-          ['#', 'Destinatario', 'Número', 'Mensaje', 'Estado', 'Enviado', 'Detalle'],
-          items.map((it) => [
-            String(it.id),
-            esc(it.contact_name ?? '—'),
-            `<span class="ff-monospace">${esc(String(it.chat_id ?? '').replace(/@.*$/, ''))}</span>`,
-            `<span class="text-muted" title="${esc(it.body ?? '')}">${esc((it.body ?? '').slice(0, 80))}${(it.body ?? '').length > 80 ? '…' : ''}</span>`,
-            statusBadge(it.status),
-            it.status === 'sent' && it.updated_at ? `<span class="text-muted">${esc(fmtDate(it.updated_at))}</span>` : '—',
-            `<span class="text-muted">${esc((it.error ?? '').slice(0, 80))}</span>`,
-          ]),
-        )}</div></div>`;
+      const ITEMS_MAX = 3000;
+      const items = all<any>('SELECT * FROM batch_items WHERE batch_id = ? ORDER BY id LIMIT ?', b.id, ITEMS_MAX);
+      const body = batchDetailPage(b, items, { truncated: items.length >= ITEMS_MAX && b.total > ITEMS_MAX });
       res.send(
         renderLayout('Lote #' + b.id, req.user!, 'batches', body, {
-          subtitle: 'Detalle de destinatarios, estado de cada envío y acciones del lote.',
+          subtitle: 'Detalle del envío: quién lo pidió, la línea, el mensaje, los tiempos y cada destinatario.',
           activeHref: '/batches',
         }),
       );
@@ -1730,7 +1698,7 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     const filters = { programa: qstr(req, 'programa'), account: qstr(req, 'account'), area: qstr(req, 'area'), tipo: qstr(req, 'tipo') };
     const attention = attentionData(scope, period);
     const previous = previousPeriod(period);
-    const tab = (['atencion', 'equipo', 'seguimiento', 'envios'] as ReportsTab[]).includes(qstr(req, 'tab') as ReportsTab)
+    const tab = (['atencion', 'equipo', 'seguimiento', 'envios', 'masivos'] as ReportsTab[]).includes(qstr(req, 'tab') as ReportsTab)
       ? (qstr(req, 'tab') as ReportsTab)
       : 'atencion';
     const sends = monitoringData(
@@ -1767,6 +1735,8 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
       sends,
       filters,
       exportHref: `/reports/export.csv?${params.toString()}`,
+      mass: tab === 'masivos' ? massActivity(scope.sessionId ? [scope.sessionId] : scope.sessionIds, period) : undefined,
+      massExportHref: `/reports/masivos.csv?${params.toString()}`,
     };
   };
 
@@ -1793,6 +1763,19 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
       const view = buildReports(req);
       res.setHeader('Content-Disposition', `attachment; filename="reporte-${view.period.from}_${view.period.to}.csv"`);
       res.type('text/csv; charset=utf-8').send(reportsCsv(view));
+    }),
+  );
+
+  // CSV de la actividad de envíos masivos (resumen por persona + registro de lotes).
+  app.get(
+    '/reports/masivos.csv',
+    requireUser,
+    requireSection('reports'),
+    ah(async (req: AuthedRequest, res) => {
+      const { scope } = followupScope(req, true);
+      const period = resolvePeriod({ period: qstr(req, 'period'), from: qstr(req, 'from'), to: qstr(req, 'to') }, '30d');
+      res.setHeader('Content-Disposition', `attachment; filename="envios-masivos-${period.from}_${period.to}.csv"`);
+      res.type('text/csv; charset=utf-8').send(massActivityCsv(massActivity(scope.sessionId ? [scope.sessionId] : scope.sessionIds, period), period.label));
     }),
   );
 

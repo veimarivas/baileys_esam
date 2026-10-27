@@ -19,6 +19,7 @@ import {
 import { TIPO_LABELS, type MonitoringData } from '../core/monitoring.js';
 import type { GlobalNote } from '../core/contacts.js';
 import type { HealthRow } from '../core/health.js';
+import type { MassActivity } from '../core/mass-activity.js';
 import type { SessionRow } from '../types.js';
 
 /**
@@ -343,7 +344,7 @@ export function renderMonitoring(v: MonitoringView): string {
 
 // ── /reports ──────────────────────────────────────────────────────────────────
 
-export type ReportsTab = 'atencion' | 'equipo' | 'seguimiento' | 'envios';
+export type ReportsTab = 'atencion' | 'equipo' | 'seguimiento' | 'envios' | 'masivos';
 
 export interface ReportsView {
   tab: ReportsTab;
@@ -363,6 +364,9 @@ export interface ReportsView {
   protection: ProtectionStats;
   filters: { programa: string; account: string; area: string; tipo: string };
   exportHref: string;
+  /** Pestaña «Envíos masivos»: solo se calcula cuando está abierta. */
+  mass?: MassActivity;
+  massExportHref?: string;
 }
 
 export function renderReports(v: ReportsView): string {
@@ -525,6 +529,8 @@ export function renderReports(v: ReportsView): string {
         v.notes.today.length ? `<ul class="fu-notes">${v.notes.today.map((n) => noteItem(n, 'today')).join('')}</ul>` : emptyState('ri-calendar-check-line', 'Sin tareas para hoy', 'No hay tareas con fecha de hoy.'),
       )}
     </div>`;
+  } else if (v.tab === 'masivos') {
+    content = massTab(v.mass, v.period);
   } else {
     const pr = v.protection;
     const pd = v.prevDelivery;
@@ -594,11 +600,172 @@ export function renderReports(v: ReportsView): string {
         { id: 'equipo', label: 'Equipo', icon: 'ri-team-line' },
         { id: 'seguimiento', label: 'Notas y tareas', icon: 'ri-sticky-note-line', badge: v.notes.stats.overdue },
         { id: 'envios', label: 'Envíos', icon: 'ri-send-plane-2-line' },
+        { id: 'masivos', label: 'Envíos masivos', icon: 'ri-mail-send-line' },
       ], v.tab, keep)}
-      <a class="btn btn-soft-secondary btn-sm" href="${esc(v.exportHref)}"><i class="ri-download-2-line me-1"></i>Exportar CSV</a>
+      <a class="btn btn-soft-secondary btn-sm" href="${esc(v.tab === 'masivos' && v.massExportHref ? v.massExportHref : v.exportHref)}"><i class="ri-download-2-line me-1"></i>Exportar CSV</a>
     </div>
     ${content}
   </div>`;
+}
+
+// ── Envíos masivos: quién envía, cuántas veces por día y cuántos mensajes ─────
+
+const MASS_TIPOS: Record<string, string> = {
+  participantes: 'Participantes', grupo: 'Grupo', grupos: 'Grupos', prospectos: 'Prospectos', cuotas: 'Cuotas', cobranza: 'Cobranza',
+  recordatorio: 'Recordatorio', academico: 'Académico', contable: 'Contable',
+};
+const MASS_AREAS: Record<string, string> = {
+  academico: 'Académico', contabilidad: 'Contabilidad', marketing: 'Marketing', admin: 'Administración', consulta: 'Consulta', general: 'General',
+};
+
+function massDayLabel(day: string): string {
+  const [y, m, d] = day.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  const today = new Date();
+  const diff = Math.round((new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime() - date.getTime()) / 86_400_000);
+  const txt = date.toLocaleDateString('es-BO', { weekday: 'long', day: 'numeric', month: 'long' });
+  const cap = txt.charAt(0).toUpperCase() + txt.slice(1);
+  return diff === 0 ? `Hoy · ${cap}` : diff === 1 ? `Ayer · ${cap}` : cap;
+}
+
+function massDuration(ms: number | null): string {
+  if (ms == null) return '—';
+  const min = Math.round(ms / 60000);
+  if (min < 1) return `${Math.max(1, Math.round(ms / 1000))} s`;
+  return min < 60 ? `${min} min` : `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, '0')} min`;
+}
+
+function massTab(a: MassActivity | undefined, period: Period): string {
+  if (!a || !a.batches.length) {
+    return panel('Envíos masivos', emptyState('ri-mail-send-line', 'Sin envíos masivos en el período', `No se pidieron lotes entre ${period.from} y ${period.to} en las líneas que podés ver.`));
+  }
+  const t = a.totals;
+  const fmtDay = (day: string | null) => (day ? massDayLabel(day) : '—');
+  const shortDay = (day: string) => {
+    const [y, m, d] = day.split('-').map(Number);
+    return `${new Date(y, m - 1, d).toLocaleDateString('es-BO', { weekday: 'short' }).replace('.', '')} ${d}/${m}`;
+  };
+  const area = (x: string | null) => (x ? MASS_AREAS[x] ?? x : '');
+  const rate = t.messages ? Math.round((t.sent / t.messages) * 100) : 0;
+
+  const kpis = `<div class="ab-kpis">
+    ${kpi('ri-stack-line', 'info', 'Lotes enviados', t.batches, `en ${t.daysActive} día${t.daysActive === 1 ? '' : 's'} con envíos`)}
+    ${kpi('ri-mail-send-line', 'ok', 'Mensajes', t.messages, `${t.sent} enviados (${rate}%) · ${t.failed} fallidos`)}
+    ${kpi('ri-team-line', 'info', 'Personas que enviaron', t.requesters, `${t.daysActive ? (Math.round((t.batches / t.daysActive) * 10) / 10) : 0} lotes por día en promedio`)}
+    ${kpi('ri-fire-line', 'warn', 'Día con más envíos', t.busiestDay ? `${t.busiestDay.batches} lotes` : '—', t.busiestDay ? `${esc(fmtDay(t.busiestDay.day))} · ${t.busiestDay.messages} mensajes` : '')}
+  </div>`;
+
+  // Resumen por persona.
+  const people = a.requesters.map((r) => `<tr data-person="${esc(r.key)}">
+      <td><div class="ma-person"><span class="ma-av">${esc(initials(r.name))}</span><div class="min-w-0"><b>${esc(r.name)}</b>${r.area ? `<small>${esc(area(r.area))}</small>` : ''}</div></div></td>
+      <td><b class="ma-big">${r.batches}</b>${r.cancelled ? `<small class="text-danger d-block">${r.cancelled} cancelado${r.cancelled === 1 ? '' : 's'}</small>` : ''}</td>
+      <td>${r.daysActive}</td>
+      <td><b>${r.avgPerDay}</b><small class="d-block">máx. ${r.maxPerDay}${r.maxDay ? ` (${esc(shortDay(r.maxDay))})` : ''}</small></td>
+      <td><b>${r.messages}</b><small class="d-block"><span class="text-success">${r.sent} enviados</span>${r.failed ? ` · <span class="text-danger">${r.failed} fallidos</span>` : ''}</small></td>
+      <td><b>${r.avgPerBatch}</b><small class="d-block">máx. ${r.maxPerBatch}</small></td>
+      <td class="ma-lines">${r.lines.map((l) => `<span>${esc(l)}</span>`).join('') || '—'}</td>
+      <td class="text-nowrap">${r.lastAt ? esc(fmtDate(r.lastAt)) : '—'}</td>
+      <td><button type="button" class="btn btn-soft-primary btn-sm ma-see" data-person="${esc(r.key)}" title="Ver sus lotes en el registro"><i class="ri-list-check-2"></i></button></td>
+    </tr>`).join('');
+  const summary = panel(
+    'Quién envía mensajes masivos',
+    `<div class="table-responsive"><table class="table table-hover align-middle mb-0 ab-table ma-table">
+      <thead class="table-light"><tr><th>Persona</th><th>Lotes</th><th>Días con envíos</th><th>Lotes por día</th><th>Mensajes</th><th>Mensajes por lote</th><th>Líneas usadas</th><th>Último envío</th><th><span class="visually-hidden">Ver</span></th></tr></thead>
+      <tbody>${people}</tbody></table></div>`,
+  );
+
+  // Calendario: lotes por persona y día (días con actividad, el más reciente primero).
+  const days = a.days.slice(0, 31);
+  const maxCell = Math.max(1, ...a.requesters.flatMap((r) => days.map((d) => r.byDay[d]?.batches ?? 0)));
+  const dayHead = (d: string) => {
+    const [y, m, dd] = d.split('-').map(Number);
+    const date = new Date(y, m - 1, dd);
+    return `<th class="ma-dh" title="${esc(massDayLabel(d))}"><span>${esc(date.toLocaleDateString('es-BO', { weekday: 'short' }).replace('.', ''))}</span>${dd}/${m}</th>`;
+  };
+  const calendar = panel(
+    'Envíos por persona y día',
+    `<p class="fu-sub">Cantidad de lotes que pidió cada persona por día (al pasar el cursor: mensajes de esos lotes). ${a.days.length > 31 ? 'Se muestran los 31 días con envíos más recientes.' : ''}</p>
+     <div class="table-responsive"><table class="table table-sm align-middle mb-0 ma-cal">
+      <thead><tr><th class="ma-cal-p">Persona</th>${days.map(dayHead).join('')}<th>Total</th></tr></thead>
+      <tbody>${a.requesters.map((r) => `<tr data-person="${esc(r.key)}"><th class="ma-cal-p">${esc(r.name)}</th>${days.map((d) => {
+        const c = r.byDay[d];
+        if (!c) return '<td class="ma-c0">·</td>';
+        const lvl = Math.min(4, Math.ceil((c.batches / maxCell) * 4));
+        return `<td class="ma-c ma-l${lvl}" title="${esc(`${r.name} · ${massDayLabel(d)}: ${c.batches} lote${c.batches === 1 ? '' : 's'}, ${c.messages} mensajes`)}">${c.batches}<small>${c.messages}</small></td>`;
+      }).join('')}<td class="ma-tot">${r.batches}</td></tr>`).join('')}</tbody>
+     </table></div>`,
+  );
+
+  // Registro detallado, agrupado por día.
+  const byDay = new Map<string, typeof a.batches>();
+  for (const b of a.batches) {
+    if (!byDay.has(b.day)) byDay.set(b.day, []);
+    byDay.get(b.day)!.push(b);
+  }
+  const log = [...byDay.entries()].map(([day, list]) => {
+    const who = new Set(list.map((b) => b.requesterKey)).size;
+    return `<section class="ma-day" data-day="${day}">
+      <h6 class="ma-day-h">${esc(massDayLabel(day))}<small data-sum>${list.length} lote${list.length === 1 ? '' : 's'} · ${list.reduce((s, b) => s + b.total, 0)} mensajes · ${who} persona${who === 1 ? '' : 's'}</small></h6>
+      <div class="table-responsive"><table class="table table-hover align-middle mb-0 ma-log">
+        <tbody>${list.map((b) => `<tr data-person="${esc(b.requesterKey)}">
+          <td class="ma-t">${esc(b.time)}</td>
+          <td class="ma-who"><b>${esc(b.requesterName)}</b><small>${esc(b.linePhone ?? '—')}${b.lineOwner ? ` · ${esc(b.lineOwner)}` : ''}</small></td>
+          <td class="ma-lote"><a href="/batches/${b.id}">#${b.id} · ${esc(b.name)}</a><small>${[b.programa, b.tipo ? MASS_TIPOS[b.tipo] ?? b.tipo : null, b.origen].filter(Boolean).map((x) => esc(String(x))).join(' · ')}</small></td>
+          <td class="ma-n"><b>${b.total}</b><small>mensajes</small></td>
+          <td class="ma-res"><span class="text-success">${b.sent} enviados</span>${b.failed ? `<span class="text-danger">${b.failed} fallidos</span>` : ''}${b.skipped ? `<span class="text-warning">${b.skipped} omitidos</span>` : ''}</td>
+          <td class="ma-dur">${esc(massDuration(b.durationMs))}</td>
+          <td>${statusBadge(b.status)}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+    </section>`;
+  }).join('');
+  const options = a.requesters.map((r) => `<option value="${esc(r.key)}">${esc(r.name)} (${r.batches})</option>`).join('');
+  const registro = panel(
+    'Registro de actividad',
+    `<p class="fu-sub">Cada lote con la hora, quién lo pidió, la línea, el programa y cómo terminó. Abrí el lote para ver a cada destinatario.</p>
+     <div class="ma-log-wrap">${log}</div>
+     <div class="ma-empty" hidden><i class="ri-filter-off-line"></i> Esta persona no tiene lotes en el período.</div>`,
+    `<select class="form-select form-select-sm ma-filter" aria-label="Filtrar por persona"><option value="">Todas las personas</option>${options}</select>`,
+  );
+
+  return `<div class="mass-activity" id="mass-activity">
+    ${kpis}
+    ${summary}
+    <div class="mt-3">${calendar}</div>
+    <div class="mt-3" id="ma-registro">${registro}</div>
+  </div>
+  <script>
+  (function () {
+    var root = document.getElementById('mass-activity');
+    if (!root) return;
+    var sel = root.querySelector('.ma-filter');
+    function apply(key) {
+      var shown = 0;
+      root.querySelectorAll('.ma-day').forEach(function (day) {
+        var n = 0, msgs = 0;
+        day.querySelectorAll('tr[data-person]').forEach(function (tr) {
+          var ok = !key || tr.dataset.person === key;
+          tr.hidden = !ok;
+          if (ok) { n++; msgs += Number((tr.querySelector('.ma-n b') || {}).textContent || 0); }
+        });
+        day.hidden = n === 0;
+        shown += n;
+      });
+      root.querySelectorAll('.ma-table tbody tr, .ma-cal tbody tr').forEach(function (tr) {
+        tr.classList.toggle('ma-on', !!key && tr.dataset.person === key);
+      });
+      root.querySelector('.ma-empty').hidden = shown > 0;
+    }
+    sel.addEventListener('change', function () { apply(sel.value); });
+    root.querySelectorAll('.ma-see').forEach(function (b) {
+      b.addEventListener('click', function () {
+        sel.value = b.dataset.person;
+        apply(sel.value);
+        document.getElementById('ma-registro').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    });
+  })();
+  </script>`;
 }
 
 // ── Ficha individual ─────────────────────────────────────────────────────────

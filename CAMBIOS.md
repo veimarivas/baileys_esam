@@ -1836,6 +1836,65 @@ Cronogramas habilita a los asesores de marketing a registrar prospectos en los p
 
 ---
 
+## 54. Notas agrupadas por fecha, Lotes rediseñados y actividad de envíos masivos en Reportes (2026-10-26)
+
+### /notes: agrupar por fechas y colores por área, etapa y vigencia
+- **Nuevo selector «Agrupar por»** (además del orden), recordado por usuario en `localStorage` (`notes-group`):
+  - *estado del seguimiento* (lo de siempre);
+  - *día de seguimiento*, con títulos como «Lunes, 27 de octubre · Mañana · Vigente»;
+  - *mes de seguimiento*;
+  - *día de registro*;
+  - *área*;
+  - *etapa* del pipeline.
+- **Encabezados de grupo:**
+  - el tono indica la vigencia: rojo vencido, ámbar vence hoy, verde vigente, azul verdoso resuelto (un día pasado sin pendientes dice «Resueltas», no «Vencido»);
+  - cada encabezado muestra la cantidad de notas, las vencidas y las de hoy.
+- **Tarjetas** (lista y pipeline):
+  - franja izquierda del **color del área**;
+  - etiqueta de **etapa** (Por hacer, En gestión, Contactado, Resuelta);
+  - etiqueta de **vigencia**: «Vencida · hace N días», «Vence hoy», «Vigente · faltan N días», «Sin fecha límite» o «Resuelta».
+  
+  Para no repetir la información, la fecha se muestra exacta («sáb, 10 oct · 08:00»).
+- **Leyenda de colores** bajo los filtros de área.
+- `NoteKit.vigencia()` / `vigenciaHtml()` son reutilizables. En la ficha del chat las tarjetas no cambian, porque la decoración solo se activa con `opts.area` / `opts.stage` / `opts.vigencia`.
+
+### /batches: lista compacta y detalle completo del envío (`src/panel/batches-view.ts`)
+- **Lista:**
+  - indicadores del día: lotes, mensajes enviados, en curso y fallidos;
+  - filtros por estado (en curso, programados, terminados, con fallos, cancelados), buscador (lote, programa, línea, quién pidió) y selector de línea;
+  - una **fila por lote agrupada por día** («Hoy», «Ayer», fecha), ordenada por fecha de creación. Cada fila muestra hora (24 h), número, nombre, programa, tipo, origen, línea, dueño y solicitante, progreso con enviados/total, fallidos, estado y acciones;
+  - en pantallas angostas cada fila se apila como tarjeta;
+  - se muestran los últimos 200 lotes (antes 100).
+- **Progreso en vivo** solo para los lotes activos (`data-live="0"` en los terminados): antes la página consultaba el estado de cada lote listado al cargar.
+- **Detalle del envío:**
+  - encabezado con programa, tipo y origen;
+  - indicadores en vivo: total, enviados, fallidos, omitidos y pendientes;
+  - **ficha**: quién lo pidió, línea y su estado, origen, área, programa y gestión, creado, programado, inicio, fin, **duración**, primer y último mensaje y **ritmo real promedio por mensaje**;
+  - **mensaje enviado** en burbuja tipo WhatsApp («Igual para todos» o «Personalizado · N variantes» con un ejemplo) y el adjunto;
+  - **motivos de fallo agrupados**;
+  - **destinatarios** con filtros por estado y buscador, mensaje completo desplegable («Ver completo»), hora exacta de envío, error, referencia de origen y enlace a la conversación. Se listan hasta 3000.
+
+### /reports › Envíos masivos (`src/core/mass-activity.ts`)
+- **Pestaña nueva «Envíos masivos»**, con el mismo período y filtro de línea que el resto de Reportes. Respeta el alcance: el Super Admin ve todas las líneas y los demás solo la suya.
+- **Indicadores:** lotes, mensajes (enviados y fallidos), personas que enviaron y día con más envíos.
+- **«Quién envía mensajes masivos»**, una fila por persona:
+  - lotes y cancelados;
+  - días con envíos;
+  - **lotes por día** (promedio y máximo, con su fecha);
+  - mensajes (enviados y fallidos);
+  - **mensajes por lote** (promedio y máximo);
+  - líneas usadas y último envío.
+  
+  La persona sale del `meta` del lote (`solicitado_por_id`/`solicitado_por`, o `account`). Los recordatorios automáticos y los envíos del panel o CSV se agrupan aparte.
+- **«Envíos por persona y día»:** calendario con los lotes de cada persona por día (al pasar el cursor, los mensajes) y colores por intensidad.
+- **«Registro de actividad»:**
+  - cada lote, día por día, con hora, persona, línea, programa, tipo y origen, mensajes, enviados/fallidos/omitidos, duración, estado y enlace a su detalle;
+  - filtro por persona (también desde el botón de cada fila del resumen).
+- **CSV:** `GET /reports/masivos.csv` con el resumen por persona y el registro de lotes (fechas en hora local). El botón «Exportar CSV» usa este archivo cuando la pestaña está abierta.
+- **Pruebas:** `test/mass-activity.test.ts` (6) cubre los totales del período, la agrupación por persona (veces por día, mensajes por lote, cancelados, líneas), los recordatorios aparte, el registro (hora, línea, duración), el alcance de líneas y el CSV. `npm run lint`, `npm run typecheck` y `npm test` (140/140) limpios.
+
+---
+
 ## Notas de operación
 
 - En producción usar `start-baileys.bat` / pm2 / systemd (no `npm run dev`).

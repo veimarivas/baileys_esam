@@ -16,6 +16,7 @@ import { verifySsoToken, safeNext } from '../auth/sso.js';
 import { unreadCount } from '../core/notifications.js';
 import {
   esamAreaLabel,
+  esamSupervisaArea,
   esamEsAdmin,
   esamHome,
   esamPuede,
@@ -1535,7 +1536,9 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
         renderLayout('Notas y tareas', _req.user!, 'conversations', renderNotesPage(), {
           subtitle: esamEsAdmin(_req.user!)
             ? 'Notas, tareas y derivaciones de todo el equipo, en lista o en pipeline por etapas.'
-            : 'Tus notas, tareas y lo que te derivaron, en lista o en pipeline por etapas.',
+            : esamSupervisaArea(_req.user!) === 'marketing'
+              ? 'Tus notas y el seguimiento de todo Marketing (prospectos de cada asesor), en lista o en pipeline.'
+              : 'Tus notas, tareas y lo que te derivaron, en lista o en pipeline por etapas.',
           activeHref: '/notes',
         }),
       );

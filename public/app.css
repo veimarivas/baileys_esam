@@ -5091,3 +5091,47 @@ html[data-bs-theme="dark"] .poll-dialog .form-control:focus { border-color: var(
   .poll-dialog { max-width: 100%; }
   .poll-mode { flex-direction: column; }
 }
+
+/* Notas › Marketing: asesores (supervisión) y prospectos de cronogramas */
+.np-advisors {
+  display: flex; align-items: center; gap: 0.4rem; overflow-x: auto; padding: 0.1rem 0 0.6rem; margin: -0.1rem 0 0.4rem;
+  scrollbar-width: thin; --area: #d97706;
+}
+.np-advisors-label {
+  flex-shrink: 0; display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.68rem; font-weight: 800;
+  letter-spacing: 0.04em; text-transform: uppercase; color: var(--area); margin-right: 0.15rem;
+}
+.np-advisor {
+  flex-shrink: 0; display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.22rem 0.7rem 0.22rem 0.25rem;
+  border: 1px solid var(--nk-line, #e6ebf1); border-radius: 999px; background: var(--nk-surface, #fff);
+  color: var(--esam-ink, #1f2937); font-size: 0.78rem; font-weight: 600; transition: all 0.15s ease; max-width: 17rem;
+}
+.np-advisor:hover { border-color: var(--area); }
+.np-advisor .avatar-xs { width: 24px; height: 24px; font-size: 0.6rem; flex-shrink: 0; }
+.np-advisor-all { width: 24px; height: 24px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--area) 14%, transparent); color: var(--area); }
+.np-advisor-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.np-advisor-n { min-width: 1.3rem; padding: 0 0.35rem; border-radius: 999px; font-size: 0.68rem; text-align: center; background: color-mix(in srgb, var(--area) 12%, transparent); color: var(--area); }
+.np-advisor-sub { font-size: 0.66rem; color: var(--nk-muted, #6b7280); white-space: nowrap; }
+.np-advisor.on { background: var(--area); border-color: var(--area); color: #fff; box-shadow: 0 6px 14px -8px var(--area); }
+.np-advisor.on .np-advisor-n { background: rgba(255, 255, 255, 0.25); color: #fff; }
+.np-advisor.on .np-advisor-sub { color: rgba(255, 255, 255, 0.85); }
+html[data-bs-theme="dark"] .np-advisor { background: #1d2125; border-color: #2a2f34; color: #ced4da; }
+
+.nk-prospect, .nk-prospect-state, .nk-prospect-advisor {
+  display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.05rem 0.5rem; border-radius: 999px;
+  font-size: 0.68rem; font-weight: 700; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+}
+.nk-prospect { color: #b45309; background: #fef3e2; border: 1px solid #fcd9a8; }
+.nk-prospect-advisor { color: #475569; background: #f1f5f9; }
+.nk-prospect-state.is-new { color: #475569; background: #eef2f7; }
+.nk-prospect-state.is-info { color: #1d4ed8; background: #e8effd; }
+.nk-prospect-state.is-warm { color: #b45309; background: #fff4e5; }
+.nk-prospect-state.is-off { color: #9f1239; background: #fdecef; }
+.nk-prospect-state.is-ok { color: #047857; background: #e7f8f0; }
+.pl-prospect { display: flex; flex-wrap: wrap; gap: 0.25rem; margin: 0.3rem 0 0.1rem; }
+html[data-bs-theme="dark"] .nk-prospect { color: #fbbf6a; background: rgba(217, 119, 6, 0.16); border-color: rgba(217, 119, 6, 0.35); }
+html[data-bs-theme="dark"] .nk-prospect-advisor, html[data-bs-theme="dark"] .nk-prospect-state.is-new { color: #cbd5e1; background: #23292f; }
+html[data-bs-theme="dark"] .nk-prospect-state.is-info { color: #93b4f5; background: rgba(37, 99, 235, 0.18); }
+html[data-bs-theme="dark"] .nk-prospect-state.is-warm { color: #fbbf6a; background: rgba(217, 119, 6, 0.16); }
+html[data-bs-theme="dark"] .nk-prospect-state.is-off { color: #f5a3b5; background: rgba(225, 29, 72, 0.16); }
+html[data-bs-theme="dark"] .nk-prospect-state.is-ok { color: #6ee7b7; background: rgba(16, 185, 129, 0.16); }

@@ -721,11 +721,29 @@ function scopeClause(
   return true;
 }
 
-/** Restringe a las notas de un usuario: autor, quien derivó o responsable. */
-function ownerClause(ownerId: number | null | undefined, where: string[], params: unknown[]): void {
+/** Área de la nota: la de su responsable o, si no está derivada, la de quien la registró. */
+const NOTE_AREA_SQL = `LOWER(COALESCE((SELECT ua.esam_area FROM users ua WHERE ua.id = n.assigned_to),
+  (SELECT uu.esam_area FROM users uu WHERE uu.id = n.user_id), ''))`;
+
+/**
+ * Restringe a las notas de un usuario: autor, quien derivó o responsable. Con
+ * `alsoArea`, además todas las notas de esa área (supervisión por área, p. ej.
+ * la gerencia y la supervisión de marketing ven todo marketing).
+ */
+function ownerClause(ownerId: number | null | undefined, where: string[], params: unknown[], alsoArea?: string | null): void {
   if (!ownerId) return;
+  if (alsoArea) {
+    where.push(`(n.user_id = ? OR n.assigned_to = ? OR n.assigned_by = ? OR ${NOTE_AREA_SQL} = ?)`);
+    params.push(ownerId, ownerId, ownerId, alsoArea);
+    return;
+  }
   where.push('(n.user_id = ? OR n.assigned_to = ? OR n.assigned_by = ?)');
   params.push(ownerId, ownerId, ownerId);
+}
+
+/** ¿La nota es de esta área? (para dar acceso a la supervisión del área). */
+export function noteInArea(noteId: number, area: string): boolean {
+  return !!get<{ id: number }>(`SELECT n.id FROM contact_notes n WHERE n.id = ? AND ${NOTE_AREA_SQL} = ?`, noteId, area);
 }
 
 /** Lista global de notas, con filtros, orden y alcance por sesiones del usuario. */
@@ -745,13 +763,15 @@ export function listAllNotes(opts: {
   ids?: number[];
   /** Solo las notas de este usuario: escritas, derivadas por él o derivadas a él. */
   ownerId?: number | null;
+  /** Con `ownerId`: además, todas las notas de esta área (supervisión). */
+  ownerArea?: string | null;
   orderBy?: 'created' | 'due';
   limit?: number;
 } = {}): GlobalNote[] {
   const where: string[] = [];
   const params: unknown[] = [];
   if (!scopeClause(opts.sessionIds, where, params, opts.viewerId ?? null)) return [];
-  ownerClause(opts.ownerId, where, params);
+  ownerClause(opts.ownerId, where, params, opts.ownerArea);
   if (opts.assignedTo) {
     where.push('n.assigned_to = ?');
     params.push(opts.assignedTo);
@@ -844,6 +864,7 @@ export function noteStats(opts: {
   viewerId?: number | null;
   assignedTo?: number | null;
   ownerId?: number | null;
+  ownerArea?: string | null;
 } = {}): NoteStats {
   const where: string[] = [];
   const params: unknown[] = [];
@@ -852,7 +873,7 @@ export function noteStats(opts: {
     derived: 0, derived_unseen: 0, derived_no_contact: 0, derived_contacted: 0,
   };
   if (!scopeClause(opts.sessionIds, where, params, opts.viewerId ?? null)) return empty;
-  ownerClause(opts.ownerId, where, params);
+  ownerClause(opts.ownerId, where, params, opts.ownerArea);
   if (opts.assignedTo) {
     where.push('n.assigned_to = ?');
     params.push(opts.assignedTo);

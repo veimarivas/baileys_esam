@@ -83,6 +83,22 @@ export function esamEsAdmin(user: UserRow): boolean {
   return esamRoles(user).some((rol) => ESAM_ADMINS.includes(rol));
 }
 
+/** Roles de cronogramas que supervisan todo el seguimiento de un área en /notes. */
+const AREA_SUPERVISORS: Record<string, string> = {
+  'Gerencia Marketing': 'marketing',
+  'Supervisor de Marketing': 'marketing',
+};
+
+/**
+ * Área cuyo seguimiento supervisa el usuario (ve las notas de todos sus
+ * asesores), o null. El Super Admin no la necesita: ya ve todo.
+ */
+export function esamSupervisaArea(user: UserRow): string | null {
+  if (esamEsAdmin(user)) return null;
+  for (const rol of esamRoles(user)) if (AREA_SUPERVISORS[rol]) return AREA_SUPERVISORS[rol];
+  return null;
+}
+
 export function esamPuede(user: UserRow, seccion: string): boolean {
   if (esamEsAdmin(user)) return true;
   // Las áreas de cronogramas ya no habilitan secciones administrativas: solo

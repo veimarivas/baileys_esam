@@ -1665,6 +1665,20 @@
       return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
     }
     function addDays(n) { var d = new Date(); d.setDate(d.getDate() + n); return ymd(d); }
+    // Prospecto de marketing (registrado en cronogramas): programa y estado comercial.
+    var PROSPECT_TONE = { nuevo: 'new', contactado: 'info', interesado: 'warm', no_interesado: 'off', inscrito: 'ok' };
+    function prospectOf(n) {
+      if (!n || !n.prospect_meta) return null;
+      try { return typeof n.prospect_meta === 'string' ? JSON.parse(n.prospect_meta) : n.prospect_meta; } catch (_) { return null; }
+    }
+    function prospectBadge(n, withAdvisor) {
+      var p = prospectOf(n);
+      if (!p) return '';
+      return '<span class="nk-prospect" title="Prospecto registrado en cronogramas">' +
+          '<span class="ri-user-star-line" aria-hidden="true"></span>' + escapeHtml(p.programa || 'Prospecto') + '</span>' +
+        '<span class="nk-prospect-state is-' + (PROSPECT_TONE[p.estado] || 'new') + '">' + escapeHtml(p.estado_label || p.estado || 'Nuevo') + '</span>' +
+        (withAdvisor && n.author_name ? '<span class="nk-prospect-advisor" title="Asesor"><span class="ri-user-voice-line" aria-hidden="true"></span>' + escapeHtml(n.author_name) + '</span>' : '');
+    }
     function parseYmd(s) { var p = String(s || '').split('-'); return new Date(+p[0], +p[1] - 1, +p[2]); }
     function daysFromToday(s) { return Math.round((parseYmd(s) - parseYmd(localToday())) / 86400000); }
 
@@ -1859,6 +1873,7 @@
       var pinBadge = pinned
         ? '<span class="nk-pin-badge"><span class="ri-pushpin-2-fill" aria-hidden="true"></span>Importante</span>'
         : '';
+      pinBadge += prospectBadge(n, !!opts.showAdvisor);
       if (n.assigned_to) {
         pinBadge += '<span class="nk-assignee' + (n.assigned_to_me ? ' me' : '') + '" title="Responsable de la tarea">' +
           '<span class="ri-user-received-2-line" aria-hidden="true"></span>' +
@@ -2189,6 +2204,8 @@
       fmtDay: fmtDay,
       daysFromToday: daysFromToday,
       cardHtml: cardHtml,
+      prospectOf: prospectOf,
+      prospectBadge: prospectBadge,
       bindCards: bindCards,
       bindPickers: bindPickers,
       autosize: autosize,
@@ -5051,11 +5068,21 @@
       tagColors: root.querySelector('#tag-colors'),
       tagSave: root.querySelector('#tag-save'),
     };
-    var st = { status: 'pending', tag: null, tags: [], colors: ['#045474'], color: '#045474', notes: [], stats: null, managing: false, view: 'list', area: 'all' };
+    var st = { status: 'pending', tag: null, tags: [], colors: ['#045474'], color: '#045474', notes: [], stats: null, managing: false, view: 'list', area: 'all', advisor: 0, supervisor: false, supervisorArea: null };
     try { if (localStorage.getItem('notes-view') === 'board') st.view = 'board'; } catch (_) {}
     try { st.area = localStorage.getItem('notes-area') || 'all'; } catch (_) {}
     els.board = root.querySelector('#np-board');
     els.areas = root.querySelector('#np-areas');
+    // Filtro por asesor dentro de Marketing (gerencia, supervisión y Super Admin).
+    if (els.areas) {
+      els.advisors = document.createElement('div');
+      els.advisors.id = 'np-advisors';
+      els.advisors.className = 'np-advisors';
+      els.advisors.setAttribute('role', 'tablist');
+      els.advisors.setAttribute('aria-label', 'Asesores de marketing');
+      els.advisors.hidden = true;
+      els.areas.parentNode.insertBefore(els.advisors, els.areas.nextSibling);
+    }
 
     /* ── Áreas: la nota pertenece al área de su responsable (o de quien la registró) ── */
     var AREA_INFO = {
@@ -5073,7 +5100,47 @@
       return AREA_INFO[key] || { label: key.charAt(0).toUpperCase() + key.slice(1), icon: 'ri-team-line', color: '#475569' };
     }
     function visibleNotes() {
-      return st.area === 'all' ? st.notes : st.notes.filter(function (n) { return areaOf(n) === st.area; });
+      var list = st.area === 'all' ? st.notes : st.notes.filter(function (n) { return areaOf(n) === st.area; });
+      if (st.area === 'marketing' && st.advisor) list = list.filter(function (n) { return n.user_id === st.advisor; });
+      return list;
+    }
+    // Quien supervisa ve el asesor de cada prospecto en la tarjeta.
+    function showAdvisor() { return !!(st.supervisor || st.supervisorArea); }
+
+    /* ── Asesores de marketing: cada uno con sus notas y prospectos ── */
+    function renderAdvisors() {
+      if (!els.advisors) return;
+      if (st.area !== 'marketing' || !showAdvisor()) { els.advisors.hidden = true; els.advisors.innerHTML = ''; return; }
+      var base = st.notes.filter(function (n) { return areaOf(n) === 'marketing' && (!n.deleted_at || st.status === 'trash'); });
+      var people = {};
+      base.forEach(function (n) {
+        if (!n.user_id) return;
+        var p = people[n.user_id] || (people[n.user_id] = { id: n.user_id, name: n.author_name || 'Sin nombre', total: 0, prospects: 0 });
+        p.total++;
+        if (n.prospect_meta) p.prospects++;
+      });
+      var list = Object.keys(people).map(function (k) { return people[k]; })
+        .sort(function (a, b) { return b.total - a.total || a.name.localeCompare(b.name); });
+      if (st.advisor && !people[st.advisor]) st.advisor = 0;
+      if (!list.length) { els.advisors.hidden = true; els.advisors.innerHTML = ''; return; }
+      var chip = function (id, label, n, sub) {
+        var on = st.advisor === id;
+        return '<button type="button" class="np-advisor' + (on ? ' on' : '') + '" role="tab" aria-selected="' + on + '" data-advisor="' + id + '">' +
+          (id ? avatarHtml(label, 'avatar-xs') : '<span class="np-advisor-all ri-team-line" aria-hidden="true"></span>') +
+          '<span class="np-advisor-name">' + escapeHtml(label) + '</span><span class="np-advisor-n">' + n + '</span>' +
+          (sub ? '<span class="np-advisor-sub">' + escapeHtml(sub) + '</span>' : '') + '</button>';
+      };
+      els.advisors.innerHTML = '<span class="np-advisors-label"><span class="ri-user-voice-line" aria-hidden="true"></span>Asesores</span>' +
+        chip(0, 'Todos', base.length, '') +
+        list.map(function (p) { return chip(p.id, p.name, p.total, p.prospects ? p.prospects + ' prospecto' + (p.prospects === 1 ? '' : 's') : ''); }).join('');
+      els.advisors.hidden = false;
+      Array.prototype.forEach.call(els.advisors.querySelectorAll('.np-advisor'), function (b) {
+        b.addEventListener('click', function () {
+          st.advisor = Number(b.getAttribute('data-advisor')) || 0;
+          renderAdvisors();
+          if (st.view === 'board') renderBoard(); else renderNotes();
+        });
+      });
     }
 
     function renderAreas() {
@@ -5097,8 +5164,10 @@
       Array.prototype.forEach.call(els.areas.querySelectorAll('.np-area'), function (b) {
         b.addEventListener('click', function () {
           st.area = b.getAttribute('data-area');
+          st.advisor = 0;
           try { localStorage.setItem('notes-area', st.area); } catch (_) {}
           renderAreas();
+          renderAdvisors();
           if (st.view === 'board') renderBoard(); else renderNotes();
         });
       });
@@ -5134,8 +5203,11 @@
       return api('/notes/all?' + p.join('&')).then(function (d) {
         st.notes = (d && d.notes) || [];
         st.stats = d && d.stats;
+        st.supervisor = !!(d && d.supervisor);
+        st.supervisorArea = (d && d.supervisor_area) || null;
         renderStats();
         renderAreas();
+        renderAdvisors();
         if (st.view === 'board') renderBoard(); else renderNotes();
         markSeen();
       }).catch(function (e) { toast(e.message, true); })
@@ -5243,7 +5315,7 @@
         var label = byDue ? GROUP_LABELS[k] : k;
         return '<section class="np-group np-group-' + (byDue ? k : 'time') + '">' +
           '<h6 class="np-group-title">' + escapeHtml(label) + ' <span>' + groups[k].length + '</span></h6>' +
-          '<div class="np-cards">' + groups[k].map(function (n) { return NoteKit.cardHtml(n, { showContact: true, areaBadge: st.area === 'all' ? areaBadge : null }); }).join('') + '</div>' +
+          '<div class="np-cards">' + groups[k].map(function (n) { return NoteKit.cardHtml(n, { showContact: true, areaBadge: st.area === 'all' ? areaBadge : null, showAdvisor: showAdvisor() }); }).join('') + '</div>' +
         '</section>';
       }).join('');
       var clearFocus = els.list.querySelector('#np-focus-clear');
@@ -5325,6 +5397,7 @@
             (movable ? '<span class="pl-grip ri-draggable" title="Arrastrá la tarjeta para moverla de etapa" aria-hidden="true"></span>' : '') +
           '</span>' +
         '</div>' +
+        (n.prospect_meta ? '<div class="pl-prospect">' + NoteKit.prospectBadge(n, showAdvisor()) + '</div>' : '') +
         (text ? '<div class="pl-text">' + escapeHtml(text.slice(0, 220)) + '</div>' : '') +
         (n.contact_result && n.contacted_at ? '<div class="pl-result"><span class="ri-chat-check-line"></span> ' + escapeHtml(n.contact_result.slice(0, 140)) + '</div>' : '') +
         (tags ? '<div class="pl-tags">' + tags + '</div>' : '') +

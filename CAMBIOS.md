@@ -1807,6 +1807,35 @@ Tres mejoras del inbox para acercarlo a WhatsApp. La interfaz y los textos sigue
 
 ---
 
+## 53. Prospectos de marketing: seguimiento por asesor en Notas › Marketing (2026-10-26)
+
+Cronogramas habilita a los asesores de marketing a registrar prospectos en los programas en Inscripciones y enviarles WhatsApp desde su propia línea. Cada prospecto se sigue acá como una nota del asesor.
+
+- **API (`src/core/prospects.ts`):**
+  - `PUT /api/v1/prospects/:ref` crea o actualiza el seguimiento. Recibe `account` (usuario del asesor en cronogramas), `phone`, `name`, `programa`, `programa_id`, `estado` y `nota`.
+  - La nota se crea en la ficha de la persona, en la línea del asesor, con el asesor como autor y la etiqueta **Prospecto**.
+  - Responde 422 con un mensaje claro si el asesor no tiene usuario o línea, o si el celular es inválido.
+  - `DELETE /api/v1/prospects/:ref` manda la nota a la papelera.
+  - Idempotente por referencia (`contact_notes.prospect_ref`); el programa y el estado quedan en `prospect_meta`.
+  - El nombre de la persona se registra solo si no tenía uno: no pisa el de cronogramas ni el escrito a mano.
+- **El estado comercial mueve el pipeline:**
+  - nuevo → Por hacer;
+  - contactado o interesado → Contactado;
+  - no interesado o inscrito → Resuelta.
+  
+  Solo se mueve cuando el estado cambia, así que lo que el asesor movió a mano en /notes se respeta.
+- **Quién ve qué en /notes:**
+  - cada asesor ve lo suyo, como hasta ahora;
+  - **Gerencia Marketing** y **Supervisor de Marketing** (`esamSupervisaArea`) ven además todas las notas del área Marketing de todos los asesores, y pueden abrirlas aunque la persona se atienda en otra línea (`noteInArea` en `accessibleNote`);
+  - el Super Admin ve todo;
+  - las demás áreas no ven las notas de marketing.
+- **Vista /notes:**
+  - en el área Marketing, quien supervisa tiene chips por **asesor**, con la cantidad de notas y de prospectos;
+  - las tarjetas de lista y pipeline muestran el programa, el estado del prospecto y, para quien supervisa, el asesor.
+- **Pruebas:** `test/prospects.test.ts` (6) cubre el alta, el estado→pipeline, los rechazos, la visibilidad por rol, el acceso por área y la papelera. `npm run typecheck` y `npm test` (134/134) limpios.
+
+---
+
 ## Notas de operación
 
 - En producción usar `start-baileys.bat` / pm2 / systemd (no `npm run dev`).

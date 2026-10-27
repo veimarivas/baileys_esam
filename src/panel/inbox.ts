@@ -4,7 +4,7 @@ import type { Express, NextFunction, Request, RequestHandler, Response } from 'e
 import { logger } from '../logger.js';
 import { all, get } from '../db/index.js';
 import { panelBus } from './events.js';
-import { esamEsAdmin, sessionScopeFor, type UserRow } from '../auth/users.js';
+import { esamEsAdmin, esamSupervisaArea, sessionScopeFor, type UserRow } from '../auth/users.js';
 import type { SessionManager } from '../baileys/manager.js';
 import * as conversations from '../core/conversations.js';
 import {
@@ -23,6 +23,7 @@ import {
   personLines,
   noteDTO,
   noteStats,
+  noteInArea,
   noteVisibleIn,
   personChatsForNote,
   restoreNote,
@@ -151,7 +152,10 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       return null;
     }
     const scope = noteScope(req.user!);
-    if (!noteVisibleIn(note.id, scope, req.user!.id)) {
+    // La gerencia/supervisión de un área accede a las notas de esa área aunque
+    // la persona se atienda en la línea de otro asesor.
+    const area = esamSupervisaArea(req.user!);
+    if (!noteVisibleIn(note.id, scope, req.user!.id) && !(area && noteInArea(note.id, area))) {
       res.status(403).json({ error: 'No tenés acceso a esta nota.' });
       return null;
     }
@@ -1016,14 +1020,18 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       // En /notes cada usuario ve solo lo suyo: lo que escribió, lo que derivó y lo
       // que le derivaron. El Super Admin supervisa todo. (En la ficha del chat se
       // siguen viendo las notas de la persona de todos, para dar continuidad.)
+      // La Gerencia y el Supervisor de Marketing ven, además, el seguimiento de
+      // todo marketing (prospectos y notas de todos los asesores).
       const admin = esamEsAdmin(user);
       const ownerId = admin ? null : user.id;
+      const ownerArea = esamSupervisaArea(user);
       const listScope = admin ? scope : null;
       res.json({
         supervisor: admin,
-        notes: listAllNotes({ tagId, status: ids.length ? 'all' : status, q, orderBy, authorId, assignedTo, ids, viewerId: user.id, sessionIds: listScope, ownerId })
+        supervisor_area: ownerArea,
+        notes: listAllNotes({ tagId, status: ids.length ? 'all' : status, q, orderBy, authorId, assignedTo, ids, viewerId: user.id, sessionIds: listScope, ownerId, ownerArea })
           .map((n) => withPermissions(user, n)),
-        stats: noteStats({ sessionIds: listScope, authorId, assignedTo, viewerId: user.id, ownerId }),
+        stats: noteStats({ sessionIds: listScope, authorId, assignedTo, viewerId: user.id, ownerId, ownerArea }),
       });
     }),
   );

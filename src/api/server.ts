@@ -15,6 +15,9 @@ import { upsertUser, usernameAvailableFor } from '../auth/users.js';
 import { logger } from '../logger.js';
 import { countNewContactsToday, getPolicy, limitState } from '../core/anti-ban.js';
 import { AWAITING, getGroup, markAwaiting, notifyGroup } from '../core/batch-confirm.js';
+import { personChatsForNote } from '../core/contacts.js';
+import { ProspectError, removeProspect, upsertProspect } from '../core/prospects.js';
+import { panelBus } from '../panel/events.js';
 import type { SessionRow } from '../types.js';
 
 function ah(fn: (req: Request, res: Response) => Promise<unknown>) {
@@ -394,6 +397,69 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
         status: fresh.status,
         expected_phone: fresh.expected_phone,
       });
+    }),
+  );
+
+  // ── Prospectos de marketing ────────────────────────────────────────────────
+  // Cronogramas registra el prospecto; acá queda como nota de seguimiento del
+  // asesor (área Marketing en /notes). Idempotente por referencia.
+
+  /** Avisa en vivo a /notes y a las fichas abiertas que la nota cambió. */
+  const publishProspect = (noteId: number, action: string) => {
+    const chats = personChatsForNote(noteId);
+    panelBus.publish('note', {
+      noteId,
+      action,
+      actorId: null,
+      assignedTo: null,
+      userIds: [],
+      sessionIds: [...new Set(chats.map((c) => c.session_id))],
+      chats: chats.map((c) => ({ sessionId: c.session_id, chatId: c.chat_id })),
+    });
+  };
+
+  app.put(
+    '/api/v1/prospects/:ref',
+    ah(async (req, res) => {
+      const body = req.body ?? {};
+      const account = String(body.account ?? '').trim();
+      if (!account) {
+        res.status(422).json({ message: 'Falta la cuenta (account) del asesor.' });
+        return;
+      }
+      try {
+        const result = upsertProspect(
+          {
+            ref: String(req.params.ref),
+            account,
+            phone: String(body.phone ?? ''),
+            name: body.name ?? null,
+            programa: body.programa ?? null,
+            programaId: body.programa_id ? Number(body.programa_id) : null,
+            estado: body.estado ?? null,
+            nota: body.nota ?? null,
+          },
+          sessionFor(account),
+        );
+        publishProspect(result.noteId, result.created ? 'created' : 'edited');
+        audit(result.created ? 'prospect.created' : 'prospect.updated', { ref: req.params.ref, account, note_id: result.noteId });
+        res.status(result.created ? 201 : 200).json({ note_id: result.noteId, created: result.created });
+      } catch (err) {
+        const status = err instanceof ProspectError ? err.status : 500;
+        res.status(status).json({ message: (err as Error).message });
+      }
+    }),
+  );
+
+  app.delete(
+    '/api/v1/prospects/:ref',
+    ah(async (req, res) => {
+      const noteId = removeProspect(String(req.params.ref));
+      if (noteId) {
+        publishProspect(noteId, 'deleted');
+        audit('prospect.deleted', { ref: req.params.ref, note_id: noteId });
+      }
+      res.json({ ok: true, note_id: noteId });
     }),
   );
 

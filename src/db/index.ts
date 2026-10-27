@@ -67,6 +67,10 @@ export function migrate(): void {
   addColumnIfMissing('messages', 'reply_to_body', 'TEXT');
   // Etapa manual del pipeline de seguimiento ('todo' | 'doing'); las demás salen de los datos.
   addColumnIfMissing('contact_notes', 'pipeline_stage', 'TEXT');
+  // Prospectos de marketing (cronogramas): referencia estable y datos (programa, estado).
+  addColumnIfMissing('contact_notes', 'prospect_ref', 'TEXT');
+  addColumnIfMissing('contact_notes', 'prospect_meta', 'TEXT');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_contact_notes_prospect ON contact_notes(prospect_ref)');
   // Último cierre de conexión explicado (JSON de DisconnectInfo) para la vista Conexión.
   addColumnIfMissing('sessions', 'disconnect_info', 'TEXT');
   addColumnIfMissing('messages', 'media_filename', 'TEXT');

@@ -622,7 +622,7 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
       }
       const pending = Math.max(0, batch.total - batch.sent - batch.failed - batch.skipped);
       const progress = batch.total > 0 ? Math.round(((batch.sent + batch.failed + batch.skipped) / batch.total) * 100) : 0;
-      let meta: { waiting?: { reason?: string; until?: string }; anti_ban_pause?: string } = {};
+      let meta: { waiting?: { reason?: string; until?: string }; anti_ban_pause?: string; solicitado_por_id?: number | string; account?: string } = {};
       try {
         meta = batch.meta ? JSON.parse(batch.meta) : {};
       } catch {
@@ -642,6 +642,9 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
         pending,
         progress,
         anti_ban: antiBan,
+        // Quién pidió el lote (usuario de cronogramas): cronogramas deja ver el
+        // progreso a esa persona aunque no tenga permisos de administración.
+        requested_by: meta.solicitado_por_id != null ? String(meta.solicitado_por_id) : meta.account ?? null,
       });
     }),
   );

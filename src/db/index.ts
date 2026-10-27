@@ -71,6 +71,8 @@ export function migrate(): void {
   addColumnIfMissing('contact_notes', 'prospect_ref', 'TEXT');
   addColumnIfMissing('contact_notes', 'prospect_meta', 'TEXT');
   db.exec('CREATE INDEX IF NOT EXISTS idx_contact_notes_prospect ON contact_notes(prospect_ref)');
+  // Historial de envíos de la persona (ficha del contacto): búsqueda por número.
+  db.exec('CREATE INDEX IF NOT EXISTS idx_batch_items_chat ON batch_items(chat_id)');
   // Último cierre de conexión explicado (JSON de DisconnectInfo) para la vista Conexión.
   addColumnIfMissing('sessions', 'disconnect_info', 'TEXT');
   addColumnIfMissing('messages', 'media_filename', 'TEXT');

@@ -1895,6 +1895,39 @@ Cronogramas habilita a los asesores de marketing a registrar prospectos en los p
 
 ---
 
+## 55. Ficha del contacto: historial de envíos del sistema (cobranzas, notas, asistencias) (2026-10-26)
+
+Objetivo: seguir en la ficha de cada persona todo lo que le envió el sistema (contabilidad y académico), quién lo pidió y si le llegó.
+
+- **Solapa nueva «Envíos»** en la ficha del contacto, junto a Información y Grupos. Se carga solo al abrirla.
+  - **Resumen por área** (Contabilidad, Académico y, si hay, Marketing): cantidad, último envío («hoy», «hace N días»), qué fue, quién lo envió y cuántos no pudieron enviarse. El color avisa: verde si recibió algo en los últimos 30 días, ámbar si no, gris si nunca.
+  - **Filtros por categoría:** Cobranza, Notas, Asistencia, Programa, Marketing y Otros.
+  - **Historial** del más nuevo al más viejo, con:
+    - el título: «Cuotas vencidas», «Cuotas próximas a vencer», «Recordatorio automático de cuotas», «Notas del módulo», «Aviso de inasistencia» o «Mensaje del programa»;
+    - fecha y hora, programa, módulo y sesión;
+    - **quién lo envió** y desde qué línea;
+    - el **estado de entrega con el acuse de WhatsApp** (Leído, Entregado, Enviado, No se pudo enviar con el motivo, Pendiente, Cancelado);
+    - el mensaje completo;
+    - el enlace al lote, solo para quien puede abrir Lotes.
+  - Se busca **por número en todas las líneas**, igual que las notas de la persona.
+- **Backend:**
+  - `src/core/person-sends.ts`: `personSends(phoneKey)` y `classifySend(meta)`. La clasificación sale del `meta` que manda cronogramas (`tipo`, `modo`, `origen`, `area`, `programa`, `modulo`, `sesion`). El remitente sale de `solicitado_por`, del usuario de `account`/`solicitado_por_id`, o «Envío automático».
+  - Ruta `GET /inbox/:session/:chat/sends`, con el mismo control de acceso que la ficha.
+  - Índice nuevo `idx_batch_items_chat` para que la búsqueda por número no recorra toda la tabla.
+- **API de lotes:** `GET /api/v1/batches/:id` devuelve además `requested_by` (usuario de cronogramas que pidió el lote).
+- **Cronogramas** (repo aparte), **para que todo envío a participantes quede registrado**. Los avisos por `wa.me` no pasaban por el sistema y ya no se usan:
+  - **Ausentes del detalle del módulo** → `POST /admin/programas/horario/{horario}/whatsapp-ausentes`. Es un lote por Seguimiento ESAM desde la línea de quien envía, con `tipo: asistencia`, sesión y módulo. Solo incluye a quienes figuran «Ausente» y no están dados de baja. Queda en `mensajes` como `whatsapp_asistencia`.
+  - **Responsables › WhatsApp masivo de notas** y el **botón por fila** del modal de notas del programa → envío de notas por Seguimiento ESAM (`tipo: notas`).
+  - **Enlace al celular del participante** en el programa → abre la conversación en Seguimiento ESAM (SSO con `next`).
+  - **Progreso del lote:** lo ve quien tiene permisos de envío o quien pidió ese lote (antes un responsable sin esos permisos veía un error).
+  - **No se tocaron** los envíos de **credenciales a docentes** (`wa.me` con usuario y contraseña), para no guardar contraseñas en el historial de mensajes.
+- **Pruebas:**
+  - `test/person-sends.test.ts` (5): solo la persona, clasificación por categoría y área, remitente (nombre, cuenta, automático), acuse leído, fallos con motivo y sesión.
+  - En cronogramas se verificó el envío a ausentes en una transacción revertida con la API simulada (9/9).
+  - `npm run lint`, `npm run typecheck` y `npm test` (145/145) limpios.
+
+---
+
 ## Notas de operación
 
 - En producción usar `start-baileys.bat` / pm2 / systemd (no `npm run dev`).

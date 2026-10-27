@@ -5416,3 +5416,52 @@ html[data-bs-theme="dark"] .ma-l4 { color: #fca5a5; }
 .ma-cal td.ma-l2 { background-color: color-mix(in srgb, #0e9f6e 32%, transparent) !important; }
 .ma-cal td.ma-l3 { background-color: color-mix(in srgb, #d97706 32%, transparent) !important; }
 .ma-cal td.ma-l4 { background-color: color-mix(in srgb, #dc2626 32%, transparent) !important; }
+
+/* ── Ficha del contacto › Envíos del sistema ── */
+.contact-sends { --ps-line: var(--vz-border-color, #e6ebf1); --ps-soft: var(--vz-light, #f6f8fb); --ps-mute: var(--esam-muted, #6b7280); --ps-ink: var(--esam-ink, #1f2937); }
+html[data-bs-theme="dark"] .contact-sends { --ps-line: #2a2f34; --ps-soft: #23292f; --ps-mute: #98a2b3; --ps-ink: #dee2e6; }
+.ps-areas { display: grid; grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr)); gap: 0.45rem; margin-bottom: 0.65rem; }
+.ps-area { border: 1px solid var(--ps-line); border-left: 4px solid var(--tone); border-radius: 10px; padding: 0.45rem 0.6rem; background: var(--vz-card-bg, #fff); }
+html[data-bs-theme="dark"] .ps-area { background: #1d2125; }
+.ps-area.is-ok { --tone: #0e9f6e; } .ps-area.is-warn { --tone: #d97706; } .ps-area.is-none { --tone: #94a3b8; }
+.ps-area-h { display: flex; align-items: center; gap: 0.3rem; font-weight: 800; font-size: 0.8rem; color: var(--ps-ink); }
+.ps-area-h span { color: var(--tone); }
+.ps-area-h b { margin-left: auto; font-size: 0.95rem; }
+.ps-area-s { font-size: 0.72rem; font-weight: 700; color: var(--tone); }
+.ps-area-d { font-size: 0.68rem; color: var(--ps-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ps-area-f { font-size: 0.68rem; color: #dc2626; font-weight: 600; }
+.ps-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-bottom: 0.6rem; }
+.ps-chip { display: inline-flex; align-items: center; gap: 0.25rem; border: 1px solid var(--ps-line); background: var(--vz-card-bg, #fff); color: var(--ps-ink);
+  border-radius: 999px; padding: 0.18rem 0.55rem; font-size: 0.72rem; font-weight: 600; cursor: pointer; }
+html[data-bs-theme="dark"] .ps-chip { background: #1d2125; }
+.ps-chip b { font-size: 0.66rem; color: var(--ps-mute); }
+.ps-chip span { color: var(--cat, var(--ps-mute)); }
+.ps-chip.on { background: var(--cat, var(--esam-brand, #045474)); border-color: var(--cat, var(--esam-brand, #045474)); color: #fff; }
+.ps-chip.on b, .ps-chip.on span { color: #fff; }
+.ps-c-cobranza { --cat: #0e9f6e; } .ps-c-notas { --cat: #2563eb; } .ps-c-asistencia { --cat: #7c3aed; }
+.ps-c-programa { --cat: #0891b2; } .ps-c-marketing { --cat: #d97706; } .ps-c-otros { --cat: #64748b; }
+.ps-list { display: flex; flex-direction: column; gap: 0.45rem; }
+.ps-item { border: 1px solid var(--ps-line); border-left: 3px solid var(--cat); border-radius: 10px; padding: 0.5rem 0.6rem; background: var(--vz-card-bg, #fff); }
+html[data-bs-theme="dark"] .ps-item { background: #1d2125; }
+.ps-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.4rem; }
+.ps-cat { display: inline-flex; align-items: center; gap: 0.25rem; font-weight: 800; font-size: 0.8rem; color: var(--cat); }
+.ps-at { font-size: 0.68rem; color: var(--ps-mute); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ps-sub { font-size: 0.74rem; color: var(--ps-ink); margin-top: 0.1rem; overflow-wrap: anywhere; }
+.ps-who { font-size: 0.72rem; color: var(--ps-mute); margin-top: 0.2rem; overflow-wrap: anywhere; }
+.ps-who span { margin-right: 0.2rem; }
+.ps-who b { color: var(--ps-ink); }
+.ps-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin-top: 0.3rem; }
+.ps-st { display: inline-flex; align-items: center; gap: 0.2rem; font-size: 0.68rem; font-weight: 700; padding: 0.02rem 0.45rem; border-radius: 999px; }
+.ps-st.is-read { color: #1d4ed8; background: #e8effd; } .ps-st.is-ok { color: #047857; background: #e7f8f0; }
+.ps-st.is-bad { color: #b91c1c; background: #fdecec; } .ps-st.is-wait { color: #b45309; background: #fff4e5; } .ps-st.is-off { color: #475569; background: #eef2f7; }
+html[data-bs-theme="dark"] .ps-st.is-read { color: #93b4f5; background: rgba(37, 99, 235, 0.18); }
+html[data-bs-theme="dark"] .ps-st.is-ok { color: #6ee7b7; background: rgba(16, 185, 129, 0.16); }
+html[data-bs-theme="dark"] .ps-st.is-bad { color: #fca5a5; background: rgba(220, 38, 38, 0.18); }
+html[data-bs-theme="dark"] .ps-st.is-wait { color: #fbbf6a; background: rgba(217, 119, 6, 0.16); }
+html[data-bs-theme="dark"] .ps-st.is-off { color: #cbd5e1; background: #23292f; }
+.ps-err { font-size: 0.68rem; color: #b91c1c; overflow-wrap: anywhere; }
+.ps-batch { margin-left: auto; font-size: 0.68rem; font-weight: 600; }
+.ps-msg { margin-top: 0.3rem; }
+.ps-msg summary { cursor: pointer; font-size: 0.72rem; font-weight: 600; color: var(--esam-brand, #045474); }
+.ps-body { margin-top: 0.3rem; padding: 0.45rem 0.55rem; border-radius: 8px; background: #d9fdd3; color: #111b21; font-size: 0.76rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+html[data-bs-theme="dark"] .ps-body { background: #005c4b; color: #e9edef; }

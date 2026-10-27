@@ -4,7 +4,7 @@ import type { Express, NextFunction, Request, RequestHandler, Response } from 'e
 import { logger } from '../logger.js';
 import { all, get } from '../db/index.js';
 import { panelBus } from './events.js';
-import { esamEsAdmin, esamSupervisaArea, sessionScopeFor, type UserRow } from '../auth/users.js';
+import { esamEsAdmin, esamPuede, esamSupervisaArea, sessionScopeFor, type UserRow } from '../auth/users.js';
 import type { SessionManager } from '../baileys/manager.js';
 import * as conversations from '../core/conversations.js';
 import {
@@ -37,6 +37,7 @@ import {
 } from '../core/contacts.js';
 import * as noteTags from '../core/note-tags.js';
 import { personTagsByKeys, phoneKeyOf, setPersonName } from '../core/person.js';
+import { personSends } from '../core/person-sends.js';
 import * as directory from '../core/directory.js';
 import { teamMembers, teamTagFor } from '../core/team.js';
 import { listNotifications, markNoteRead, markRead, notify, supervisorIds, unreadCount, type NotificationKind } from '../core/notifications.js';
@@ -646,6 +647,22 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
         lines: others,
         fill: { name: pick('name'), email: pick('email'), company: pick('company'), programa: pick('programa') },
       });
+    }),
+  );
+
+  // Envíos del sistema a la persona (cobranzas, notas, asistencias, avisos del
+  // programa): quién los pidió, desde qué línea y si los recibió.
+  app.get(
+    '/inbox/:session/:chat/sends',
+    ...auth,
+    ah((req, res) => {
+      const resolved = resolveAuthorized(req, res, String(req.params.session), String(req.params.chat));
+      if (!resolved) return;
+      const canBatches = esamPuede(req.user!, 'batches');
+      if (resolved.chatId.endsWith('@g.us')) return res.json({ ...personSends(null), can_batches: canBatches });
+      const contact = getOrCreateContact(resolved.session.id, resolved.chatId);
+      const key = contact.phone_key ?? (resolved.chatId.endsWith('@lid') ? null : phoneKeyOf(resolved.chatId));
+      res.json({ ...personSends(key), can_batches: canBatches });
     }),
   );
 

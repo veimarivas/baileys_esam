@@ -3003,6 +3003,9 @@
       state.contactTab = 'info';
       state.contactGroups = null;
       state.contactGroupsLoading = false;
+      state.contactSends = null;
+      state.contactSendsLoading = false;
+      state.sendsFilter = 'todos';
       state.notes = [];
       state.noteDraft = emptyNoteDraft();
       state.person = null;
@@ -4471,6 +4474,133 @@
     }
 
     // Grupos de la persona en todas las líneas del usuario (solapa «Grupos»).
+    // ── Envíos del sistema a la persona (cobranzas, notas, asistencias…) ──
+    var SEND_CATS = {
+      cobranza: { label: 'Cobranza', icon: 'ri-money-dollar-circle-line' },
+      notas: { label: 'Notas', icon: 'ri-file-list-3-line' },
+      asistencia: { label: 'Asistencia', icon: 'ri-calendar-check-line' },
+      programa: { label: 'Programa', icon: 'ri-graduation-cap-line' },
+      marketing: { label: 'Marketing', icon: 'ri-megaphone-line' },
+      otros: { label: 'Otros', icon: 'ri-mail-line' },
+    };
+    var SEND_AREAS = {
+      contabilidad: { label: 'Contabilidad', icon: 'ri-money-dollar-circle-line' },
+      academico: { label: 'Académico', icon: 'ri-graduation-cap-line' },
+      marketing: { label: 'Marketing', icon: 'ri-megaphone-line' },
+      otros: { label: 'Otros', icon: 'ri-mail-line' },
+    };
+
+    function loadContactSends() {
+      if (!state.selectedChat) return;
+      var token = state.chatToken;
+      state.contactSendsLoading = true;
+      renderContact();
+      api('/inbox/' + encodeURIComponent(state.selectedSession) + '/' + encodeURIComponent(state.selectedChat) + '/sends')
+        .then(function (d) {
+          if (token !== state.chatToken) return;
+          state.contactSends = d && d.items ? d : { items: [], areas: [], byCategory: {} };
+          state.contactSendsLoading = false;
+          renderContact();
+        })
+        .catch(function (e) {
+          if (token !== state.chatToken) return;
+          state.contactSends = { items: [], areas: [], byCategory: {} };
+          state.contactSendsLoading = false;
+          renderContact();
+          toast((e && e.message) || 'No se pudo cargar el historial de envíos.', true);
+        });
+    }
+
+    function sendDate(iso) {
+      if (!iso) return '';
+      var d = new Date(iso);
+      return d.toLocaleDateString('es-BO', { day: '2-digit', month: '2-digit', year: 'numeric' }) + ' ' +
+        d.toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+    }
+    function daysAgo(iso) { return iso ? Math.floor((Date.now() - new Date(iso).getTime()) / 86400000) : null; }
+
+    // Estado de entrega: acuse de WhatsApp si salió; si no, el del envío.
+    function sendStatusHtml(i) {
+      if (i.status === 'sent') {
+        var ack = { read: ['Leído', 'is-read', 'ri-check-double-line'], played: ['Escuchado', 'is-read', 'ri-check-double-line'],
+          delivered: ['Entregado', 'is-ok', 'ri-check-double-line'] }[i.ack] || ['Enviado', 'is-ok', 'ri-check-line'];
+        return '<span class="ps-st ' + ack[1] + '"><span class="' + ack[2] + '" aria-hidden="true"></span>' + ack[0] + '</span>';
+      }
+      var map = { failed: ['No se pudo enviar', 'is-bad', 'ri-error-warning-line'], pending: ['Pendiente', 'is-wait', 'ri-time-line'],
+        cancelled: ['Cancelado', 'is-off', 'ri-close-circle-line'], skipped: ['Omitido', 'is-off', 'ri-skip-forward-line'] }[i.status] ||
+        [i.status, 'is-off', 'ri-question-line'];
+      return '<span class="ps-st ' + map[1] + '" title="' + escapeHtml(i.error || '') + '"><span class="' + map[2] + '" aria-hidden="true"></span>' + map[0] + '</span>';
+    }
+
+    function contactSendsHtml() {
+      if (state.contactSendsLoading) {
+        return '<div class="cg-state"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Buscando envíos…</div>';
+      }
+      var d = state.contactSends;
+      if (!d) return '<div class="cg-state">Cargando envíos…</div>';
+      // Resumen por área: ¿le llega información de contabilidad y de académico?
+      var areas = (d.areas || []).map(function (a) {
+        var info = SEND_AREAS[a.area] || SEND_AREAS.otros;
+        var ago = daysAgo(a.lastAt);
+        var tone = !a.total ? 'none' : ago !== null && ago <= 30 ? 'ok' : 'warn';
+        var status = !a.total
+          ? 'Sin envíos registrados'
+          : ago === 0 ? 'Último envío hoy' : ago === 1 ? 'Último envío ayer' : 'Último envío hace ' + ago + ' días';
+        return '<div class="ps-area is-' + tone + '">' +
+          '<div class="ps-area-h"><span class="' + info.icon + '" aria-hidden="true"></span>' + info.label + '<b>' + a.total + '</b></div>' +
+          '<div class="ps-area-s">' + escapeHtml(status) + '</div>' +
+          (a.total ? '<div class="ps-area-d">' + escapeHtml(a.lastTitle || '') + ' · ' + escapeHtml(a.lastSender || '') + '</div>' : '') +
+          (a.failed ? '<div class="ps-area-f">' + a.failed + ' sin poder enviarse</div>' : '') +
+        '</div>';
+      }).join('');
+      var items = d.items || [];
+      if (!items.length) {
+        return '<div class="ps-areas">' + areas + '</div>' +
+          '<div class="cg-empty"><span class="ri-mail-send-line" aria-hidden="true"></span>' +
+          '<p>El sistema todavía no le envió mensajes a esta persona.</p>' +
+          '<small>Acá aparecen las cobranzas, notas, avisos de inasistencia y mensajes de programa enviados desde cronogramas o el panel.</small></div>';
+      }
+      var cats = Object.keys(SEND_CATS).filter(function (k) { return (d.byCategory || {})[k]; });
+      var f = state.sendsFilter || 'todos';
+      if (f !== 'todos' && cats.indexOf(f) === -1) f = state.sendsFilter = 'todos';
+      var chips = '<button type="button" class="ps-chip' + (f === 'todos' ? ' on' : '') + '" data-sfilter="todos">Todos <b>' + items.length + '</b></button>' +
+        cats.map(function (k) {
+          return '<button type="button" class="ps-chip ps-c-' + k + (f === k ? ' on' : '') + '" data-sfilter="' + k + '"><span class="' + SEND_CATS[k].icon + '" aria-hidden="true"></span>' +
+            SEND_CATS[k].label + ' <b>' + d.byCategory[k] + '</b></button>';
+        }).join('');
+      var list = items.filter(function (i) { return f === 'todos' || i.category === f; }).map(function (i) {
+        var cat = SEND_CATS[i.category] || SEND_CATS.otros;
+        var sub = [i.programa, i.modulo ? 'Módulo ' + i.modulo : null, i.detail].filter(Boolean).map(escapeHtml).join(' · ');
+        var line = i.linePhone ? fmtPhone(i.linePhone) + (i.lineOwner ? ' (' + i.lineOwner + ')' : '') : '';
+        var body = i.body || '';
+        return '<article class="ps-item ps-c-' + i.category + '">' +
+          '<div class="ps-top"><span class="ps-cat"><span class="' + cat.icon + '" aria-hidden="true"></span>' + escapeHtml(i.title) + '</span>' +
+            '<time class="ps-at" datetime="' + escapeHtml(i.at) + '">' + escapeHtml(sendDate(i.at)) + '</time></div>' +
+          (sub ? '<div class="ps-sub">' + sub + '</div>' : '') +
+          '<div class="ps-who"><span class="' + (i.automatic ? 'ri-robot-2-line' : 'ri-user-voice-line') + '" aria-hidden="true"></span>Enviado por <b>' + escapeHtml(i.sender) + '</b>' +
+            (line ? ' · desde ' + escapeHtml(line) : '') + '</div>' +
+          '<div class="ps-foot">' + sendStatusHtml(i) +
+            (i.status === 'failed' && i.error ? '<span class="ps-err">' + escapeHtml(i.error) + '</span>' : '') +
+            (d.can_batches ? '<a class="ps-batch" href="/batches/' + i.batchId + '" target="_blank" rel="noopener">Lote #' + i.batchId + '</a>' : '') + '</div>' +
+          (body ? '<details class="ps-msg"><summary>Ver mensaje</summary><div class="ps-body">' + escapeHtml(body) + '</div></details>' : '') +
+        '</article>';
+      }).join('');
+      return '<p class="cg-hint">Mensajes que le envió el sistema (cronogramas o el panel), de todas las líneas: quién lo pidió y si le llegó.</p>' +
+        '<div class="ps-areas">' + areas + '</div>' +
+        '<div class="ps-chips">' + chips + '</div>' +
+        '<div class="ps-list">' + list + '</div>';
+    }
+
+    function bindContactSends() {
+      Array.prototype.forEach.call(els.contact.querySelectorAll('.ps-chip'), function (b) {
+        b.addEventListener('click', function () {
+          state.sendsFilter = b.getAttribute('data-sfilter');
+          var panel = els.contact.querySelector('#contact-sends');
+          if (panel) { panel.innerHTML = contactSendsHtml(); bindContactSends(); }
+        });
+      });
+    }
+
     function loadContactGroups() {
       if (!state.selectedChat) return;
       var token = state.chatToken;
@@ -4600,6 +4730,10 @@
             loadContactGroups();
             return;
           }
+          if (tab === 'sends' && state.contactSends === null && !state.contactSendsLoading) {
+            loadContactSends();
+            return;
+          }
           renderContact();
         });
       });
@@ -4650,15 +4784,22 @@
         '</dl></div>';
       if (!isGroupOpen) {
         var activeGroups = state.contactTab === 'groups';
+        var activeSends = state.contactTab === 'sends';
         var groupCount = Array.isArray(state.contactGroups) ? state.contactGroups.length : null;
+        var sendCount = state.contactSends ? state.contactSends.items.length : null;
         tabsHtml = '<div class="contact-tabs" role="tablist" aria-label="Ficha de la persona">' +
-          '<button type="button" class="contact-tab' + (!activeGroups ? ' active' : '') + '" data-ctab="info" role="tab" aria-selected="' + (!activeGroups) + '">' +
+          '<button type="button" class="contact-tab' + (!activeGroups && !activeSends ? ' active' : '') + '" data-ctab="info" role="tab" aria-selected="' + (!activeGroups && !activeSends) + '">' +
             '<span class="ri-user-line" aria-hidden="true"></span> Información</button>' +
+          '<button type="button" class="contact-tab' + (activeSends ? ' active' : '') + '" data-ctab="sends" role="tab" aria-selected="' + activeSends + '" title="Mensajes que le envió el sistema: cobranzas, notas, asistencias">' +
+            '<span class="ri-mail-send-line" aria-hidden="true"></span> Envíos' +
+            (sendCount !== null ? ' <span class="contact-tab-count">' + sendCount + '</span>' : '') +
+          '</button>' +
           '<button type="button" class="contact-tab' + (activeGroups ? ' active' : '') + '" data-ctab="groups" role="tab" aria-selected="' + activeGroups + '">' +
             '<span class="ri-group-line" aria-hidden="true"></span> Grupos' +
             (groupCount !== null ? ' <span class="contact-tab-count">' + groupCount + '</span>' : '') +
           '</button></div>';
-        bodyHtml = '<div class="contact-tab-panel" id="contact-info"' + (activeGroups ? ' hidden' : '') + '>' + infoBody + '</div>' +
+        bodyHtml = '<div class="contact-tab-panel" id="contact-info"' + (activeGroups || activeSends ? ' hidden' : '') + '>' + infoBody + '</div>' +
+          '<div class="contact-tab-panel contact-sends" id="contact-sends"' + (activeSends ? '' : ' hidden') + '>' + contactSendsHtml() + '</div>' +
           '<div class="contact-tab-panel contact-groups" id="contact-groups"' + (activeGroups ? '' : ' hidden') + '>' +
             contactGroupsHtml() + '</div>';
       }
@@ -4681,6 +4822,7 @@
       var closeBtn = els.contact.querySelector('#contact-close');
       if (closeBtn) closeBtn.addEventListener('click', function () { root.classList.add('contact-hidden'); });
       bindContactTabs();
+      bindContactSends();
 
       // Notas internas: compositor (con borrador) y lista.
       renderNoteComposer();

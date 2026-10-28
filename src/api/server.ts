@@ -16,6 +16,7 @@ import { logger } from '../logger.js';
 import { countNewContactsToday, getPolicy, limitState } from '../core/anti-ban.js';
 import { AWAITING, getGroup, markAwaiting, notifyGroup } from '../core/batch-confirm.js';
 import { personChatsForNote } from '../core/contacts.js';
+import { linkedToOtherNumber, resolveUserLine } from '../core/line-resolver.js';
 import { ProspectError, removeProspect, upsertProspect } from '../core/prospects.js';
 import { panelBus } from '../panel/events.js';
 import type { SessionRow } from '../types.js';
@@ -81,10 +82,14 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
    * línea conectada de cualquier usuario y los mensajes salían desde números
    * ajenos.
    */
-  const sessionFor = (account?: string | null): SessionRow | undefined => {
-    if (account) return get<SessionRow>('SELECT * FROM sessions WHERE owner_uid = ?', account);
+  const sessionFor = (account?: string | null, phone?: string | null): SessionRow | undefined => {
+    // Con cuenta: la línea del NÚMERO del usuario que envía (ver resolveUserLine).
+    if (account) return resolveUserLine(manager.list(), account, phone);
     return manager.primary();
   };
+  /** Número de WhatsApp del usuario que envía (lo manda cronogramas). */
+  const accountPhone = (body: Record<string, unknown>): string | null =>
+    typeof body.account_phone === 'string' && body.account_phone.trim() ? body.account_phone : null;
 
   /** La principal si está conectada; si no, la primera línea conectada. */
   const readyPrimary = (): SessionRow | undefined => {
@@ -121,19 +126,8 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
    * Sesión de un usuario por `owner_uid` o por número autorizado. NO cae a la
    * principal: permite distinguir "usuario sin sesión/número" del número global.
    */
-  const sessionForUser = (uid?: string | null, phone?: string | null): SessionRow | undefined => {
-    const clean = (v: string | null | undefined) => String(v ?? '').replace(/\D+/g, '');
-    const numero = clean(phone);
-    if (uid) {
-      const byOwner = get<SessionRow>('SELECT * FROM sessions WHERE owner_uid = ?', String(uid));
-      if (byOwner) return byOwner;
-    }
-    if (numero) {
-      const rows = all<SessionRow>('SELECT * FROM sessions');
-      return rows.find((s) => clean(s.expected_phone) === numero || clean(s.phone) === numero);
-    }
-    return undefined;
-  };
+  const sessionForUser = (uid?: string | null, phone?: string | null): SessionRow | undefined =>
+    uid || phone ? resolveUserLine(manager.list(), uid ?? null, phone ?? null) : undefined;
 
   // ── Health ─────────────────────────────────────────────────────────────────
 
@@ -321,8 +315,13 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
       }
 
       const name = `esam-${req.body?.area ?? 'area'}-${uid}`;
+      // Si la cuenta tiene más de una línea, se actualiza la de SU número (antes
+      // se tomaba la primera y podía quedar asociada la línea de otra área).
+      const ownLines = all<SessionRow>('SELECT * FROM sessions WHERE owner_uid = ? ORDER BY created_at', uid);
+      const wanted = req.body?.phone ? normalizePhone(String(req.body.phone)) : '';
       let row =
-        get<SessionRow>('SELECT * FROM sessions WHERE owner_uid = ?', uid) ??
+        (wanted ? ownLines.find((s) => normalizePhone(s.phone ?? '') === wanted || normalizePhone(s.expected_phone ?? '') === wanted) : undefined) ??
+        ownLines[0] ??
         get<SessionRow>('SELECT * FROM sessions WHERE name = ?', name);
       const primary = manager.primary();
 
@@ -439,7 +438,7 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
             estado: body.estado ?? null,
             nota: body.nota ?? null,
           },
-          sessionFor(account),
+          sessionFor(account, accountPhone(body)),
         );
         publishProspect(result.noteId, result.created ? 'created' : 'edited');
         audit(result.created ? 'prospect.created' : 'prospect.updated', { ref: req.params.ref, account, note_id: result.noteId });
@@ -475,26 +474,26 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
         return;
       }
 
-      const session = sessionFor(body.account ? String(body.account) : null);
+      const phone = accountPhone(body);
+      const session = sessionFor(body.account ? String(body.account) : null, phone);
       if (!session) {
         res.status(422).json({
           message: body.account
-            ? 'Tu cuenta no tiene una línea de WhatsApp vinculada en Seguimiento ESAM. Vinculá tu número en Conexión: los envíos salen solo desde tu propia línea.'
+            ? phone
+              ? `No hay una línea de WhatsApp con tu número (${phone}) en Seguimiento ESAM. Vinculá tu número en Conexión: los envíos salen solo desde tu propio número.`
+              : 'Tu cuenta no tiene una línea de WhatsApp vinculada en Seguimiento ESAM. Vinculá tu número en Conexión: los envíos salen solo desde tu propia línea.'
             : 'No hay una línea principal configurada en Seguimiento ESAM.',
         });
         return;
       }
       // La línea debe tener vinculado el número del propio usuario: si en esa
       // sesión quedó escaneado otro teléfono, no se envía desde un número ajeno.
-      if (body.account && session.phone && session.expected_phone) {
-        const linked = String(session.phone).replace(/\D+/g, '');
-        const expected = String(session.expected_phone).replace(/\D+/g, '');
-        if (linked && expected && linked !== expected) {
-          res.status(422).json({
-            message: `Tu línea tiene vinculado el número ${linked}, que no es el tuyo (${expected}). Desvinculalo en Seguimiento ESAM › Conexión y escaneá el QR con tu teléfono.`,
-          });
-          return;
-        }
+      const otro = body.account ? linkedToOtherNumber(session, phone) : null;
+      if (otro) {
+        res.status(422).json({
+          message: `La línea tiene vinculado el número ${otro}, que no es el tuyo (${phone ?? session.expected_phone}). Desvinculalo en Seguimiento ESAM › Conexión y escaneá el QR con tu teléfono: los envíos salen solo desde tu número.`,
+        });
+        return;
       }
       // Programación con confirmación: se crea sin enviar y espera que el dueño
       // de la línea (o el Super Admin) la confirme desde la notificación.
@@ -679,9 +678,9 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
         return;
       }
 
-      const session = sessionFor(body.account ? String(body.account) : null);
-      if (!session) {
-        res.status(422).json({ message: 'No hay sesión de envío disponible.' });
+      const session = sessionFor(body.account ? String(body.account) : null, accountPhone(body));
+      if (!session || (body.account && linkedToOtherNumber(session, accountPhone(body)))) {
+        res.status(422).json({ message: 'No hay una línea de envío con tu número disponible.' });
         return;
       }
       const notReady = notReadyMessage(session, body);

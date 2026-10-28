@@ -1950,6 +1950,35 @@ Objetivo: seguir en la ficha de cada persona todo lo que le envió el sistema (c
 
 ---
 
+## 57. Envíos solo desde el número de quien envía y firma «Atte: Nombre - Área» (2026-10-28)
+
+**Incidente:** un Super Admin envió cuotas vencidas desde cronogramas y los mensajes salieron desde el número del área contable.
+
+**Causa:** la API elegía la línea con `SELECT … WHERE owner_uid = cuenta` y tomaba la **primera**. La relación cuenta ↔ línea se había desordenado; se reprodujo también en la base local:
+- una cuenta con dos líneas;
+- la línea de otra área asociada a la cuenta;
+- números esperados desactualizados.
+
+**Cambios:**
+- **`src/core/line-resolver.ts` (`resolveUserLine`):** con el número del usuario que envía (`account_phone`), la línea es:
+  1. la que tiene **vinculado ese número**;
+  2. si no, la propia que lo espera;
+  3. si no, cualquiera que lo espere.
+  
+  **Nunca cae a una línea de otro número.** Sin número (clientes anteriores), la propia que tiene vinculado su número esperado.
+  - `linkedToOtherNumber`: si la línea tiene vinculado otro número, no se envía y se explica qué hacer.
+  - Se usa en lotes, importación CSV, prospectos y salud (`/api/v1/health`).
+- **`/api/v1/accounts`:** si la cuenta tiene varias líneas, se actualiza la de **su** número (antes, la primera). Esto corrige el origen del desorden.
+- **Cronogramas** (repo aparte):
+  - el cliente manda en cada lote `account_phone`, el número de WhatsApp registrado del usuario que envía. Para prospectos, el número del asesor dueño;
+  - la firma ahora es **«Atte: Nombre completo - Nombre del área»** (`App\Support\FirmaWhatsapp`). El área es la del usuario: su área de WhatsApp o, si no, la de su rol (Contabilidad → Área Contable, Académicos/Responsables → Área Académica, Marketing → Área de Marketing). Quien no tiene área propia (Super Admin) firma con el área del envío: cobranza → «Área Contable», notas y asistencia → «Área Académica»;
+  - las vistas previas (notas y nivelación, ausentes) muestran esa misma firma.
+- **Pruebas:**
+  - baileys: `test/line-resolver.test.ts` (5) reproduce el caso real (cuenta con la línea de Contabilidad y la propia), sin número de 591, número solo esperado, clientes sin número y línea con otro número vinculado. `npm run lint`, `npm run typecheck` y `npm test` (152/152) limpios;
+  - cronogramas, con la cuenta del Super Admin (transacción revertida y API simulada): cobranza con su cuenta y su número, firma «Admin ESAM - Área Contable», notas «… - Área Académica», usuario de Contabilidad «… - Área Contable», área configurada de Marketing y envíos automáticos sin firma (6/6).
+
+---
+
 ## Notas de operación
 
 - En producción usar `start-baileys.bat` / pm2 / systemd (no `npm run dev`).

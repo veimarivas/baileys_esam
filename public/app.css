@@ -5527,3 +5527,426 @@ html[data-bs-theme="dark"] .ps-view-btn { background: #1d2125; }
 .ps-item .ps-foot { margin: 0; padding: 0.35rem 0.6rem; border-top: 1px dashed var(--ps-line); }
 .ps-item .ps-msg { margin: 0; padding: 0 0.6rem 0.45rem; }
 .ps-item .ps-msg summary { padding-top: 0.35rem; }
+
+/* =============================================================================
+   Conversaciones · jerarquía de la lista, cabecera del hilo y ficha
+   El objetivo es leer de un vistazo: quién es, qué dijo y qué hay pendiente.
+   ============================================================================= */
+
+/* ── Lista: resumen y filas en tres niveles (identidad · mensaje · meta) ── */
+.inbox .cl-summary {
+  margin: -0.15rem 0 0.45rem;
+  padding: 0 1rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--ib-ink-mute);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inbox .cl-summary:empty { display: none; }
+
+.convo {
+  align-items: center;
+  gap: 0.62rem;
+  padding: 0.58rem 0.65rem;
+}
+.convo .convo-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.08rem;
+}
+.convo .convo-top {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  min-width: 0;
+}
+.convo .convo-top .convo-name {
+  flex: 0 1 auto;
+  font-size: 0.86rem;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+.convo .convo-top .convo-time {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--ib-ink-mute);
+  font-variant-numeric: tabular-nums;
+}
+.convo .convo-last {
+  margin: 0;
+  font-size: 0.77rem;
+  line-height: 1.32;
+  color: var(--ib-ink-soft);
+}
+.convo .convo-dir {
+  display: inline-block;
+  margin-right: 0.2rem;
+  vertical-align: -1px;
+  font-size: 0.78rem;
+  color: #1f9d55;
+}
+.convo .convo-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.1rem 0.5rem;
+  margin-top: 0.16rem;
+  min-width: 0;
+  font-size: 0.66rem;
+  line-height: 1.25;
+}
+.convo .convo-meta > span {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.convo .convo-meta > span [class^="ri-"] { margin-right: 0.2rem; }
+.convo .convo-meta .convo-prog {
+  margin: 0;
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ib-brand);
+}
+.convo .convo-meta .convo-team {
+  margin: 0;
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: #0e9f6e;
+}
+.convo .convo-meta .convo-number {
+  margin: 0;
+  font-size: 0.66rem;
+  color: var(--ib-ink-mute);
+}
+.convo .convo-meta .convo-number [class^="ri-"] { color: #25a35a; font-size: 0.72rem; }
+.convo .convo-meta .convo-number.is-hidden [class^="ri-"] { color: var(--ib-ink-mute); }
+.convo .convo-side {
+  align-self: center;
+  justify-content: center;
+  gap: 0.3rem;
+  min-width: 0;
+  padding: 0;
+}
+.convo.unread { background: color-mix(in srgb, var(--ib-brand) 4%, transparent); }
+.convo.unread .convo-last { font-weight: 500; color: var(--ib-ink-soft); }
+.convo:hover { background: var(--ib-surface); box-shadow: inset 0 0 0 1px var(--ib-line); }
+.convo.active {
+  background: var(--ib-surface);
+  box-shadow: inset 0 0 0 1.5px var(--ib-brand), 0 6px 16px -12px rgba(6, 32, 63, 0.5);
+}
+html[data-bs-theme="dark"] .convo.unread { background: color-mix(in srgb, var(--ib-brand) 9%, transparent); }
+
+/* ── Cabecera del hilo ── */
+.chat-header { padding: 0.6rem 0.9rem; gap: 0.65rem; }
+.chat-header .chat-id { display: flex; flex-direction: column; gap: 0.06rem; }
+.chat-header .chat-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  min-width: 0;
+}
+.chat-header .chat-title-row .name { flex: 0 1 auto; min-width: 0; }
+.chat-header .chat-title-row .typing-hint { flex-shrink: 0; font-size: 0.72rem; }
+.chat-header .chat-id .sub {
+  gap: 0.45rem;
+  font-size: 0.72rem;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.chat-header .chat-phone {
+  font-weight: 600;
+  color: var(--ib-ink-soft);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-header .chat-phone.is-hidden { font-weight: 400; font-style: italic; color: var(--ib-ink-mute); }
+.chat-header .chat-waname {
+  color: var(--ib-ink-mute);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-header .chat-waname::before { content: '· '; }
+.chat-header .chat-meta:empty { display: none; }
+.chat-header .chat-meta .chat-progs { margin: 0.16rem 0 0; gap: 0.25rem; }
+.chat-header .chat-meta .chat-programa,
+.chat-header .chat-meta .chat-team {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.22rem;
+  margin: 0;
+  padding: 0.05rem 0.5rem;
+  font-size: 0.62rem;
+  line-height: 1.5;
+}
+.chat-header .chat-meta .chat-programa [class^="ri-"],
+.chat-header .chat-meta .chat-team [class^="ri-"] { font-size: 0.7rem; }
+
+/* ── Ficha: identidad, avisos y secciones ── */
+.contact-panel .contact-hero {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 1rem 0.95rem 0.85rem;
+  border-bottom: 1px solid var(--ib-line);
+  background:
+    radial-gradient(120% 100% at 0% 0%, color-mix(in srgb, var(--ib-brand) 10%, transparent), transparent 62%),
+    var(--ib-surface-2);
+}
+.contact-panel .contact-hero-avatar { flex-shrink: 0; margin-top: 0.1rem; }
+.contact-panel .contact-hero-avatar .avatar-xl {
+  width: 3.6rem;
+  height: 3.6rem;
+  font-size: 1.25rem;
+  box-shadow: 0 10px 22px -16px rgba(6, 32, 63, 0.75);
+}
+.contact-panel .avatar-xl.is-group { border-radius: 30%; }
+.contact-panel .contact-hero-id {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.08rem;
+  text-align: left;
+}
+.contact-panel .contact-hero-id .contact-name {
+  margin-top: 0;
+  font-size: 1rem;
+  line-height: 1.25;
+  font-weight: 750;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.contact-panel .contact-hero-id .contact-team { margin-top: 0; align-self: flex-start; }
+.contact-panel .contact-hero-id .contact-namesrc { text-align: left; }
+.contact-panel .contact-hero-id .contact-progs {
+  justify-content: flex-start;
+  margin: 0.3rem 0 0;
+}
+.contact-panel .contact-hero-id .contact-waname { text-align: left; font-size: 0.7rem; }
+.contact-panel .contact-phone-row {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.12rem;
+}
+.contact-panel .contact-phone-row .contact-phone { font-size: 0.78rem; }
+.contact-panel .contact-copy {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ib-ink-mute);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background-color 0.14s ease, color 0.14s ease;
+}
+.contact-panel .contact-copy:hover { background: var(--ib-brand-soft); color: var(--ib-brand); }
+.contact-panel .contact-email {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  margin-top: 0.14rem;
+  text-align: left;
+}
+.contact-panel .contact-hidden-hint { margin: 0.25rem 0 0; max-width: none; }
+.contact-panel .contact-name-form { max-width: none; margin: 0.5rem 0 0; }
+.contact-panel .contact-name-actions { justify-content: flex-start; }
+
+/* Avisos de la persona: pendientes, vencidas y sin leer */
+.contact-panel .contact-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  padding: 0.55rem 0.9rem;
+  background: var(--ib-surface-2);
+  border-bottom: 1px solid var(--ib-line);
+}
+.contact-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.24rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  line-height: 1.5;
+  color: var(--ib-ink-soft);
+  background: var(--ib-surface-3);
+  white-space: nowrap;
+}
+.contact-flag [class^="ri-"] { font-size: 0.8rem; }
+.contact-flag.is-brand { color: var(--ib-brand); background: var(--ib-brand-soft); }
+.contact-flag.is-warn { color: #92400e; background: color-mix(in srgb, #f59e0b 15%, transparent); }
+.contact-flag.is-danger { color: #a92f2f; background: rgba(187, 59, 59, 0.11); }
+.contact-flag.is-unread { color: #0f7b55; background: color-mix(in srgb, #0f7b55 12%, transparent); }
+html[data-bs-theme="dark"] .contact-flag.is-warn { color: #f3b25f; }
+html[data-bs-theme="dark"] .contact-flag.is-danger { color: #f08484; }
+html[data-bs-theme="dark"] .contact-flag.is-unread { color: #5fd3a6; }
+
+.contact-panel .panel-section[hidden] { display: none !important; }
+.contact-panel .panel-section h6 { margin-bottom: 0.55rem; }
+.contact-panel #person-fill-section .person-fill:not(:empty) {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.contact-panel #person-fill-section .pf-label { min-width: 4.2rem; }
+
+/* Datos de la conversación en filas legibles */
+.contact-panel .contact-meta .cm-rows { display: flex; flex-direction: column; }
+.contact-panel .contact-meta .cm-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.34rem 0;
+  font-size: 0.76rem;
+  border-bottom: 1px dashed color-mix(in srgb, var(--ib-line) 80%, transparent);
+}
+.contact-panel .contact-meta .cm-row:last-child { border-bottom: 0; }
+.contact-panel .contact-meta .cm-ic { flex-shrink: 0; font-size: 0.9rem; color: var(--ib-brand); }
+.contact-panel .contact-meta .cm-k { font-weight: 600; color: var(--ib-ink-mute); }
+.contact-panel .contact-meta .cm-v {
+  margin-left: auto;
+  text-align: right;
+  font-weight: 700;
+  color: var(--ib-ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Emojis del compositor: cabecera con cierre y rejilla más cómoda ── */
+.composer .emoji-pop2 {
+  width: 268px;
+  max-height: 268px;
+  padding: 0;
+  border-radius: 14px;
+  overscroll-behavior: contain;
+}
+.composer .emoji-pop2 .emoji-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.55rem;
+  background: var(--ib-surface);
+  border-bottom: 1px solid var(--ib-line);
+}
+.composer .emoji-pop2 .emoji-head-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ib-ink-mute);
+}
+.composer .emoji-pop2 .emoji-head-title [class^="ri-"] { font-size: 0.95rem; color: var(--ib-brand); }
+.composer .emoji-pop2 .emoji-close {
+  margin-left: auto;
+  width: 26px;
+  height: 26px;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ib-ink-mute);
+  cursor: pointer;
+  font-size: 0.95rem;
+}
+.composer .emoji-pop2 .emoji-close:hover { background: var(--ib-surface-3); color: var(--ib-ink); }
+.composer .emoji-pop2 .emoji-sec { padding: 0.42rem 0.6rem 0.22rem; }
+.composer .emoji-pop2 .emoji-sec-row,
+.composer .emoji-pop2 .emoji-all { padding: 0 0.48rem 0.42rem; }
+.composer .emoji-pop2 .emoji-btn {
+  width: 32px;
+  height: 32px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  font-size: 1.15rem;
+  border-radius: 9px;
+}
+html[data-bs-theme="dark"] .contact-panel .contact-hero {
+  background:
+    radial-gradient(120% 100% at 0% 0%, color-mix(in srgb, var(--ib-brand) 16%, transparent), transparent 62%),
+    var(--ib-surface-2);
+}
+
+/* Ficha en pantallas chicas: el cierre queda a mano y el héroe le deja lugar */
+@media (max-width: 1199.98px) {
+  .contact-panel .contact-close {
+    z-index: 3;
+    background: var(--ib-surface);
+    box-shadow: 0 1px 3px rgba(16, 24, 40, 0.18);
+  }
+  .contact-panel .contact-hero { padding-right: 2.9rem; }
+}
+
+/* Lista angosta: la meta se recorta antes que el nombre y el mensaje */
+@media (min-width: 1200px) and (max-width: 1399.98px) {
+  .convo .convo-meta { gap: 0.08rem 0.4rem; }
+  .convo .convo-meta > span { max-width: 9rem; }
+}
+
+/* Cuatro solapas en una columna angosta: sin iconos para que el texto no se corte */
+@media (min-width: 992px) {
+  .inbox .cl-tab {
+    padding: 0.34rem 0.28rem;
+    gap: 0.2rem;
+    font-size: 0.74rem;
+  }
+  .inbox .cl-tab .cl-tab-ic { display: none; }
+  .inbox .cl-tab-count {
+    min-width: 1.05rem;
+    padding: 0 0.26rem;
+    font-size: 0.62rem;
+    line-height: 1.1rem;
+  }
+}
+
+/* Datos de la persona: etiqueta fija y valor con su origen debajo */
+.contact-panel #person-fill .pf-row {
+  display: grid;
+  grid-template-columns: 4.4rem minmax(0, 1fr);
+  gap: 0.02rem 0.5rem;
+  align-items: baseline;
+  padding: 0.32rem 0;
+  border-bottom: 1px dashed color-mix(in srgb, var(--ib-line) 80%, transparent);
+}
+.contact-panel #person-fill .pf-row:last-child { border-bottom: 0; }
+.contact-panel #person-fill .pf-label { min-width: 0; font-size: 0.72rem; }
+.contact-panel #person-fill .pf-value { font-weight: 600; }
+.contact-panel #person-fill .pf-src { grid-column: 2; font-size: 0.64rem; color: var(--ib-ink-mute); }
+
+/* Ficha: el título de Notas no se parte; los contadores bajan si no entran */
+.contact-panel .nk-section .nk-section-head { flex-wrap: wrap; row-gap: 0.3rem; }
+.contact-panel .nk-section .nk-section-head h6 { white-space: nowrap; }
+.contact-panel .nk-section .nk-section-head .nk-counts { flex-wrap: wrap; }
+
+/* «+N» de programas en la cabecera del hilo */
+.chat-header .chat-meta .chat-programa.is-more { font-weight: 800; }

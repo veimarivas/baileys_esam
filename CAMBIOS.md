@@ -1979,6 +1979,29 @@ Objetivo: seguir en la ficha de cada persona todo lo que le envió el sistema (c
 
 ---
 
+## 58. QR de pago en los mensajes masivos e imágenes en la ficha › Envíos (2026-10-29)
+
+- **Ficha del contacto › Envíos:**
+  - cada envío muestra su **adjunto**: miniatura si es imagen (p. ej. el QR de pago enviado desde cronogramas) que abre en tamaño completo, o una etiqueta con el tipo (documento, audio, video);
+  - tarjeta reestructurada: encabezado con ícono de la categoría, título, programa/módulo y fecha; datos «Por» y «Línea» en dos columnas con la miniatura al costado; estado y lote al pie; mensaje plegable;
+  - tarjetas de área en dos columnas y barra compacta: vista arriba y filtros por categoría en una fila desplazable.
+- **`GET /inbox/sends/media/:id`:** sirve el adjunto de un envío.
+  - Lo ve quien atiende a esa persona en alguna de sus líneas (por chat o por número) o el administrador.
+  - Solo sirve archivos dentro de `STORAGE_DIR`.
+  - `Cache-Control: private, no-cache`: el acceso se comprueba en cada carga, aunque dos personas usen el mismo navegador.
+- **`personSends`** agrega `mediaKind`, `mediaName` y `mediaUrl`.
+- **Cronogramas** (repo aparte):
+  - Tabla `pagos_qr` y página **Contable › QR y cuentas bancarias** (Super Admin y Contabilidad): QR (imagen en disco privado), banco, titular, cuenta, tipo, moneda, **fecha de vencimiento** y activo. Cada QR muestra si está vigente, por vencer (≤ 7 días), vencido o desactivado.
+  - **Cuotas vencidas/próximas:** barra «QR de pago para los mensajes» (sirve para el masivo y el individual) con miniatura y la opción «Incluir datos de la cuenta». El QR va como **imagen del mensaje** con el recordatorio como texto (un solo mensaje), y los datos de la cuenta se agregan al final.
+  - **WhatsApp a grupos:** el mismo selector. Con QR no se adjunta otro archivo.
+  - **Solo QR vigentes:** los selectores listan los activos con vencimiento igual o posterior a hoy, y el servidor **rechaza un QR vencido o desactivado** aunque se fuerce (`PagosQr::elegido`). El lote registra qué QR se envió (`meta.qr_id`).
+- **Pruebas:**
+  - baileys: `test/person-sends.test.ts` (+1, adjuntos imagen/documento con ruta de Windows). `npm run lint`, `npm run typecheck` y `npm test` (153/153) limpios;
+  - en la vista previa: miniatura cargada (200 image/png); un usuario de otra línea recibe 403 y la usuaria de la línea donde está la persona, 200;
+  - cronogramas (transacción revertida, API simulada, imágenes de prueba borradas, 10/10): alta con imagen en disco privado, el vencido no se lista y se rechaza, cobranza con QR adjunto y datos de cuenta, el lote registra el QR, grupos con QR y el rechazo de QR + archivo.
+
+---
+
 ## Notas de operación
 
 - En producción usar `start-baileys.bat` / pm2 / systemd (no `npm run dev`).

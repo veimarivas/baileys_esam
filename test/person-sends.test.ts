@@ -104,3 +104,30 @@ describe('firma «Atte:» en los mensajes masivos', () => {
     assert.equal(classifySend({ tipo: 'notas', modo: 'regular' }).title, 'Notas del módulo');
   });
 });
+
+describe('adjuntos de los envíos (p. ej. el QR de pago)', () => {
+  it('indica imagen o documento y la ruta para verlo', () => {
+    const b = run(
+      `INSERT INTO batches (session_id, name, total, sent, failed, skipped, status, meta, created_at, updated_at) VALUES ('ps-1', 'Cobranza con QR', 1, 1, 0, 0, 'done', ?, ?, ?)`,
+      JSON.stringify({ tipo: 'cobranza', modo: 'vencidas', qr_id: 1 }), nowIso(), nowIso(),
+    );
+    const img = run(
+      `INSERT INTO batch_items (batch_id, chat_id, contact_name, body, content_type, media_path, media_mime, status, created_at, updated_at)
+       VALUES (?, '59172220000@c.us', 'Pedro', 'Cuotas', 'image', ?, 'image/png', 'sent', ?, ?)`,
+      b.lastInsertRowid, 'C:\\data\\media\\out\\qr.png', nowIso(), nowIso(), // ruta de Windows
+
+    );
+    run(
+      `INSERT INTO batch_items (batch_id, chat_id, contact_name, body, content_type, media_path, media_mime, status, created_at, updated_at)
+       VALUES (?, '59172220000@c.us', 'Pedro', 'Ficha', 'document', '/data/media/out/ficha.pdf', 'application/pdf', 'sent', ?, ?)`,
+      b.lastInsertRowid, nowIso(), nowIso(),
+    );
+    const items = personSends('59172220000').items;
+    const qr = items.find((i) => i.mediaKind === 'image')!;
+    assert.equal(qr.mediaUrl, `/inbox/sends/media/${img.lastInsertRowid}`);
+    assert.equal(qr.mediaName, 'qr.png');
+    const pdf = items.find((i) => i.mediaKind === 'document')!;
+    assert.equal(pdf.mediaName, 'ficha.pdf');
+    assert.equal(personSends('59171230000').items.find((i) => i.title === 'Notas del módulo')?.mediaUrl, null);
+  });
+});

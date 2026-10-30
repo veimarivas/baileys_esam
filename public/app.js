@@ -4680,20 +4680,38 @@
             SEND_CATS[k].label + ' <b>' + d.byCategory[k] + '</b></button>';
         }).join('');
       var shown = items.filter(function (i) { return f === 'todos' || i.category === f; });
+      var MEDIA_ICON = { image: 'ri-image-line', video: 'ri-movie-line', audio: 'ri-music-2-line', document: 'ri-file-text-line' };
+      var MEDIA_LABEL = { image: 'Imagen', video: 'Video', audio: 'Audio', document: 'Documento' };
       var itemHtml = function (i) {
         var cat = SEND_CATS[i.category] || SEND_CATS.otros;
         var sub = [i.programa, i.modulo ? 'Módulo ' + i.modulo : null, i.detail].filter(Boolean).map(escapeHtml).join(' · ');
-        var line = i.linePhone ? fmtPhone(i.linePhone) + (i.lineOwner ? ' (' + i.lineOwner + ')' : '') : '';
+        var line = i.linePhone ? fmtPhone(i.linePhone) + (i.lineOwner ? ' · ' + i.lineOwner : '') : '';
         var body = i.body || '';
-        return '<article class="ps-item ps-c-' + i.category + '">' +
-          '<div class="ps-top"><span class="ps-cat"><span class="' + cat.icon + '" aria-hidden="true"></span>' + escapeHtml(i.title) + '</span>' +
-            '<time class="ps-at" datetime="' + escapeHtml(i.at) + '">' + escapeHtml(sendDate(i.at)) + '</time></div>' +
-          (sub ? '<div class="ps-sub">' + sub + '</div>' : '') +
-          '<div class="ps-who"><span class="' + (i.automatic ? 'ri-robot-2-line' : 'ri-user-voice-line') + '" aria-hidden="true"></span>Enviado por <b>' + escapeHtml(i.sender) + '</b>' +
-            (line ? ' · desde ' + escapeHtml(line) : '') + '</div>' +
-          '<div class="ps-foot">' + sendStatusHtml(i) +
+        // Adjunto enviado: miniatura si es imagen (p. ej. el QR de pago), etiqueta si no.
+        var media = '';
+        if (i.mediaUrl && i.mediaKind === 'image') {
+          media = '<a class="ps-thumb" href="' + escapeHtml(i.mediaUrl) + '" target="_blank" rel="noopener" title="Ver la imagen enviada">' +
+            '<img src="' + escapeHtml(i.mediaUrl) + '" alt="Imagen enviada" loading="lazy"></a>';
+        } else if (i.mediaUrl) {
+          media = '<a class="ps-file" href="' + escapeHtml(i.mediaUrl) + '" target="_blank" rel="noopener" title="' + escapeHtml(i.mediaName || '') + '">' +
+            '<span class="' + (MEDIA_ICON[i.mediaKind] || 'ri-attachment-2') + '" aria-hidden="true"></span>' + (MEDIA_LABEL[i.mediaKind] || 'Adjunto') + '</a>';
+        }
+        return '<article class="ps-item ps-c-' + i.category + (media ? ' has-media' : '') + '">' +
+          '<header class="ps-head">' +
+            '<span class="ps-ic ' + cat.icon + '" aria-hidden="true"></span>' +
+            '<div class="ps-ttl"><b>' + escapeHtml(i.title) + '</b>' + (sub ? '<small>' + sub + '</small>' : '') + '</div>' +
+            '<time class="ps-at" datetime="' + escapeHtml(i.at) + '">' + escapeHtml(sendDate(i.at)) + '</time>' +
+          '</header>' +
+          '<div class="ps-mid">' +
+            '<dl class="ps-kv">' +
+              '<div><dt>Por</dt><dd>' + (i.automatic ? '<span class="ri-robot-2-line" aria-hidden="true"></span> ' : '') + escapeHtml(i.sender) + '</dd></div>' +
+              (line ? '<div><dt>Línea</dt><dd>' + escapeHtml(line) + '</dd></div>' : '') +
+            '</dl>' + media +
+          '</div>' +
+          '<footer class="ps-foot">' + sendStatusHtml(i) +
             (i.status === 'failed' && i.error ? '<span class="ps-err">' + escapeHtml(i.error) + '</span>' : '') +
-            (d.can_batches ? '<a class="ps-batch" href="/batches/' + i.batchId + '" target="_blank" rel="noopener">Lote #' + i.batchId + '</a>' : '') + '</div>' +
+            (d.can_batches ? '<a class="ps-batch" href="/batches/' + i.batchId + '" target="_blank" rel="noopener">Lote #' + i.batchId + '</a>' : '') +
+          '</footer>' +
           (body ? '<details class="ps-msg"><summary>Ver mensaje</summary><div class="ps-body">' + escapeHtml(body) + '</div></details>' : '') +
         '</article>';
       };
@@ -4731,8 +4749,7 @@
           '<span class="ri-layout-grid-line" aria-hidden="true"></span> Por área</button></div>';
       return '<p class="cg-hint">Mensajes que le envió el sistema (cronogramas o el panel), de todas las líneas: quién lo pidió y si le llegó.</p>' +
         '<div class="ps-areas">' + areas + '</div>' +
-        toggle +
-        '<div class="ps-chips">' + chips + '</div>' +
+        '<div class="ps-toolbar">' + toggle + '<div class="ps-chips">' + chips + '</div></div>' +
         '<div class="ps-list">' + (list || '<div class="cg-state">Sin envíos con este filtro.</div>') + '</div>';
     }
 

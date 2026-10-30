@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { Express, NextFunction, Request, RequestHandler, Response } from 'express';
 import { logger } from '../logger.js';
 import { all, get } from '../db/index.js';
+import { config } from '../config.js';
 import { panelBus } from './events.js';
 import { esamEsAdmin, esamPuede, esamSupervisaArea, sessionScopeFor, type UserRow } from '../auth/users.js';
 import type { SessionManager } from '../baileys/manager.js';
@@ -663,6 +664,39 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       const contact = getOrCreateContact(resolved.session.id, resolved.chatId);
       const key = contact.phone_key ?? (resolved.chatId.endsWith('@lid') ? null : phoneKeyOf(resolved.chatId));
       res.json({ ...personSends(key), can_batches: canBatches });
+    }),
+  );
+
+  // Adjunto de un envío del sistema (p. ej. el QR de pago) para la ficha › Envíos.
+  // Lo ve quien atiende a esa persona en alguna de sus líneas (o el admin) y
+  // solo se sirven archivos de la carpeta de medios.
+  app.get(
+    '/inbox/sends/media/:id',
+    ...auth,
+    ah((req, res) => {
+      const item = get<{ chat_id: string; media_path: string | null; media_mime: string | null }>(
+        'SELECT chat_id, media_path, media_mime FROM batch_items WHERE id = ?',
+        Number(req.params.id),
+      );
+      if (!item?.media_path) return res.status(404).send('Adjunto no encontrado.');
+      const scope = sessionScopeFor(req.user!);
+      if (scope !== null && !esamEsAdmin(req.user!)) {
+        const key = phoneKeyOf(item.chat_id);
+        const visible = scope.length > 0 && !!get<{ id: number }>(
+          `SELECT id FROM contacts WHERE session_id IN (${scope.map(() => '?').join(',')})
+             AND (chat_id = ? OR (phone_key IS NOT NULL AND phone_key = ?)) LIMIT 1`,
+          ...scope, item.chat_id, key,
+        );
+        if (!visible) return res.status(403).send('No tenés acceso a este adjunto.');
+      }
+      const base = path.resolve(config.storageDir);
+      const file = path.resolve(item.media_path);
+      if (!file.startsWith(base + path.sep) || !fs.existsSync(file)) return res.status(404).send('Adjunto no disponible.');
+      // Sin caché reutilizable: el acceso se vuelve a comprobar en cada carga
+      // (dos personas pueden usar el mismo navegador).
+      res.setHeader('Cache-Control', 'private, no-cache');
+      if (item.media_mime) res.type(item.media_mime);
+      res.sendFile(file);
     }),
   );
 

@@ -30,6 +30,10 @@ export interface PersonSend {
   lineOwner: string | null;
   body: string | null;
   contentType: string | null;
+  /** Adjunto enviado (p. ej. el QR de pago): tipo, nombre y ruta para verlo. */
+  mediaKind: 'image' | 'video' | 'audio' | 'document' | null;
+  mediaName: string | null;
+  mediaUrl: string | null;
   /** pending | sent | failed | skipped | cancelled */
   status: string;
   /** Acuse de WhatsApp del mensaje enviado: sent | delivered | read | played. */
@@ -57,6 +61,8 @@ export interface PersonSends {
 
 interface Row {
   id: number;
+  media_path: string | null;
+  media_mime: string | null;
   body: string | null;
   content_type: string | null;
   status: string;
@@ -104,6 +110,17 @@ export function classifySend(meta: Record<string, any>): { category: SendCategor
   return { category: 'otros', area: AREA_OF[String(meta.area ?? '')] ?? 'otros', title: 'Envío del sistema', automatic };
 }
 
+/** Tipo y ruta del adjunto de un envío (se sirve por /inbox/sends/media/:id). */
+function mediaInfo(r: Row): Pick<PersonSend, 'mediaKind' | 'mediaName' | 'mediaUrl'> {
+  if (!r.media_path) return { mediaKind: null, mediaName: null, mediaUrl: null };
+  const mime = String(r.media_mime ?? '');
+  const type = String(r.content_type ?? '');
+  const kind = type === 'image' || mime.startsWith('image/') ? 'image'
+    : type === 'video' || mime.startsWith('video/') ? 'video'
+      : type === 'audio' || mime.startsWith('audio/') ? 'audio' : 'document';
+  return { mediaKind: kind, mediaName: String(r.media_path).split(/[\\/]/).pop() ?? null, mediaUrl: `/inbox/sends/media/${r.id}` };
+}
+
 /** Envíos por lote a un número (clave de teléfono con 591), del más nuevo al más viejo. */
 export function personSends(phoneKey: string | null, limit = 300): PersonSends {
   const empty: PersonSends = {
@@ -112,7 +129,7 @@ export function personSends(phoneKey: string | null, limit = 300): PersonSends {
   };
   if (!phoneKey) return empty;
   const rows = all<Row>(
-    `SELECT bi.id, bi.body, bi.content_type, bi.status, bi.error, bi.created_at, bi.updated_at,
+    `SELECT bi.id, bi.body, bi.content_type, bi.media_path, bi.media_mime, bi.status, bi.error, bi.created_at, bi.updated_at,
             b.id AS batch_id, b.name AS batch_name, b.meta, s.owner_name, COALESCE(s.phone, s.expected_phone) AS line_phone,
             (SELECT m.status FROM messages m WHERE m.session_id = b.session_id AND m.wa_message_id = bi.message_id LIMIT 1) AS ack
        FROM batch_items bi
@@ -157,6 +174,7 @@ export function personSends(phoneKey: string | null, limit = 300): PersonSends {
       lineOwner: r.owner_name,
       body: r.body,
       contentType: r.content_type,
+      ...mediaInfo(r),
       status: r.status,
       ack: r.status === 'sent' ? r.ack : null,
       error: r.error,

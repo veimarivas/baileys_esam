@@ -1,6 +1,7 @@
 import { get } from '../db/index.js';
 import { getPolicy, limitState } from './anti-ban.js';
 import { getConfig } from './config-store.js';
+import { sessionUsage } from './anti-ban-monitor.js';
 import { getHealth, recomputeHealth, SETTLE_MINUTES, SYSTEM_OUT_SQL, type HealthRow } from './health.js';
 import type { SessionRow } from '../types.js';
 
@@ -116,6 +117,16 @@ export function decryptFailures(sessionId: string): { count: number; fromPhone: 
   } catch {
     return null;
   }
+}
+
+const DAY_NAMES = ['', 'lun', 'mar', 'mié', 'jue', 'vie', 'sáb', 'dom'];
+
+/** «lun a sáb», «todos los días» o «lun, mié, vie». */
+function daysLabel(days: number[]): string {
+  const d = [...new Set(days)].filter((x) => x >= 1 && x <= 7).sort((a, b) => a - b);
+  if (d.length === 7 || !d.length) return 'todos los días';
+  const consecutive = d.every((x, i) => i === 0 || x === d[i - 1] + 1);
+  return consecutive && d.length > 2 ? `${DAY_NAMES[d[0]]} a ${DAY_NAMES[d[d.length - 1]]}` : d.map((x) => DAY_NAMES[x]).join(', ');
 }
 
 export function lineVerdict(session: SessionRow): LineVerdict {
@@ -269,7 +280,53 @@ export function lineVerdict(session: SessionRow): LineVerdict {
     else if (low) yellow.push(`Queda poco cupo hoy: ${limits.dailyRemaining} de ${limits.dailyLimit} mensajes.`);
   }
 
-  // 7. Mensajes sin descifrar (aviso de la conexión: no cambia el color)
+  // 7. Horario de envío, uso de la última hora y contactos nuevos (política de la línea)
+  if (policy.active) {
+    const usage = sessionUsage(session, policy);
+    const days = daysLabel(policy.window_days);
+    const hours = `${policy.window_start} a ${policy.window_end}`;
+    checks.push({
+      key: 'window',
+      label: 'Horario de envío',
+      status: usage.windowOpen ? 'ok' : 'warn',
+      value: usage.windowOpen ? `Abierto (${hours}, ${days})` : `Fuera de horario · ${usage.windowLabel.replace(/^Cerrada · /, '')}`,
+      rule: `Amarillo fuera del horario de la política: ${hours}, ${days} (hora de Bolivia).`,
+      why: `Los envíos masivos solo salen dentro de ese horario. Fuera de él quedan en espera y salen solos cuando abre: no se pierden. Escribir de noche o en días no hábiles molesta más y aumenta los bloqueos. El ritmo es de ${policy.delay_min_seconds}–${policy.delay_max_seconds} s por mensaje.`,
+      fix: usage.windowOpen ? null : `No hace falta hacer nada: lo que envíes ahora queda en espera y sale a partir de las ${policy.window_start}. Evitá escribir a mano a contactos nuevos a esta hora.`,
+    });
+    if (!usage.windowOpen) yellow.push(`Fuera del horario de envío (${hours}): los masivos salen a partir de las ${policy.window_start}.`);
+
+    if (usage.hourlyLimit > 0) {
+      const left = usage.hourlyLimit - usage.hourlyUsed;
+      const low = left < usage.hourlyLimit * 0.2;
+      checks.push({
+        key: 'hourly',
+        label: 'Mensajes en la última hora',
+        status: low ? 'warn' : 'ok',
+        value: `${usage.hourlyUsed} de ${usage.hourlyLimit}`,
+        rule: 'Amarillo cuando queda menos del 20% del tope por hora.',
+        why: 'Muchos mensajes seguidos en poco tiempo es una señal de envío automático. El motor frena solo al llegar al tope y sigue en la hora siguiente.',
+        fix: low ? 'Esperá a que pase la hora: el envío continúa solo, sin perder mensajes.' : null,
+      });
+      if (low) yellow.push(`Cerca del tope por hora: ${usage.hourlyUsed} de ${usage.hourlyLimit}.`);
+    }
+
+    if (usage.newContactsLimit > 0) {
+      const near = usage.newContactsToday >= usage.newContactsLimit * 0.8;
+      checks.push({
+        key: 'new_contacts',
+        label: 'Contactos nuevos hoy',
+        status: near ? 'warn' : 'ok',
+        value: `${usage.newContactsToday} de ${usage.newContactsLimit}`,
+        rule: 'Amarillo desde el 80% del máximo diario.',
+        why: 'Escribir a números que nunca conversaron con esta línea («en frío») es la causa principal de reportes y suspensiones. Por eso hay un máximo por día.',
+        fix: near ? 'Dejá los contactos nuevos restantes para mañana. Priorizá a quienes ya conversaron con la línea.' : null,
+      });
+      if (near) yellow.push(`Contactos nuevos cerca del máximo: ${usage.newContactsToday} de ${usage.newContactsLimit}.`);
+    }
+  }
+
+  // 8. Mensajes sin descifrar (aviso de la conexión: no cambia el color)
   const dec = decryptFailures(session.id);
   if (dec) {
     checks.push({
@@ -283,7 +340,7 @@ export function lineVerdict(session: SessionRow): LineVerdict {
     });
   }
 
-  // 8. Envíos pausados
+  // 9. Envíos pausados
   checks.push({
     key: 'paused',
     label: 'Envíos pausados por el anti-baneo',

@@ -2149,6 +2149,27 @@ Hasta ahora se sabía si un mensaje masivo **salía**, pero no si **llegaba, se 
 
 ---
 
+## 64. Semáforo: horario de envío y límites de la política (2026-10-31)
+
+- Nuevos puntos en «Por qué este color» (cuando el motor anti-baneo está activo), con los valores de la política de cada línea:
+  - **Horario de envío:** abierto o «fuera de horario · abre en…», con las horas y los días permitidos (hora de Bolivia) y el ritmo por mensaje. Fuera de horario pasa a **amarillo** (no bloquea): los masivos quedan en espera y salen solos cuando abre;
+  - **Mensajes en la última hora:** amarillo cuando queda menos del 20% del tope;
+  - **Contactos nuevos hoy:** amarillo desde el 80% del máximo diario, con la explicación de por qué escribir «en frío» es riesgoso.
+- Aclaración: el horario no pone una línea en **rojo**. Los rojos venían de la salud guardada y de los mensajes de WhatsApp Web (§62 y §63).
+
+---
+
+## 65. API móvil: Seguimiento, Reportes y Lotes (2026-10-31)
+
+- `src/panel/mobile-api.ts`, con los mismos permisos y alcance que la web (Reportes y Lotes son del Super Admin):
+  - `GET /api/mobile/followup?period=today|yesterday|7d|30d|month`: atención (recibidos, respondidos, mediana, 15 min / 1 h, quién respondió), chats esperando respuesta, entregabilidad, notas y tareas (vencidas y de hoy), equipo, envíos masivos (totales, lectura por tipo, por persona) y protección anti-baneo;
+  - `GET /api/mobile/batches`: lotes con progreso, quién los pidió, línea y lectura/respuestas;
+  - `GET /api/mobile/batches/:id`: ficha, mensaje, lectura y respuestas, y cada destinatario con su acuse y respuesta.
+- `/api/mobile/me` devuelve `sections`, para que la app muestre solo las pestañas permitidas.
+- La app usa además los endpoints que ya existían: `/inbox/directory` (Contactos), `/inbox/:s/:c/sends` (ficha › Envíos) y `verdict.checks` en `/api/mobile/connection`.
+
+---
+
 ## Notas de operación
 
 - En producción usar `start-baileys.bat` / pm2 / systemd (no `npm run dev`).

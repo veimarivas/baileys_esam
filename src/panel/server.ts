@@ -7,6 +7,7 @@ import { all, get, run } from '../db/index.js';
 import { logger } from '../logger.js';
 import { SessionManager } from '../baileys/manager.js';
 import { batchDetailPage, batchesPage } from './batches-view.js';
+import { mobileSections, registerMobileApi } from './mobile-api.js';
 import { batchEngagement, batchesEngagement } from '../core/batch-engagement.js';
 import { connectionHelp, lineVerdictCard, linesHealthCard, linesHealthPage, linesOverview } from './lines-view.js';
 import { lineVerdict } from '../core/line-verdict.js';
@@ -915,6 +916,8 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
         area_label: esamAreaLabel(user),
         admin: esamEsAdmin(user),
       },
+      // Pestañas que la app puede mostrar (mismos permisos que el panel).
+      sections: mobileSections(user),
       session: session
         ? { id: session.id, name: session.name, status: session.status, phone: session.phone ?? session.expected_phone ?? null, connected: session.status === 'ready' }
         : null,
@@ -992,6 +995,9 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
       }),
     );
   }
+
+  // Seguimiento, Reportes y Lotes para la app móvil.
+  registerMobileApi(app, { requireUser: requireUser as never, requireSection: requireSection as never });
 
   // Envíos programados que esperan confirmación (para la app).
   app.get('/api/mobile/confirmations', requireUser, (req: AuthedRequest, res) => {

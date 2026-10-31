@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { quarantineAndRotate, rotateBatches } from '../src/core/session-pool.js';
 import { lineVerdict, sendBlockedReason } from '../src/core/line-verdict.js';
-import { setQuarantine } from '../src/core/health.js';
+import { getHealth, recomputeHealth, setQuarantine } from '../src/core/health.js';
 import { upsertUser } from '../src/auth/users.js';
 import { get, run } from '../src/db/index.js';
 import { nowIso } from '../src/util/async.js';
@@ -116,5 +116,30 @@ describe('semáforo: mensajes desde el teléfono / WhatsApp Web', () => {
     assert.equal(delivery.status, 'ok');
     assert.match(delivery.why, /WhatsApp Web/);
     assert.ok(v.checks.every((c) => c.label && c.value && c.rule && c.why));
+  });
+});
+
+describe('cuarentena explicada', () => {
+  it('guarda el motivo y la fecha aunque luego llegue otro error', () => {
+    line('ab-q1', 'ab-q1');
+    setQuarantine('ab-q1', true, '3 fallos consecutivos de envío');
+    recomputeHealth('ab-q1', { lastError: 'WhatsApp cerró la sesión de este dispositivo' });
+    const v = lineVerdict(session('ab-q1'));
+    const q = v.checks.find((c) => c.key === 'quarantine')!;
+    assert.equal(q.status, 'bad');
+    assert.match(q.value, /3 fallos consecutivos/);
+    assert.match(q.fix ?? '', /Se ve sana/); // conectada, sin bloqueos ni entrega baja
+    setQuarantine('ab-q1', false, 'liberada');
+    assert.equal(getHealth('ab-q1')!.quarantine_reason, null);
+  });
+
+  it('las cuarentenas anteriores recuperan el motivo del registro de auditoría', () => {
+    line('ab-q2', 'ab-q2', 'disconnected');
+    run("INSERT INTO session_health_metrics (session_id, health, status_reason, quarantine, updated_at) VALUES ('ab-q2', 'red', 'En cuarentena por el sistema', 1, ?)", nowIso());
+    run("INSERT INTO audit_logs (action, context, created_at) VALUES ('anti_ban.quarantine', ?, ?)",
+      JSON.stringify({ session_id: 'ab-q2', quarantine: true, reason: 'Puesta en cuarentena manualmente' }), nowIso());
+    const q = lineVerdict(session('ab-q2')).checks.find((c) => c.key === 'quarantine')!;
+    assert.match(q.value, /manualmente/);
+    assert.match(q.fix ?? '', /vincular de nuevo/); // desconectada: todavía no conviene liberarla
   });
 });

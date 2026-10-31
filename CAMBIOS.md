@@ -2113,6 +2113,42 @@ Hasta ahora se sabía si un mensaje masivo **salía**, pero no si **llegaba, se 
 
 ---
 
+## 63. Anti-Baneo y Conexión: por qué cada línea está en riesgo y qué hacer (2026-10-31)
+
+**Reportado:** en `/anti-ban` del servidor varias líneas salían «En riesgo» o «En cuarentena por el sistema» sin haber enviado desde el sistema, y sin explicar por qué.
+
+**Causas:**
+- La pantalla mostraba la salud **guardada**, que solo se recalcula cuando pasa algo en la línea: los rojos causados por los mensajes de WhatsApp Web (§62) seguían ahí.
+- El motivo de la cuarentena se guardaba en `last_error`, y el siguiente error de la línea lo pisaba: quedaba solo el genérico «por el sistema».
+- La cuarentena (fallos seguidos o manual) no se levanta sola y nada decía si ya se podía liberar.
+
+**Cambios:**
+- **Monitoreo** (`/anti-ban`):
+  - la salud se recalcula al abrir (`listHealth(true)`);
+  - cada tarjeta usa el mismo semáforo que Conexión, con el veredicto, hasta dos motivos y qué hacer;
+  - lleva el enlace **Ver detalle y cómo solucionarlo**;
+  - avisa cuántos mensajes de WhatsApp Web no se contaron;
+  - la entrega se muestra sobre los mensajes con acuse.
+- **Detalle de la línea** (`/anti-ban/line/:id`):
+  - el semáforo completo («Por qué este color», punto por punto);
+  - la tarjeta de **Cuarentena**: desde cuándo, el motivo y si conviene liberarla (conectada, sin bloqueos en 24 h y sin entrega baja), con el botón **Liberar** que vuelve al detalle;
+  - recomendaciones para cuidar el número;
+  - el historial del anti-baneo de esa línea y el uso del día.
+- **Cuarentena:**
+  - se guardan `quarantine_reason` y `quarantine_at`;
+  - las anteriores recuperan el motivo del registro de auditoría;
+  - el semáforo indica qué falta resolver antes de liberarla.
+- **Mensajes sin descifrar:** ahora es un punto más del semáforo, que explica qué significa y qué hacer. No cambia el color.
+- **Conexión** (`/settings`), más guiada:
+  - **Salud de tu número**;
+  - **Conexión con WhatsApp**;
+  - **Problemas frecuentes y cómo resolverlos** (QR, conversaciones que no se actualizan, «Esperando el mensaje», sin descifrar, semáforo, cuarentena, cupo);
+  - **Buenas prácticas para no perder el número**;
+  - para el administrador: **Líneas del sistema**, cada una con su semáforo y enlace a su detalle, y los datos técnicos plegados (con la zona horaria).
+- **Pruebas:** `test/anti-ban-smart.test.ts` (+2): el motivo de la cuarentena se conserva aunque llegue otro error, se borra al liberar y se recupera del registro en las anteriores, con la recomendación según el estado. `npm test` (178/178), `typecheck` y `lint` limpios. En la vista previa (claro, oscuro y 375 px): tarjetas, detalle, liberar y Conexión.
+
+---
+
 ## Notas de operación
 
 - En producción usar `start-baileys.bat` / pm2 / systemd (no `npm run dev`).

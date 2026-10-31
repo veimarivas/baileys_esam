@@ -5,7 +5,6 @@ import { esc, renderLayout } from './layout.js';
 import { emptyState, fmtDate } from './views.js';
 import type { UserRow } from '../auth/users.js';
 import { audit } from '../core/webhooks.js';
-import { getConfig } from '../core/config-store.js';
 import { addOptout, listOptouts, normalizeChatId, removeOptout } from '../core/optout.js';
 import {
   getPolicy,
@@ -29,6 +28,8 @@ import {
 } from '../core/anti-ban-monitor.js';
 import type { BatchRunner } from '../core/batches.js';
 import type { SessionRow } from '../types.js';
+import { lineVerdict, quarantineInfo, type LineVerdict } from '../core/line-verdict.js';
+import { lineVerdictCard } from './lines-view.js';
 
 /**
  * Panel anti-baneo: monitoreo de cada línea (uso del día contra sus límites,
@@ -105,6 +106,8 @@ const HEALTH_INFO: Record<string, { tone: string; label: string }> = {
   red: { tone: 'danger', label: 'En riesgo' },
 };
 
+const VERDICT_PILL: Record<LineVerdict['level'], string> = { green: 'green', yellow: 'yellow', red: 'red' };
+
 function healthPill(health: string): string {
   const h = HEALTH_INFO[health] ?? HEALTH_INFO.green;
   return `<span class="ab-pill ab-${h.tone}"><span class="ab-dot"></span>${h.label}</span>`;
@@ -155,34 +158,20 @@ function trendBars(trend: TrendDay[]): string {
     .join('')}</div>`;
 }
 
-/**
- * Fallas de descifrado recientes (registradas por el manager). Muchas fallas
- * con mensajes del propio teléfono = los enviados desde el celular no llegan
- * al panel; si persisten tras reiniciar, hay que volver a vincular el número.
- */
-function decryptWarning(sessionId: string): string {
-  const raw = getConfig(`decrypt_failures:${sessionId}`);
-  if (!raw) return '';
-  try {
-    const d = JSON.parse(raw) as { count: number; from_phone: number; last_at: string };
-    if (!d.last_at || Date.now() - Date.parse(d.last_at) > 86_400_000 || !d.count) return '';
-    const fromPhone = d.from_phone ? ` (${d.from_phone} del propio teléfono)` : '';
-    return `<div class="ab-note ab-warn"><i class="ri-lock-unlock-line"></i>${esc(d.count)} mensaje(s) sin descifrar en 24 h${esc(fromPhone)}. Si sigue ocurriendo, volvé a vincular el número.</div>`;
-  } catch {
-    return '';
-  }
-}
 
 // ── Monitoreo ──────────────────────────────────────────────────────────────────
 
-function sessionCard(sess: SessionRow, health: HealthRow | undefined, custom: boolean): string {
+function sessionCard(sess: SessionRow, health: HealthRow | undefined, custom: boolean, opts: { detail?: boolean } = {}): string {
   const policy = getPolicy(sess.id);
+  const verdict = lineVerdict(sess);
+  const showDetail = opts.detail !== false;
   const usage = sessionUsage(sess, policy);
   const trend = trend7d(sess.id);
   const reply = replyRate7d(sess.id);
   const h = health;
   const sent = h?.sent_24h ?? 0;
   const rate = (v: number) => (sent ? pct(v / sent) : '—');
+  const delivery = verdict.stats.deliveryRate === null ? '—' : pct(verdict.stats.deliveryRate);
   const quarantine = !!h?.quarantine;
   const id = esc(sess.id);
   const replyChip =
@@ -191,7 +180,9 @@ function sessionCard(sess: SessionRow, health: HealthRow | undefined, custom: bo
       : `<span class="ab-chip ${reply.rate < 0.1 && reply.contacted >= 20 ? 'ab-warn' : ''}" title="De ${reply.contacted} contactos que recibieron un lote en 7 días, ${reply.replied} respondieron">
           <i class="ri-reply-line"></i>Responde ${pct(reply.rate)}</span>`;
 
-  return `<article class="ab-session ${quarantine ? 'is-quarantine' : ''} ab-h-${esc(h?.health ?? 'green')}">
+  const level = VERDICT_PILL[verdict.level];
+  const reasons = verdict.level === 'green' ? [] : verdict.reasons.slice(0, 2);
+  return `<article class="ab-session ${quarantine ? 'is-quarantine' : ''} ab-h-${esc(level)}">
     <header class="ab-session-head">
       <span class="ab-session-ic"><i class="ri-whatsapp-line"></i></span>
       <div class="ab-session-id">
@@ -199,12 +190,17 @@ function sessionCard(sess: SessionRow, health: HealthRow | undefined, custom: bo
         <div class="ab-session-phone">${esc(sessionPhone(sess))}</div>
       </div>
       <div class="ab-session-badges">
-        ${healthPill(h?.health ?? 'green')}
+        ${healthPill(level)}
         ${quarantine ? '<span class="ab-pill ab-danger"><i class="ri-lock-line"></i>Cuarentena</span>' : ''}
       </div>
     </header>
-    <p class="ab-session-reason">${esc(h?.status_reason ?? 'Operando normal')}</p>
-    ${decryptWarning(sess.id)}
+    <div class="ab-verdict ab-v-${esc(level)}">
+      <div class="ab-verdict-t">${esc(verdict.title)}</div>
+      ${reasons.length ? `<ul>${reasons.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>` : ''}
+      ${verdict.action && verdict.level !== 'green' ? `<p class="ab-verdict-a"><i class="ri-lightbulb-line"></i> ${esc(verdict.action)}</p>` : ''}
+      ${showDetail ? `<a class="ab-verdict-link" href="/anti-ban/line/${id}"><i class="ri-search-eye-line"></i> Ver detalle y cómo solucionarlo</a>` : ''}
+    </div>
+    ${verdict.stats.phone24h ? `<div class="ab-note ab-note-phone"><i class="ri-smartphone-line"></i>${verdict.stats.phone24h} mensaje(s) escritos desde el teléfono o WhatsApp Web en 24 h: no cuentan para la salud ni para el cupo.</div>` : ''}
 
     <div class="ab-meters">
       ${meter('Hoy', usage.dailyUsed, usage.dailyLimit, usage.warmupActive ? `Tope reducido por el calentamiento (día ${usage.warmupDay})` : 'Mensajes salientes de hoy contra el límite diario')}
@@ -222,8 +218,8 @@ function sessionCard(sess: SessionRow, health: HealthRow | undefined, custom: bo
 
     <div class="ab-session-body">
       <dl class="ab-figures">
-        <div><dt>Enviados 24 h</dt><dd>${sent}</dd></div>
-        <div><dt>Entregados</dt><dd>${rate(h?.delivered_24h ?? 0)}</dd></div>
+        <div><dt>Enviados 24 h</dt><dd title="Por el sistema (panel, lotes, cronogramas)">${sent}</dd></div>
+        <div><dt>Entregados</dt><dd title="Sobre los mensajes con más de 15 min">${delivery}</dd></div>
         <div><dt>Leídos</dt><dd>${rate(h?.read_24h ?? 0)}</dd></div>
         <div><dt>Fallidos</dt><dd class="${(h?.failed_24h ?? 0) ? 'ab-t-warn' : ''}">${h?.failed_24h ?? 0}</dd></div>
         <div><dt>Bloqueos y bajas</dt><dd class="${(h?.blocked_24h ?? 0) ? 'ab-t-danger' : ''}">${h?.blocked_24h ?? 0}</dd></div>
@@ -244,7 +240,7 @@ function sessionCard(sess: SessionRow, health: HealthRow | undefined, custom: bo
       </form>
       ${
         quarantine
-          ? `<form method="post" action="/anti-ban/quarantine/${id}" class="ms-auto"><input type="hidden" name="action" value="release"/>
+          ? `<form method="post" action="/anti-ban/quarantine/${id}" class="ms-auto"><input type="hidden" name="action" value="release"/><input type="hidden" name="next" value="${showDetail ? 'monitoreo' : 'line'}"/>
                <button class="btn btn-sm btn-soft-success" type="submit"><i class="ri-lock-unlock-line me-1"></i>Liberar</button></form>`
           : `<form method="post" action="/anti-ban/quarantine/${id}" class="ms-auto" data-confirm="¿Poner la línea en cuarentena? Deja de enviar: los lotes de una línea personal se pausan (nunca salen desde otro número); solo los del sistema se pasan a otra línea sana.">
                <input type="hidden" name="action" value="apply"/>
@@ -746,7 +742,7 @@ export function registerAntiBanRoutes(
   app.get('/anti-ban', ...guard, (req: Request, res: Response) => {
     const tab = tabOf(req.query.tab);
     const sessions = ctx.sessions();
-    const health = listHealth();
+    const health = listHealth(true);
     const healthById = new Map(health.map((h) => [h.session_id, h]));
     const byId = new Map(sessions.map((x) => [x.id, x]));
     const custom = new Set(sessions.filter((x) => hasOwnPolicy(x.id)).map((x) => x.id));
@@ -781,6 +777,77 @@ export function registerAntiBanRoutes(
     upsertPolicy(null, patch);
     audit('anti_ban.policy_updated', { scope: 'global', profile: patch.risk_profile, preset: applyPreset });
     res.redirect(back('politicas', applyPreset ? 'Se aplicaron los valores del perfil a la política global.' : 'Política global guardada.'));
+  });
+
+  // Detalle de una línea: por qué tiene ese color, qué hacer y su historial.
+  app.get('/anti-ban/line/:id', ...guard, (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const sess = ctx.sessions().find((x) => x.id === id);
+    if (!sess) {
+      res.redirect(back('monitoreo', 'Esa línea ya no existe.'));
+      return;
+    }
+    const health = recomputeHealth(id);
+    const verdict = lineVerdict(sess);
+    const policy = getPolicy(id);
+    const byId = new Map(ctx.sessions().map((x) => [x.id, x]));
+    const q = health.quarantine ? quarantineInfo(sess, health, policy.health_delivery_threshold, verdict.stats.measured) : null;
+    const quarantineCard = q
+      ? `<div class="card ab-card ab-q-card ${q.canRelease ? 'is-ready' : ''}"><div class="card-body">
+          <div class="ab-card-title"><h5><i class="ri-lock-line"></i> Cuarentena</h5>
+            <span>${q.since ? `Desde ${esc(fmtDate(q.since))} · ` : ''}Motivo: ${esc(q.reason)}</span></div>
+          <p class="ab-q-advice ${q.canRelease ? 'ab-ok' : 'ab-warn'}"><i class="${q.canRelease ? 'ri-checkbox-circle-line' : 'ri-error-warning-line'}"></i> ${esc(q.advice)}</p>
+          <form method="post" action="/anti-ban/quarantine/${esc(id)}" data-confirm="${esc(q.canRelease ? '¿Liberar la línea? Vuelve a poder enviar masivos; los lotes pausados se reanudan desde Lotes.' : 'La línea todavía muestra problemas. ¿Liberarla igual?')}">
+            <input type="hidden" name="action" value="release"/><input type="hidden" name="next" value="line"/>
+            <button class="btn ${q.canRelease ? 'btn-success' : 'btn-soft-secondary'}" type="submit"><i class="ri-lock-unlock-line me-1"></i>Liberar de la cuarentena</button>
+          </form>
+        </div></div>`
+      : '';
+    const events = antiBanEvents(200)
+      .filter((e) => [e.context.session_id, e.context.from, e.context.to].includes(id))
+      .slice(0, 15);
+    const history = `<div class="card ab-card"><div class="card-body">
+      <div class="ab-card-title"><h5><i class="ri-history-line"></i> Historial del anti-baneo</h5><span>Pausas, cuarentenas, rotaciones y cambios de política de esta línea.</span></div>
+      ${events.length
+        ? `<ol class="ab-log">${events
+            .map((e) => {
+              const v = eventView(e, byId);
+              return `<li class="ab-log-item"><span class="ab-log-ic ab-${v.tone}"><i class="${v.icon}"></i></span>
+                <div class="ab-log-body"><div class="ab-log-title">${v.title}</div>${v.detail ? `<div class="ab-log-detail">${v.detail}</div>` : ''}</div>
+                <time class="ab-log-time" datetime="${esc(e.created_at)}">${esc(fmtDate(e.created_at))}</time></li>`;
+            })
+            .join('')}</ol>`
+        : '<p class="text-muted mb-0">Sin eventos registrados para esta línea.</p>'}
+    </div></div>`;
+    const tips = `<div class="card ab-card"><div class="card-body">
+      <div class="ab-card-title"><h5><i class="ri-lightbulb-flash-line"></i> Recomendaciones para cuidar el número</h5></div>
+      <ul class="ab-tips">
+        <li><b>Enviá a quien espera el mensaje.</b> Participantes, inscritos o prospectos que dejaron su número. Escribir en frío a listas compradas o viejas es lo que más bloqueos genera.</li>
+        <li><b>Identificate en el primer renglón:</b> quién escribe (programa, área) y por qué. Un mensaje anónimo se reporta más.</li>
+        <li><b>Depurá la lista antes de enviar:</b> números con el código de país (591), sin repetidos y sin los que pidieron la baja.</li>
+        <li><b>Respetá el horario y el ritmo</b> que fija la política; no fuerces envíos grandes fuera de la ventana.</li>
+        <li><b>Números nuevos:</b> dejá que el calentamiento suba el cupo de a poco; repartí los envíos grandes en varios días.</li>
+        <li><b>Si aparecen bloqueos o bajas:</b> pausá un día, revisá el texto y la lista, y retomá con menos volumen.</li>
+        <li><b>El teléfono del número</b> debe estar con internet y con WhatsApp abierto de vez en cuando; si se apaga mucho tiempo, la conexión se cae.</li>
+      </ul>
+    </div></div>`;
+    const body = `<div class="ab-page ab-line-detail">
+      <div class="ab-line-head">
+        <a class="btn btn-light btn-sm" href="/anti-ban?tab=monitoreo"><i class="ri-arrow-left-line me-1"></i>Monitoreo</a>
+        <div><h5>${esc(sessionLabel(sess, id))}</h5><span>${esc(sessionPhone(sess))}</span></div>
+        <a class="btn btn-soft-primary btn-sm ms-auto" href="/anti-ban/session/${esc(id)}"><i class="ri-equalizer-line me-1"></i>Política de la línea</a>
+      </div>
+      ${lineVerdictCard(verdict)}
+      <div class="ab-policy-layout">
+        <div class="ab-line-col">${quarantineCard}${tips}${history}</div>
+        <aside class="ab-aside">${sessionCard(sess, health, hasOwnPolicy(id), { detail: false })}</aside>
+      </div>
+    </div>`;
+    res.send(renderLayout('Detalle de la línea', authed(req), 'policies', body, {
+      flash: flashOf(req),
+      subtitle: 'Por qué la línea tiene este color, cómo solucionarlo y qué hizo el anti-baneo.',
+      activeHref: '/anti-ban',
+    }));
   });
 
   app.get('/anti-ban/session/:id', ...guard, (req: Request, res: Response) => {
@@ -855,7 +922,8 @@ export function registerAntiBanRoutes(
     if (release) {
       setQuarantine(id, false, 'Cuarentena liberada manualmente');
       audit('anti_ban.quarantine', { session_id: id, quarantine: false });
-      res.redirect(back('monitoreo', 'Línea liberada de la cuarentena.'));
+      const msg = 'Línea liberada de la cuarentena. Reanudá desde Lotes los envíos que quedaron en pausa.';
+      res.redirect(s((req.body as Record<string, unknown>).next) === 'line' ? `/anti-ban/line/${encodeURIComponent(id)}?ok=${encodeURIComponent(msg)}` : back('monitoreo', msg));
       return;
     }
     const rot = quarantineAndRotate(id, (batchId) => ctx.runner.enqueue(batchId), 'Puesta en cuarentena manualmente');

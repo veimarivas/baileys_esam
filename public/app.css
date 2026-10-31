@@ -6252,3 +6252,59 @@ html[data-bs-theme="dark"] .ma-rate-bar.is-ok { --tone: #5fd3a6; } html[data-bs-
 .ma-tipos td { font-size: 0.82rem; }
 @media (max-width: 1199.98px) { .ab-kpis.ma-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 575.98px) { .ab-kpis.ma-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* ── Anti-Baneo: semáforo en la tarjeta y detalle de la línea ── */
+.ab-verdict { --tone: var(--ab-ok); --tone-soft: var(--ab-ok-soft); border-radius: 10px; padding: 0.55rem 0.75rem; background: var(--tone-soft); border-left: 3px solid var(--tone); font-size: 0.8rem; }
+.ab-verdict.ab-v-yellow { --tone: var(--ab-warn); --tone-soft: var(--ab-warn-soft); }
+.ab-verdict.ab-v-red { --tone: var(--ab-danger); --tone-soft: var(--ab-danger-soft); }
+.ab-verdict-t { font-weight: 800; color: var(--tone); }
+.ab-verdict ul { margin: 0.2rem 0 0; padding-left: 1.05rem; color: var(--esam-ink); }
+.ab-verdict-a { margin: 0.3rem 0 0; color: var(--esam-ink); }
+.ab-verdict-a i { color: var(--tone); }
+.ab-verdict-link { display: inline-flex; align-items: center; gap: 0.3rem; margin-top: 0.35rem; font-weight: 700; color: var(--ab-brand); text-decoration: none; }
+.ab-verdict-link:hover { text-decoration: underline; }
+.ab-note-phone { --tone: var(--ab-info); --tone-soft: var(--ab-info-soft); }
+.ab-line-head { display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap; }
+.ab-line-head h5 { margin: 0; font-weight: 800; color: var(--esam-ink); }
+.ab-line-head span { font-size: 0.8rem; color: var(--esam-muted); }
+.ab-line-detail .lv-card { margin-bottom: 0; }
+.ab-line-col { display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
+.ab-q-card { border-left: 4px solid var(--ab-danger) !important; }
+.ab-q-card.is-ready { border-left-color: var(--ab-ok) !important; }
+.ab-card-title h5 i { color: var(--ab-brand); }
+.ab-q-card .ab-card-title h5 i { color: var(--ab-danger); }
+.ab-q-advice { display: flex; gap: 0.4rem; align-items: flex-start; font-size: 0.84rem; padding: 0.55rem 0.7rem; border-radius: 10px; color: var(--esam-ink); background: var(--tone-soft); }
+.ab-q-advice i { color: var(--tone); font-size: 1.05rem; }
+.ab-tips { margin: 0; padding-left: 1.1rem; font-size: 0.84rem; display: flex; flex-direction: column; gap: 0.4rem; color: var(--esam-ink); }
+
+/* ── Conexión: ayuda, líneas del sistema y datos técnicos ── */
+.cx-help { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 1rem; margin: 1rem 0; }
+.cx-help-col { background: var(--vz-card-bg, #fff); border: 1px solid var(--vz-border-color, #e6ebf1); border-radius: 14px; padding: 0.9rem 1rem; }
+html[data-bs-theme="dark"] .cx-help-col { background: #1d2125; border-color: #2a2f34; }
+.cx-help-col h6 { font-weight: 800; font-size: 0.9rem; margin: 0 0 0.6rem; display: flex; gap: 0.4rem; align-items: center; }
+.cx-help-col h6 i { color: var(--esam-brand, #045474); }
+html[data-bs-theme="dark"] .cx-help-col h6 i { color: #6cc3e3; }
+.cx-faq { border-top: 1px solid var(--vz-border-color, #e6ebf1); }
+html[data-bs-theme="dark"] .cx-faq { border-color: #2a2f34; }
+.cx-faq summary { display: flex; gap: 0.5rem; align-items: center; padding: 0.5rem 0.1rem; cursor: pointer; list-style: none; font-size: 0.84rem; font-weight: 600; }
+.cx-faq summary::-webkit-details-marker { display: none; }
+.cx-faq summary::after { content: '+'; margin-left: auto; color: var(--esam-muted, #6b7280); font-weight: 700; }
+.cx-faq[open] summary::after { content: '–'; }
+.cx-faq summary i { color: var(--esam-muted, #6b7280); }
+.cx-faq p { margin: 0 0 0.6rem 1.6rem; font-size: 0.8rem; color: var(--esam-ink-soft, #4b5563); }
+.cx-tips ul { margin: 0; padding-left: 1.1rem; font-size: 0.82rem; display: flex; flex-direction: column; gap: 0.4rem; }
+.cx-line { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 0.75rem; align-items: center; padding: 0.75rem 0.2rem; color: inherit; text-decoration: none; }
+.cx-line:hover { background: color-mix(in srgb, var(--esam-brand, #045474) 5%, transparent); }
+.cx-line-dot { width: 12px; height: 12px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 0 3px color-mix(in srgb, #22c55e 22%, transparent); }
+.cx-line-dot.lv-yellow { background: #f59e0b; box-shadow: 0 0 0 3px color-mix(in srgb, #f59e0b 22%, transparent); }
+.cx-line-dot.lv-red { background: #ef4444; box-shadow: 0 0 0 3px color-mix(in srgb, #ef4444 22%, transparent); }
+.cx-line-main { display: flex; flex-direction: column; min-width: 0; }
+.cx-line-main small { color: var(--esam-muted, #6b7280); font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cx-line-state { display: flex; flex-direction: column; align-items: flex-end; gap: 0.2rem; }
+.cx-line-lv { font-size: 0.7rem; font-weight: 700; }
+.lv-t-green { color: #0e9f6e; } .lv-t-yellow { color: #d97706; } .lv-t-red { color: #dc3545; }
+.cx-tech { margin: 0; }
+.cx-tech > summary { cursor: pointer; list-style: none; font-weight: 700; display: flex; gap: 0.4rem; align-items: center; }
+.cx-tech > summary::-webkit-details-marker { display: none; }
+@media (max-width: 991.98px) { .cx-help { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 575.98px) { .cx-line { grid-template-columns: auto minmax(0, 1fr) auto; } .cx-line-state { display: none; } }

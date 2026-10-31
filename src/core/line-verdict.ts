@@ -1,6 +1,7 @@
 import { get } from '../db/index.js';
 import { getPolicy, limitState } from './anti-ban.js';
-import { getHealth, recomputeHealth, SETTLE_MINUTES, SYSTEM_OUT_SQL } from './health.js';
+import { getConfig } from './config-store.js';
+import { getHealth, recomputeHealth, SETTLE_MINUTES, SYSTEM_OUT_SQL, type HealthRow } from './health.js';
 import type { SessionRow } from '../types.js';
 
 /**
@@ -51,10 +52,71 @@ export interface LineVerdict {
     pausedBatches: number;
     /** Mensajes escritos desde el teléfono / WhatsApp Web en 24 h (no cuentan). */
     phone24h: number;
+    /** Mensajes del sistema con más de 15 min (base de la entrega). */
+    measured: number;
   };
 }
 
 const pct = (x: number) => `${Math.round(x * 100)}%`;
+
+export interface QuarantineInfo {
+  reason: string;
+  since: string | null;
+  /** ¿Se ve sana como para liberarla? */
+  canRelease: boolean;
+  advice: string;
+}
+
+const fmtWhen = (iso: string) => new Date(iso).toLocaleString('es-BO', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+
+/**
+ * Motivo y momento de la cuarentena. Las anteriores a guardar el motivo se
+ * recuperan del registro de auditoría. Recomienda liberar cuando la línea ya
+ * está conectada, sin bloqueos en 24 h y sin entrega baja.
+ */
+export function quarantineInfo(session: SessionRow, health: HealthRow, deliveryThreshold: number, measured: number): QuarantineInfo {
+  let reason = health.quarantine_reason;
+  let since = health.quarantine_at;
+  if (!reason) {
+    const log = get<{ context: string | null; created_at: string }>(
+      `SELECT context, created_at FROM audit_logs WHERE action = 'anti_ban.quarantine' AND json_extract(context, '$.session_id') = ?
+        AND json_extract(context, '$.quarantine') = 1 ORDER BY id DESC LIMIT 1`,
+      session.id,
+    );
+    try {
+      reason = log?.context ? (JSON.parse(log.context) as { reason?: string }).reason ?? null : null;
+    } catch {
+      reason = null;
+    }
+    since ??= log?.created_at ?? null;
+  }
+  const label = (reason || 'motivo no registrado').replace(/\.$/, '');
+  const hours = since ? (Date.now() - Date.parse(since)) / 3_600_000 : null;
+  const deliveryOk = measured < 5 || health.delivery_rate >= deliveryThreshold;
+  const problems: string[] = [];
+  if (session.status !== 'ready') problems.push('vincular de nuevo el número (está desconectado)');
+  if (health.blocked_24h > 0) problems.push(`esperar: hubo ${health.blocked_24h} bloqueo(s) o baja(s) en 24 h`);
+  if (!deliveryOk) problems.push('revisar la lista: la entrega está baja');
+  const canRelease = problems.length === 0;
+  const byFailures = /fallos/i.test(label);
+  const advice = canRelease
+    ? `Se ve sana${hours !== null ? ` (lleva ${hours < 1 ? 'menos de 1 h' : `${Math.round(hours)} h`} en cuarentena)` : ''}: está conectada, sin bloqueos y sin entrega baja. ${byFailures ? 'Antes de liberarla, mirá en Lotes el error de los envíos que fallaron (número inválido, sin conexión…). ' : ''}El Super Admin puede liberarla en Anti-Baneo › detalle de la línea; los envíos pausados se reanudan desde Lotes.`
+    : `Antes de liberarla hay que ${problems.join('; ')}. Después, el Super Admin la libera en Anti-Baneo › detalle de la línea.`;
+  return { reason: label, since, canRelease, advice };
+}
+
+/** Mensajes que WhatsApp no pudo descifrar en 24 h (lo registra la conexión). */
+export function decryptFailures(sessionId: string): { count: number; fromPhone: number } | null {
+  const raw = getConfig(`decrypt_failures:${sessionId}`);
+  if (!raw) return null;
+  try {
+    const d = JSON.parse(raw) as { count: number; from_phone: number; last_at: string };
+    if (!d.last_at || Date.now() - Date.parse(d.last_at) > 86_400_000 || !d.count) return null;
+    return { count: Number(d.count) || 0, fromPhone: Number(d.from_phone) || 0 };
+  } catch {
+    return null;
+  }
+}
 
 export function lineVerdict(session: SessionRow): LineVerdict {
   const health = recomputeHealth(session.id) ?? getHealth(session.id)!;
@@ -87,6 +149,7 @@ export function lineVerdict(session: SessionRow): LineVerdict {
     warmupDay: limits?.active ? limits.day : null,
     pausedBatches: paused,
     phone24h,
+    measured,
   };
 
   const checks: VerdictCheck[] = [];
@@ -110,20 +173,20 @@ export function lineVerdict(session: SessionRow): LineVerdict {
     action = 'Vinculala desde Conexión escaneando el QR con el teléfono del número.';
   }
 
-  // 2. Cuarentena (el motivo real queda en last_error: status_reason es genérico)
-  const qReason = (health.last_error || health.status_reason || 'por el sistema').replace(/\.$/, '');
+  // 2. Cuarentena: motivo y desde cuándo, y si ya se puede liberar.
+  const q = health.quarantine ? quarantineInfo(session, health, policy.health_delivery_threshold, measured) : null;
   checks.push({
     key: 'quarantine',
     label: 'Cuarentena',
-    status: health.quarantine ? 'bad' : 'ok',
-    value: health.quarantine ? `Sí: ${qReason}` : 'No',
-    rule: 'Rojo mientras el número esté en cuarentena.',
-    why: 'El sistema la activa ante fallos seguidos o muchos bloqueos, para que WhatsApp no suspenda el número. Mientras dure, los masivos quedan en pausa.',
-    fix: health.quarantine ? 'Esperá a que baje la actividad y pedí al Super Admin que la libere en Anti-Baneo (Monitoreo) cuando esté sana.' : null,
+    status: q ? 'bad' : 'ok',
+    value: q ? `Sí${q.since ? `, desde ${fmtWhen(q.since)}` : ''}: ${q.reason}` : 'No',
+    rule: 'Rojo mientras el número esté en cuarentena. No se levanta sola: la libera el Super Admin.',
+    why: 'El sistema la activa cuando varios envíos seguidos fallan (o un administrador la pone a mano), para que WhatsApp no suspenda el número. Mientras dure, los envíos masivos de la línea quedan en pausa y no se crean nuevos.',
+    fix: q ? q.advice : null,
   });
-  if (health.quarantine) {
-    red.push(`Está en cuarentena: ${qReason}.`);
-    action ??= 'Esperá a que baje la actividad y pedí al Super Admin que la libere en Anti-Baneo (Monitoreo) cuando esté sana.';
+  if (q) {
+    red.push(`Está en cuarentena: ${q.reason}.`);
+    action ??= q.advice;
   }
 
   // 3. Entrega (24 h)
@@ -206,7 +269,21 @@ export function lineVerdict(session: SessionRow): LineVerdict {
     else if (low) yellow.push(`Queda poco cupo hoy: ${limits.dailyRemaining} de ${limits.dailyLimit} mensajes.`);
   }
 
-  // 7. Envíos pausados
+  // 7. Mensajes sin descifrar (aviso de la conexión: no cambia el color)
+  const dec = decryptFailures(session.id);
+  if (dec) {
+    checks.push({
+      key: 'decrypt',
+      label: 'Mensajes sin descifrar (24 h)',
+      status: 'info',
+      value: `${dec.count} mensaje(s)${dec.fromPhone ? `, ${dec.fromPhone} del propio teléfono` : ''}`,
+      rule: 'No cambia el color: es un aviso de la conexión, no un riesgo de bloqueo.',
+      why: 'WhatsApp no pudo descifrar algunos mensajes que llegaron a esta línea, así que no se ven en el panel. Suele pasar justo después de vincular, si el teléfono estuvo mucho tiempo sin internet o si se reinstaló WhatsApp.',
+      fix: 'Abrí WhatsApp en el teléfono con internet para que se sincronice. Si los contactos ven «Esperando el mensaje», usá «Reparar cifrado» en Conexión. Si sigue pasando, «Empezar de cero (QR nuevo)»: no borra conversaciones ni notas.',
+    });
+  }
+
+  // 8. Envíos pausados
   checks.push({
     key: 'paused',
     label: 'Envíos pausados por el anti-baneo',

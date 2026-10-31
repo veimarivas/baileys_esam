@@ -111,6 +111,9 @@ export function migrate(): void {
   addColumnIfMissing('anti_ban_policies', 'optout_keywords', 'TEXT');
   // Línea en la que se originó la baja o el bloqueo (para la salud de cada sesión).
   addColumnIfMissing('optouts', 'session_id', 'TEXT');
+  // Motivo y momento de la cuarentena (last_error lo pisa el siguiente error de la línea).
+  addColumnIfMissing('session_health_metrics', 'quarantine_reason', 'TEXT');
+  addColumnIfMissing('session_health_metrics', 'quarantine_at', 'TEXT');
   db.exec('CREATE INDEX IF NOT EXISTS idx_optouts_session ON optouts(session_id, created_at)');
   addColumnIfMissing('conversations', 'history_synced_at', 'TEXT');
   addColumnIfMissing('conversations', 'status', "TEXT NOT NULL DEFAULT 'open'");

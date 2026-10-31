@@ -2,17 +2,17 @@ import path from 'node:path';
 import fs from 'node:fs';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import multer from 'multer';
-import { config } from '../config.js';
+import { APP_TIMEZONE, config } from '../config.js';
 import { all, get, run } from '../db/index.js';
 import { logger } from '../logger.js';
 import { SessionManager } from '../baileys/manager.js';
 import { batchDetailPage, batchesPage } from './batches-view.js';
 import { batchEngagement, batchesEngagement } from '../core/batch-engagement.js';
-import { lineVerdictCard, linesHealthCard, linesHealthPage } from './lines-view.js';
+import { connectionHelp, lineVerdictCard, linesHealthCard, linesHealthPage, linesOverview } from './lines-view.js';
 import { lineVerdict } from '../core/line-verdict.js';
 import { applyLineFix, lineIssues, type LineFixAction } from '../core/line-health.js';
 import { massActivity, massActivityCsv } from '../core/mass-activity.js';
-import { card, connectionCard, connectionDiagnosis, emptyState, fmtDate, initials, insight, kvList, safeJson, sectionHead, statusBadge, table, type ConnectionDiagnosis } from './views.js';
+import { card, connectionCard, connectionDiagnosis, emptyState, fmtDate, insight, kvList, safeJson, sectionHead, statusBadge, table, type ConnectionDiagnosis } from './views.js';
 import { countNewContactsToday, getPolicy, limitState } from '../core/anti-ban.js';
 import { cancelGroup, canDecide, confirmGroup, getGroup, pendingGroupsFor, type ConfirmGroup } from '../core/batch-confirm.js';
 import { nowIso } from '../util/async.js';
@@ -573,43 +573,38 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     ah(async (req: AuthedRequest, res) => {
       const session = sessionForUser(req.user!) ?? (esamEsAdmin(req.user!) ? manager.primary() : undefined);
       const sessions = esamEsAdmin(req.user!) ? manager.list() : session ? [session] : [];
-      const sessionsCard = sessions.length
-        ? `${sectionHead('ri-stack-line', 'Sesiones del gateway', 'Cada sesión es un número de WhatsApp vinculado y su historial de conversaciones.')}
-           <div class="card"><div class="card-body py-1">${sessions
-             .map((s, i) => {
-               const last = i === sessions.length - 1;
-               return `<div class="d-flex align-items-center gap-3 py-3${last ? '' : ' border-bottom'}">
-                 <span class="avatar-sm rounded-circle av-${i % 8}">${esc(initials(s.owner_name ?? s.name))}</span>
-                 <div class="flex-grow-1 min-w-0">
-                   <div class="fw-semibold">${esc(s.owner_name ?? s.name)}${s.id === session?.id ? ' <span class="badge bg-primary-subtle text-primary ms-1">Principal</span>' : ''}</div>
-                   <div class="text-muted fs-12"><span class="ff-monospace">${esc(s.phone ?? s.expected_phone ?? '—')}</span></div>
-                 </div>
-                 ${statusBadge(s.status)}
-               </div>`;
-             })
-             .join('')}</div></div>`
+      const admin = esamEsAdmin(req.user!);
+      const linesCard = admin && sessions.length
+        ? `${sectionHead('ri-stack-line', 'Líneas del sistema', 'Cada número vinculado con su semáforo. Tocá una línea para ver por qué tiene ese color y cómo solucionarlo.')}
+           ${linesOverview(sessions.map((s) => ({
+             id: s.id,
+             name: s.owner_name ?? s.name,
+             phone: s.phone ?? s.expected_phone,
+             status: s.status,
+             verdict: lineVerdict(s),
+             principal: s.id === session?.id,
+           })))}`
         : '';
-      const gatewayCard = card(
-        'Gateway',
-        `${kvList([
+      const gatewayCard = `<details class="cx-tech card"><summary class="card-body"><i class="ri-server-line"></i> Datos técnicos del gateway</summary><div class="card-body pt-0">${kvList([
           ['Motor', '<span class="badge bg-success-subtle text-success">Baileys · sin Chromium</span>'],
           ['Gateway', `<span class="ff-monospace">http://${esc(config.host)}:${config.port}</span>`],
           ['API v1', `<span class="ff-monospace">http://${esc(config.host)}:${config.apiPort}/api/v1</span>`],
           ['Panel', `<span class="ff-monospace">http://${esc(config.host)}:${config.panelPort}</span>`],
-        ])}`,
-      );
+          ['Zona horaria', esc(APP_TIMEZONE)],
+        ])}</div></details>`;
       const diagnosis = session ? connectionDiagnosis(await diagnosisFor(session)) : '';
-      const admin = esamEsAdmin(req.user!);
-      const body = `${session ? lineVerdictCard(lineVerdict(session)) : ''}<div class="row g-3">
+      const body = `${session ? `${sectionHead('ri-traffic-light-line', 'Salud de tu número', '¿Está en condiciones de enviar? Abrí cada punto para ver qué se midió y qué hacer.')}${lineVerdictCard(lineVerdict(session))}` : ''}
+      ${sectionHead('ri-plug-line', 'Conexión con WhatsApp', 'Estado de la vinculación, diagnóstico y herramientas para resolver problemas.')}
+      <div class="row g-3">
         <div class="col-lg-7">${connectionCard(session, session?.owner_name ?? undefined)}</div>
         <div class="col-lg-5">${diagnosis}</div>
       </div>
-      ${admin ? `<div class="row g-3 mt-0"><div class="col-lg-5">${gatewayCard}</div><div class="col-lg-7">${linesHealthCard(lineIssues())}</div></div>` : ''}
-      ${admin ? sessionsCard : ''}`;
+      ${connectionHelp()}
+      ${admin ? `${linesCard}<div class="row g-3 mt-0"><div class="col-lg-7">${linesHealthCard(lineIssues())}</div><div class="col-lg-5">${gatewayCard}</div></div>` : ''}`;
       res.send(
         renderLayout('Conexión', req.user!, 'settings', body, {
           flash: flash(req),
-          subtitle: 'Vinculá el número de WhatsApp y revisá el estado del gateway.',
+          subtitle: 'Tu número de WhatsApp: si está sano para enviar, cómo está la conexión y qué hacer si algo falla.',
           restrictToSettings: !isConnected(req.user!),
         }),
       );

@@ -19,6 +19,9 @@ export interface HealthRow {
   warmup_day: number | null;
   warmup_limit: number | null;
   quarantine: number;
+  /** Por qué y desde cuándo está en cuarentena (null si no lo está). */
+  quarantine_reason: string | null;
+  quarantine_at: string | null;
   last_error: string | null;
   updated_at: string;
 }
@@ -156,11 +159,15 @@ export function getHealth(sessionId: string): HealthRow | undefined {
   return get<HealthRow>('SELECT * FROM session_health_metrics WHERE session_id = ?', sessionId);
 }
 
-/** Todas las sesiones con una fila de salud (crea las ausentes al vuelo). */
-export function listHealth(): HealthRow[] {
+/**
+ * Todas las sesiones con su salud. `fresh` la recalcula (pantallas de
+ * monitoreo): la fila guardada solo se actualiza cuando pasa algo en la línea y
+ * podía mostrar un color viejo.
+ */
+export function listHealth(fresh = false): HealthRow[] {
   const sessions = all<{ id: string }>('SELECT id FROM sessions ORDER BY created_at');
   for (const s of sessions) {
-    if (!getHealth(s.id)) recomputeHealth(s.id);
+    if (fresh || !getHealth(s.id)) recomputeHealth(s.id);
   }
   return all<HealthRow>('SELECT * FROM session_health_metrics ORDER BY updated_at DESC');
 }
@@ -169,13 +176,16 @@ export function listHealth(): HealthRow[] {
 export function setQuarantine(sessionId: string, quarantine: boolean, reason: string): void {
   const now = nowIso();
   run(
-    `INSERT INTO session_health_metrics (session_id, health, status_reason, quarantine, updated_at)
-     VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(session_id) DO UPDATE SET quarantine = excluded.quarantine, updated_at = excluded.updated_at`,
+    `INSERT INTO session_health_metrics (session_id, health, status_reason, quarantine, quarantine_reason, quarantine_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(session_id) DO UPDATE SET quarantine = excluded.quarantine, quarantine_reason = excluded.quarantine_reason,
+       quarantine_at = excluded.quarantine_at, updated_at = excluded.updated_at`,
     sessionId,
     quarantine ? 'red' : 'green',
     reason,
     quarantine ? 1 : 0,
+    quarantine ? reason : null,
+    quarantine ? now : null,
     now,
   );
   recomputeHealth(sessionId, { lastError: reason });

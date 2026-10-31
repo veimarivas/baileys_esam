@@ -139,3 +139,47 @@ export function lineVerdictCard(v: LineVerdict): string {
     </div>
   </section>`;
 }
+
+/** Problemas frecuentes de la conexión y del envío, con qué hacer (Conexión). */
+export function connectionHelp(): string {
+  const faq: Array<[string, string, string]> = [
+    ['ri-qr-code-line', 'No aparece el QR o la línea quedó trabada', 'Tocá «Reconectar». Si no aparece en un minuto, usá «Empezar de cero (QR nuevo)» y escaneá desde WhatsApp › Dispositivos vinculados. No se borran conversaciones ni notas.'],
+    ['ri-refresh-line', 'Las conversaciones no se actualizan', 'Revisá que el teléfono del número tenga internet. Después tocá «Reconectar»: no hace falta volver a escanear.'],
+    ['ri-time-line', 'Los contactos ven «Esperando el mensaje»', 'Es un problema de cifrado entre los teléfonos. Usá «Reparar cifrado»; si sigue, «Empezar de cero (QR nuevo)».'],
+    ['ri-lock-unlock-line', 'Aviso de «mensajes sin descifrar»', 'Algunos mensajes que llegaron no se pudieron leer. Abrí WhatsApp en el teléfono con internet para que se sincronice; si se repite seguido, volvé a vincular el número.'],
+    ['ri-traffic-light-line', 'El semáforo está en amarillo o rojo', 'Abrí cada punto de «Por qué este color»: dice qué se midió, el límite y cómo solucionarlo. Lo que escribís desde el teléfono o WhatsApp Web no cuenta.'],
+    ['ri-lock-line', 'La línea está en cuarentena', 'Se activa cuando varios envíos seguidos fallan. Los masivos quedan en pausa hasta que el Super Admin la libere (Anti-Baneo › detalle de la línea). Revisá en Lotes el error de los envíos que fallaron.'],
+    ['ri-battery-low-line', 'Se agotó el cupo de hoy', 'Los envíos pendientes salen solos mañana (el cupo se renueva a las 00:00, hora de Bolivia). Repartí los envíos grandes en varios días.'],
+  ];
+  const tips = [
+    'Enviá solo a quienes esperan el mensaje (participantes, inscritos, prospectos que dejaron su número).',
+    'En el primer renglón, decí quién escribe y por qué (programa o área).',
+    'Revisá la lista antes de enviar: con código de país (591), sin repetidos y sin quienes pidieron la baja.',
+    'Mantené el teléfono del número con internet; si se apaga mucho tiempo, la línea se desconecta.',
+    'Con un número nuevo, dejá que el calentamiento suba el cupo de a poco.',
+  ];
+  return `<section class="cx-help">
+    <div class="cx-help-col">
+      <h6><i class="ri-question-answer-line"></i> Problemas frecuentes y cómo resolverlos</h6>
+      ${faq.map(([icon, q, a]) => `<details class="cx-faq"><summary><i class="${icon}"></i><span>${esc(q)}</span></summary><p>${esc(a)}</p></details>`).join('')}
+    </div>
+    <div class="cx-help-col cx-tips">
+      <h6><i class="ri-shield-star-line"></i> Buenas prácticas para no perder el número</h6>
+      <ul>${tips.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>
+    </div>
+  </section>`;
+}
+
+/** Líneas del gateway con su semáforo y acceso al detalle (solo administración). */
+export function linesOverview(rows: Array<{ id: string; name: string; phone: string | null; status: string; verdict: LineVerdict; principal: boolean }>): string {
+  const dot: Record<LineVerdict['level'], string> = { green: 'Sana', yellow: 'Con cuidado', red: 'No conviene enviar' };
+  return `<div class="card"><div class="card-body py-1">${rows
+    .map((r, i) => `<a class="cx-line${i === rows.length - 1 ? '' : ' border-bottom'}" href="/anti-ban/line/${encodeURIComponent(r.id)}">
+      <span class="cx-line-dot lv-${r.verdict.level}" aria-hidden="true"></span>
+      <span class="cx-line-main"><span><b>${esc(r.name)}</b>${r.principal ? ' <span class="badge bg-primary-subtle text-primary ms-1">Principal</span>' : ''}</span>
+        <small><span class="ff-monospace">${esc(r.phone ?? '—')}</span> · ${esc(r.verdict.level === 'green' ? dot.green : r.verdict.reasons[0] ?? dot[r.verdict.level])}</small></span>
+      <span class="cx-line-state">${statusBadge(r.status)}<span class="cx-line-lv lv-t-${r.verdict.level}">${dot[r.verdict.level]}</span></span>
+      <i class="ri-arrow-right-s-line text-muted" aria-hidden="true"></i>
+    </a>`)
+    .join('')}</div></div>`;
+}

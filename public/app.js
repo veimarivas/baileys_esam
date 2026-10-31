@@ -6414,68 +6414,80 @@
     loadNotes();
   }
 
-  /* ── Actividad por usuario (auto-refresco) ── */
+  /* ── Envíos por usuario: búsqueda, orden y detalle (tabla ya renderizada) ── */
   function initActivity() {
-    var card = document.getElementById('activity-card');
-    if (!card) return;
-    var body = document.getElementById('activity-body');
-    var updated = document.getElementById('activity-updated');
-    var btn = document.getElementById('activity-refresh');
-    var url = card.getAttribute('data-activity-url') || '/api/activity';
-    var params = {
-      from: card.getAttribute('data-activity-from') || '',
-      to: card.getAttribute('data-activity-to') || '',
-      account: card.getAttribute('data-activity-account') || '',
-      area: card.getAttribute('data-activity-area') || '',
-    };
-
-    function apartadoBadge(a) {
-      var kind = a === 'Académico' ? 'info' : a === 'Contable' ? 'warning' : 'secondary';
-      return '<span class="badge bg-' + kind + '-subtle text-' + kind + '">' + escapeHtml(a) + '</span>';
-    }
-
-    function render(data) {
-      var rows = (data && data.rows) || [];
-      if (!rows.length) {
-        body.innerHTML = '<div class="text-muted text-center py-3">Sin actividad en el período seleccionado.</div>';
-        return;
+    function setup(opts) {
+      var card = document.getElementById(opts.card);
+      if (!card) return;
+      var tbody = card.querySelector('tbody');
+      if (!tbody) return;
+      var search = opts.search ? document.getElementById(opts.search) : null;
+      var sort = opts.sort ? document.getElementById(opts.sort) : null;
+      var empty = opts.empty ? document.getElementById(opts.empty) : null;
+      var refresh = opts.refresh ? document.getElementById(opts.refresh) : null;
+      if (refresh) refresh.addEventListener('click', function () { location.reload(); });
+      var pairs = [];
+      function fold(value) {
+        return (value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
       }
-      var html = '<div class="table-responsive"><table class="table table-hover align-middle mb-0">' +
-        '<thead class="table-light"><tr><th>Usuario</th><th>Número</th><th>Apartado</th>' +
-        '<th class="text-end">Cronogramas</th><th class="text-end">Panel ESAM</th><th class="text-end">Total</th></tr></thead><tbody>';
-      rows.forEach(function (r) {
-        html += '<tr>' +
-          '<td>' + escapeHtml(r.name) + '</td>' +
-          '<td><span class="ff-monospace">' + escapeHtml(r.phone || '—') + '</span></td>' +
-          '<td>' + apartadoBadge(r.apartado) + '</td>' +
-          '<td class="text-end">' + r.cronogramas + '</td>' +
-          '<td class="text-end">' + r.panel + '</td>' +
-          '<td class="text-end"><b>' + r.total + '</b></td>' +
-          '</tr>';
+      Array.prototype.forEach.call(tbody.querySelectorAll('tr[data-name]'), function (row) {
+        var detail = row.nextElementSibling;
+        if (!detail || !detail.classList.contains('act-detail')) detail = null;
+        pairs.push({
+          row: row,
+          detail: detail,
+          name: fold(row.getAttribute('data-name')),
+          raw: (row.getAttribute('data-name') || ''),
+          area: fold(row.getAttribute('data-area'))
+        });
       });
-      var t = data.totals || { cronogramas: 0, panel: 0, total: 0 };
-      html += '</tbody><tfoot><tr class="table-light"><th>Total</th><th></th><th></th>' +
-        '<th class="text-end">' + t.cronogramas + '</th>' +
-        '<th class="text-end">' + t.panel + '</th>' +
-        '<th class="text-end">' + t.total + '</th></tr></tfoot></table></div>';
-      body.innerHTML = html;
+
+      function applyFilter() {
+        var q = fold(search ? search.value.trim() : '');
+        var shown = 0;
+        pairs.forEach(function (p) {
+          var match = !q || p.name.indexOf(q) >= 0 || p.area.indexOf(q) >= 0;
+          p.row.hidden = !match;
+          if (match) shown++;
+          if (p.detail) p.detail.hidden = !match || !p.row.classList.contains('is-open');
+        });
+        if (empty) empty.hidden = shown > 0;
+      }
+
+      function applySort(key) {
+        if (!key) return;
+        pairs.sort(function (a, b) {
+          if (key === 'name') return a.raw.localeCompare(b.raw, 'es');
+          var av = Number(a.row.getAttribute('data-' + key) || 0);
+          var bv = Number(b.row.getAttribute('data-' + key) || 0);
+          return bv - av || a.raw.localeCompare(b.raw, 'es');
+        });
+        pairs.forEach(function (p) {
+          tbody.appendChild(p.row);
+          if (p.detail) tbody.appendChild(p.detail);
+        });
+        applyFilter();
+      }
+
+      card.addEventListener('click', function (ev) {
+        var btn = ev.target.closest && ev.target.closest('.act-toggle');
+        if (!btn) return;
+        var row = btn.closest('tr');
+        if (!row) return;
+        var detail = row.nextElementSibling;
+        var open = btn.getAttribute('aria-expanded') === 'true';
+        btn.setAttribute('aria-expanded', String(!open));
+        row.classList.toggle('is-open', !open);
+        if (detail && detail.classList.contains('act-detail')) detail.hidden = open;
+      });
+
+      if (search) search.addEventListener('input', applyFilter);
+      if (sort) sort.addEventListener('change', function () { applySort(sort.value); });
+      applyFilter();
     }
 
-    function load() {
-      var qs = [];
-      Object.keys(params).forEach(function (k) { if (params[k]) qs.push(k + '=' + encodeURIComponent(params[k])); });
-      return fetch(url + (qs.length ? '?' + qs.join('&') : ''), { headers: { 'Accept': 'application/json' }, credentials: 'same-origin' })
-        .then(function (r) { return r.json(); })
-        .then(function (d) {
-          render(d);
-          if (updated) updated.textContent = 'Actualizado ' + new Date().toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit' });
-        })
-        .catch(function () {});
-    }
-
-    if (btn) btn.addEventListener('click', load);
-    load();
-    setInterval(load, 60000);
+    setup({ card: 'activity-card', search: 'act-search', sort: 'act-sort', empty: 'act-empty', refresh: 'act-refresh' });
+    setup({ card: 'team-card', search: 'team-search', sort: 'team-sort', empty: 'team-empty', refresh: 'team-refresh' });
   }
 
   /* ── Seguimiento y reportes: gráficos + actualización automática ──
@@ -6560,17 +6572,18 @@
 
     if (data.kind === 'user') {
       var userDaily = data.daily || [];
-      if (!userDaily.some(function (d) { return d.responses || d.sent; })) {
+      if (!userDaily.some(function (d) { return d.responses || d.sent || d.cronogramas || d.panel; })) {
         empty('urDaily', 'Sin respuestas ni envíos en el período.');
         return;
       }
       render('urDaily', base('bar', {
         series: [
           { name: 'Respuestas', data: userDaily.map(function (d) { return d.responses; }) },
-          { name: 'Envíos', data: userDaily.map(function (d) { return d.sent; }) }
+          { name: 'Cronogramas', data: userDaily.map(function (d) { return d.cronogramas || 0; }) },
+          { name: 'Panel', data: userDaily.map(function (d) { return d.panel != null ? d.panel : d.sent; }) }
         ],
-        colors: [C.s2, C.s1],
-        plotOptions: barEnds,
+        colors: [C.s2, C.s1, C.s3],
+        plotOptions: { bar: { borderRadius: 3, borderRadiusApplication: 'end', columnWidth: '62%' } },
         stroke: { width: 2, colors: ['transparent'] },
         xaxis: { categories: userDaily.map(function (d) { return shortDay(d.day); }), tickAmount: Math.min(userDaily.length, 10), axisBorder: { color: C.grid }, axisTicks: { show: false }, labels: { rotate: 0, hideOverlappingLabels: true } },
         yaxis: { labels: { formatter: function (v) { return Math.round(v); } } },

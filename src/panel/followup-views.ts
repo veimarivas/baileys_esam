@@ -16,7 +16,7 @@ import {
   type UserPerformance,
   type UserReportDetail,
 } from '../core/followup.js';
-import { TIPO_LABELS, type MonitoringData } from '../core/monitoring.js';
+import { TIPO_LABELS, type ActivityBatch, type ActivityData, type ActivityRow, type MonitoringData } from '../core/monitoring.js';
 import type { GlobalNote } from '../core/contacts.js';
 import type { HealthRow } from '../core/health.js';
 import type { MassActivity } from '../core/mass-activity.js';
@@ -188,6 +188,234 @@ function panel(title: string, body: string, extra = ''): string {
 
 const APEX = '<script src="/assets/libs/apexcharts/apexcharts.min.js"></script>';
 
+// ── Envíos por usuario (seguimiento y reportes) ──────────────────────────────
+
+const INT = new Intl.NumberFormat('es-BO');
+
+function num(value: number): string {
+  return INT.format(value);
+}
+
+/** Día y hora local de un lote (`AAAA-MM-DD`, `HH:MM`). */
+function batchWhen(b: ActivityBatch): string {
+  const [y, m, d] = b.day.split('-').map(Number);
+  const label = new Date(y, (m || 1) - 1, d || 1).toLocaleDateString('es-BO', { day: '2-digit', month: 'short' });
+  return `${label.replace('.', '')} · ${b.time}`;
+}
+
+function originLabel(b: ActivityBatch): string {
+  return b.cronograma ? 'Cronogramas' : 'Lotes del panel';
+}
+
+/** Bloque compacto de cifras: ocupa poco alto y se lee de un vistazo. */
+function actMetric(icon: string, label: string, value: string, sub: string, tone = 'info'): string {
+  return `<div class="act-metric act-${tone}">
+    <span class="act-metric-ico"><i class="${icon}" aria-hidden="true"></i></span>
+    <span class="act-metric-body">
+      <span class="act-metric-label">${esc(label)}</span>
+      <b class="act-metric-value">${value}</b>
+      <small>${sub}</small>
+    </span>
+  </div>`;
+}
+
+function actSummary(a: ActivityData): string {
+  const t = a.totals;
+  return `<div class="act-metrics">
+    ${actMetric('ri-send-plane-2-line', 'Mensajes enviados', num(t.total), `${t.users} persona${t.users === 1 ? '' : 's'} · ${num(t.batches)} lote${t.batches === 1 ? '' : 's'}`, 'brand')}
+    ${actMetric('ri-calendar-schedule-line', 'Cronogramas', num(t.cronogramas), `${num(t.cronBatches)} lote${t.cronBatches === 1 ? '' : 's'} del sistema`, 'ok')}
+    ${actMetric('ri-stack-line', 'Lotes del panel', num(t.lotes), `${num(t.panelBatches)} lote${t.panelBatches === 1 ? '' : 's'} pedidos`, 'info')}
+    ${actMetric('ri-inbox-unarchive-line', 'Bandeja', num(t.bandeja), 'mensajes escritos a mano', 'mute')}
+    ${actMetric('ri-scales-3-line', 'Mensajes por lote', t.batches ? num(t.avgPerBatch) : '—', t.batches ? `lote más grande: ${num(t.maxBatch)}` : 'sin lotes en el período', 'warn')}
+  </div>`;
+}
+
+function actLots(row: ActivityRow): string {
+  if (!row.recent.length) return '<p class="act-empty-line">Sin lotes en el período.</p>';
+  return `<ul class="act-lots">${row.recent
+    .map(
+      (b) => `<li class="act-lot">
+        <span class="act-lot-time">${esc(batchWhen(b))}</span>
+        <span class="act-lot-main">
+          <a href="/batches/${b.id}">${esc(b.name)}</a>
+          <small>${esc(originLabel(b))}${b.programa ? ` · ${esc(b.programa)}` : b.tipo ? ` · ${esc(TIPO_LABELS[b.tipo] ?? b.tipo)}` : ''}</small>
+        </span>
+        <span class="act-lot-num"><b>${num(b.total)}</b><small>mensajes</small></span>
+        <span class="act-lot-res">
+          <span class="is-ok">${num(b.sent)} enviados</span>
+          ${b.failed ? `<span class="is-bad">${num(b.failed)} fallidos</span>` : ''}
+        </span>
+      </li>`,
+    )
+    .join('')}</ul>`;
+}
+
+function actDays(row: ActivityRow): string {
+  if (!row.byDay.length) return '<p class="act-empty-line">Sin actividad diaria en el período.</p>';
+  const days = row.byDay.slice(-10);
+  const max = Math.max(1, ...days.map((d) => d.cronogramas + d.lotes + d.bandeja));
+  return `<ul class="act-days">${days
+    .map((d) => {
+      const total = d.cronogramas + d.lotes + d.bandeja;
+      const pctOf = (v: number) => Math.round((v / max) * 100);
+      const [y, m, dd] = d.day.split('-').map(Number);
+      const label = new Date(y, (m || 1) - 1, dd || 1).toLocaleDateString('es-BO', { day: '2-digit', month: '2-digit' });
+      return `<li>
+        <span class="act-day-label">${esc(label)}</span>
+        <span class="act-day-bar" title="${esc(`${d.cronogramas} cronogramas · ${d.lotes} lotes · ${d.bandeja} bandeja`)}">
+          ${d.cronogramas ? `<i class="is-cron" style="width:${pctOf(d.cronogramas)}%"></i>` : ''}
+          ${d.lotes ? `<i class="is-lote" style="width:${pctOf(d.lotes)}%"></i>` : ''}
+          ${d.bandeja ? `<i class="is-band" style="width:${pctOf(d.bandeja)}%"></i>` : ''}
+        </span>
+        <b>${num(total)}</b>
+      </li>`;
+    })
+    .join('')}</ul>
+    <p class="act-legend"><span class="is-cron"></span>Cronogramas <span class="is-lote"></span>Lotes <span class="is-band"></span>Bandeja</p>`;
+}
+
+/**
+ * Tabla de envíos por usuario con desglose real: cronogramas, lotes del panel,
+ * bandeja, participación, promedio por lote y detalle expandible por persona.
+ */
+function activitySection(a: ActivityData, opts: { detailHref?: (row: ActivityRow) => string | null; id?: string } = {}): string {
+  if (!a.rows.length) {
+    return `<div class="card ab-card act-card" id="${esc(opts.id ?? 'activity-card')}">
+      <div class="card-header act-head">
+        <div class="act-head-title">
+          <h5 class="card-title mb-0">Envíos por usuario</h5>
+          <p class="fu-chart-sub mb-0">Cronogramas, lotes pedidos desde el panel y mensajes de la bandeja.</p>
+        </div>
+      </div>
+      <div class="card-body pt-0">
+        ${emptyState('ri-user-search-line', 'Sin envíos en el período', 'No hay mensajes de cronogramas, lotes ni bandeja con los filtros actuales. Probá ampliar el período o quitar filtros.')}
+      </div>
+    </div>`;
+  }
+  const total = Math.max(1, a.totals.total);
+  const stamp = new Date().toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit' });
+  const rows = a.rows
+    .map((row, i) => {
+      const share = Math.round((row.total / total) * 100);
+      const href = opts.detailHref?.(row) ?? null;
+      const detailId = `act-d-${opts.id ?? 'm'}-${i}`;
+      return `<tr class="act-row" data-name="${esc(row.name.toLowerCase())}" data-total="${row.total}" data-cronogramas="${row.cronogramas}" data-lotes="${row.lotes}" data-bandeja="${row.bandeja}" data-batches="${row.batches}" data-area="${esc(row.area ?? row.apartado)}">
+        <td class="act-person">
+          <span class="act-avatar av-${(row.userId ?? i) % 8}">${esc(initials(row.name))}</span>
+          <span class="act-person-main">
+            <span class="act-person-name">${esc(row.name)}</span>
+            <span class="act-person-sub">${esc([row.area || row.apartado, row.phone].filter(Boolean).join(' · ') || 'Sin apartado')}</span>
+          </span>
+        </td>
+        <td class="act-num">
+          <b>${num(row.cronogramas)}</b>
+          <small>${num(row.cronBatches)} lote${row.cronBatches === 1 ? '' : 's'}</small>
+        </td>
+        <td class="act-num">
+          <b>${num(row.lotes)}</b>
+          <small>${num(row.panelBatches)} lote${row.panelBatches === 1 ? '' : 's'}</small>
+        </td>
+        <td class="act-num">
+          <b>${num(row.bandeja)}</b>
+          <small>directos</small>
+        </td>
+        <td class="act-num act-total">
+          <b>${num(row.total)}</b>
+          <span class="act-share" title="${share}% de los envíos"><span style="width:${share}%"></span></span>
+          <small>${share}%</small>
+        </td>
+        <td class="act-num">
+          <b>${num(row.avgPerBatch)}</b>
+          <small>máx. ${num(row.maxBatch)}</small>
+        </td>
+        <td class="act-when">
+          <span title="${esc(row.lastAt ?? '')}">${esc(relTime(row.lastAt))}</span>
+          <small>${row.daysActive} día${row.daysActive === 1 ? '' : 's'} activo${row.daysActive === 1 ? '' : 's'}</small>
+        </td>
+        <td class="act-open">
+          <button type="button" class="btn btn-light btn-sm act-toggle" aria-expanded="false" aria-controls="${detailId}" title="Ver lotes y actividad diaria">
+            <i class="ri-arrow-down-s-line" aria-hidden="true"></i><span class="visually-hidden">Detalle de ${esc(row.name)}</span>
+          </button>
+        </td>
+      </tr>
+      <tr class="act-detail" id="${detailId}" hidden>
+        <td colspan="8">
+          <div class="act-detail-grid">
+            <div class="act-detail-lots">
+              <h6><i class="ri-stack-line" aria-hidden="true"></i>Lotes recientes</h6>
+              ${actLots(row)}
+            </div>
+            <div class="act-detail-days">
+              <h6><i class="ri-bar-chart-2-line" aria-hidden="true"></i>Actividad por día</h6>
+              ${actDays(row)}
+              ${href ? `<a class="btn btn-soft-primary btn-sm mt-2" href="${esc(href)}"><i class="ri-user-line me-1"></i>Ficha completa de ${esc(row.name)}</a>` : ''}
+            </div>
+          </div>
+        </td>
+      </tr>`;
+    })
+    .join('');
+
+  return `<div class="card ab-card act-card" id="${esc(opts.id ?? 'activity-card')}">
+    <div class="card-header act-head">
+      <div class="act-head-title">
+        <h5 class="card-title mb-0">Envíos por usuario</h5>
+        <p class="fu-chart-sub mb-0">Cronogramas, lotes pedidos desde el panel y mensajes de la bandeja. Abrí una fila para ver sus lotes.</p>
+      </div>
+      <div class="act-tools">
+        <button type="button" class="btn btn-soft-secondary btn-sm" id="act-refresh"><i class="ri-refresh-line me-1"></i>Actualizar</button>
+        <label class="act-search">
+          <i class="ri-search-line" aria-hidden="true"></i>
+          <input type="search" id="act-search" placeholder="Buscar persona…" autocomplete="off" aria-label="Buscar persona" />
+        </label>
+        <select class="form-select form-select-sm" id="act-sort" aria-label="Ordenar por">
+          <option value="total">Más mensajes</option>
+          <option value="cronogramas">Más cronogramas</option>
+          <option value="lotes">Más lotes del panel</option>
+          <option value="batches">Más lotes</option>
+          <option value="bandeja">Más bandeja</option>
+          <option value="name">Nombre</option>
+        </select>
+        <span class="fu-updated">Actualizado ${esc(stamp)}</span>
+      </div>
+    </div>
+    <div class="card-body pt-0">
+      ${actSummary(a)}
+      <div class="act-table-wrap table-responsive">
+        <table class="table table-hover align-middle mb-0 ab-table act-table">
+          <thead class="table-light">
+            <tr>
+              <th>Usuario</th>
+              <th class="text-end">Cronogramas <small>mensajes · lotes</small></th>
+              <th class="text-end">Lotes del panel <small>mensajes · lotes</small></th>
+              <th class="text-end">Bandeja <small>directos</small></th>
+              <th class="text-end">Total <small>participación</small></th>
+              <th class="text-end">Msj. por lote <small>promedio · máx.</small></th>
+              <th class="text-end">Último envío</th>
+              <th><span class="visually-hidden">Detalle</span></th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+          <tfoot>
+            <tr class="table-light act-total-row">
+              <th>Total · ${a.totals.users} persona${a.totals.users === 1 ? '' : 's'}</th>
+              <th class="text-end">${num(a.totals.cronogramas)}<small>${num(a.totals.cronBatches)} lotes</small></th>
+              <th class="text-end">${num(a.totals.lotes)}<small>${num(a.totals.panelBatches)} lotes</small></th>
+              <th class="text-end">${num(a.totals.bandeja)}<small>directos</small></th>
+              <th class="text-end">${num(a.totals.total)}<small>100%</small></th>
+              <th class="text-end">${num(a.totals.avgPerBatch)}<small>máx. ${num(a.totals.maxBatch)}</small></th>
+              <th></th>
+              <th></th>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      <p class="act-empty-line" id="act-empty" hidden><i class="ri-filter-off-line me-1"></i>Ninguna persona coincide con la búsqueda.</p>
+      <p class="act-hint"><i class="ri-information-line" aria-hidden="true"></i> «Cronogramas» son los envíos de lotes de la integración; «Lotes del panel» los pedidos desde esta plataforma; «Bandeja» los mensajes escritos a mano en una conversación.</p>
+    </div>
+  </div>`;
+}
+
 // ── /monitoring ───────────────────────────────────────────────────────────────
 
 export type MonitoringTab = 'pendientes' | 'actividad' | 'numeros';
@@ -200,6 +428,7 @@ export interface MonitoringView {
   attention: AttentionData;
   pending: { total: number; rows: PendingReply[] };
   notes: NotesFollowup;
+  activity: ActivityData;
 }
 
 export function renderMonitoring(v: MonitoringView): string {
@@ -276,27 +505,29 @@ export function renderMonitoring(v: MonitoringView): string {
       ? table(
           ['Quién respondió', 'Respuestas', 'Chats', 'Tiempo prom.'],
           a.responders.map((r) => [
-            r.key === 'phone' ? `<i class="ri-smartphone-line me-1 text-muted"></i>${esc(r.name)}` : esc(r.name),
+            /^\d+$/.test(r.key)
+              ? `<a class="fu-contact" href="/reports/users/${r.key}?${keepQuery({ ...keep, tab: 'equipo' })}" title="Ver ficha y envíos de esta persona">${esc(r.name)}</a>`
+              : `<i class="ri-smartphone-line me-1 text-muted"></i>${esc(r.name)}`,
             `<b>${r.responses}</b>`,
             String(r.chats),
             esc(fmtMinutes(r.avgFirstResponseMin)),
           ]),
         )
       : emptyState('ri-chat-off-line', 'Sin respuestas en el período', 'Todavía no se respondió ningún mensaje.');
-    content = `<div class="fu-split">
+    const detailHref = (row: ActivityRow) =>
+      row.userId == null
+        ? null
+        : `/reports/users/${row.userId}?${keepQuery({
+            period: v.period.preset,
+            from: v.period.preset === 'custom' ? v.period.from : '',
+            to: v.period.preset === 'custom' ? v.period.to : '',
+            session: v.selectedSession,
+            tab: 'equipo',
+          })}`;
+    content = `${activitySection(v.activity, { detailHref })}
+    <div class="fu-split">
       <div>${chartCard('fuHours', singleDay ? 'Mensajes por hora' : 'Mensajes por hora del día', singleDay ? 'Recibidos y enviados en cada hora del día seleccionado' : 'Suma del período por hora: muestra las horas de más demanda')}</div>
       <div>${panel('Respuestas por persona', respondersTable)}</div>
-    </div>
-    <div class="card ab-card" id="activity-card"
-        data-activity-url="/api/activity"
-        data-activity-from="${esc(v.period.from)}" data-activity-to="${esc(v.period.to)}"
-        data-activity-account="" data-activity-area="">
-      <div class="card-header d-flex align-items-center">
-        <h5 class="card-title mb-0 flex-grow-1">Envíos por usuario <span class="fu-sub">· cronogramas y panel</span></h5>
-        <span class="text-muted fs-12 me-2" id="activity-updated"></span>
-        <button type="button" class="btn btn-soft-secondary btn-sm" id="activity-refresh"><i class="ri-refresh-line me-1"></i>Actualizar</button>
-      </div>
-      <div class="card-body pt-0" id="activity-body"><div class="text-muted text-center py-3">Cargando…</div></div>
     </div>
     ${dataScript({ kind: 'monitoring', hours: a.byHour })}${APEX}`;
   } else {
@@ -361,6 +592,8 @@ export interface ReportsView {
   team: Map<number, UserRow>;
   lastUse: Map<number, UserActivity>;
   sends: MonitoringData;
+  /** Envíos por usuario (cronogramas, lotes y bandeja) para la pestaña Equipo. */
+  activity: ActivityData;
   protection: ProtectionStats;
   filters: { programa: string; account: string; area: string; tipo: string };
   exportHref: string;
@@ -433,32 +666,67 @@ export function renderReports(v: ReportsView): string {
     ${dataScript({ kind: 'reports', daily: a.byDay, tipos: [], programas: [] })}${APEX}`;
   } else if (v.tab === 'equipo') {
     const detailHref = (id: number) => `/reports/users/${id}?${keepQuery({ ...keep, tab: 'equipo' })}`;
+    const activityByUid = new Map(v.activity.rows.map((r) => [r.uid, r]));
+    const activityByUser = new Map<number, ActivityRow>();
+    const usedUids = new Set<string>();
+    for (const member of v.team.values()) {
+      for (const key of [String(member.id), member.source_uid ? String(member.source_uid) : null]) {
+        if (!key) continue;
+        const row = activityByUid.get(key);
+        if (row) {
+          activityByUser.set(member.id, row);
+          usedUids.add(row.uid);
+          break;
+        }
+      }
+    }
+    const zero: ActivityRow = {
+      uid: '', userId: null, name: '', phone: null, area: null, apartado: '',
+      cronogramas: 0, lotes: 0, bandeja: 0, panel: 0, total: 0, batches: 0, cronBatches: 0, panelBatches: 0,
+      batchMessages: 0, avgPerBatch: 0, maxBatch: 0, daysActive: 0, lastAt: null, byDay: [], recent: [],
+    };
+    const sendCells = (s: ActivityRow, share: number): string[] => [
+      `<span class="team-num"><b>${num(s.cronogramas)}</b><small>${num(s.cronBatches)} lote${s.cronBatches === 1 ? '' : 's'}</small></span>`,
+      `<span class="team-num"><b>${num(s.lotes)}</b><small>${num(s.panelBatches)} lote${s.panelBatches === 1 ? '' : 's'}</small></span>`,
+      `<span class="team-num"><b>${num(s.bandeja)}</b><small>directos</small></span>`,
+      `<span class="team-num team-total"><b>${num(s.total)}</b><span class="act-share"><span style="width:${share}%"></span></span><small>${share}%</small></span>`,
+      `<span class="team-num"><b>${num(s.batches)}</b><small>${s.daysActive} día${s.daysActive === 1 ? '' : 's'}</small></span>`,
+      `<span class="team-num"><b>${num(s.avgPerBatch)}</b><small>máx. ${num(s.maxBatch)}</small></span>`,
+    ];
+    const attrs = (name: string, s: ActivityRow, responses: number) =>
+      `data-name="${esc(name.toLowerCase())}" data-area="${esc(s.area ?? s.apartado)}" data-total="${s.total}" data-cronogramas="${s.cronogramas}" data-lotes="${s.lotes}" data-bandeja="${s.bandeja}" data-batches="${s.batches}" data-responses="${responses}"`;
+    const shareOf = (s: ActivityRow) => (v.activity.totals.total ? Math.round((s.total / v.activity.totals.total) * 100) : 0);
+
     const personRow = (u: UserPerformance, member?: UserRow) => {
       const use = v.lastUse.get(u.id);
       const area = member ? esamAreaLabel(member) : null;
+      const s = activityByUser.get(u.id) ?? zero;
       const sub = [
         area,
         use ? `Última actividad ${relTime(use.at)}` : 'Sin actividad registrada',
       ].filter(Boolean).join(' · ');
-      return [
-        `<div class="team-person">
-          <span class="avatar-xs rounded-circle av-${u.id % 8}">${esc(initials(u.name))}</span>
-          <div class="min-w-0"><a class="team-link" href="${esc(detailHref(u.id))}">${esc(u.name)}</a>
-            <div class="adm-sub">${esc(sub)}</div></div>
-        </div>`,
-        `<b class="team-metric">${u.responses}</b>`,
-        `<span class="team-metric">${u.chats}</span>`,
-        `<span class="team-muted">${esc(fmtMinutes(u.avgFirstResponseMin))}</span>`,
-        `<b>${u.notesCreated}</b> <span class="team-muted">creadas</span>
-          <div class="adm-sub">${u.notesResolved} resueltas</div>`,
-        u.notesOverdue ? `<span class="ab-pill ab-danger"><i class="ri-alarm-warning-line"></i>${u.notesOverdue}</span>` : '<span class="team-muted">0</span>',
-        `<a class="btn btn-soft-secondary btn-sm team-open" href="${esc(detailHref(u.id))}" title="Ver ficha y seguimiento">Ver ficha <i class="ri-arrow-right-line"></i></a>`,
-      ];
+      return {
+        html: `<tr ${attrs(u.name, s, u.responses)}>
+          <td><div class="team-person">
+            <span class="avatar-xs rounded-circle av-${u.id % 8}">${esc(initials(u.name))}</span>
+            <div class="min-w-0"><a class="team-link" href="${esc(detailHref(u.id))}">${esc(u.name)}</a>
+              <div class="adm-sub">${esc(sub)}</div></div>
+          </div></td>
+          ${sendCells(s, shareOf(s)).map((c) => `<td class="text-end">${c}</td>`).join('')}
+          <td class="text-end"><span class="team-num"><b>${num(u.responses)}</b><small>${num(u.chats)} chat${u.chats === 1 ? '' : 's'}</small></span></td>
+          <td class="text-end"><span class="team-num"><b>${esc(fmtMinutes(u.avgFirstResponseMin))}</b></span></td>
+          <td class="text-end"><span class="team-num"><b>${num(u.notesCreated)}</b><small>${num(u.notesResolved)} resueltas</small></span></td>
+          <td class="text-end">${u.notesOverdue ? `<span class="ab-pill ab-danger"><i class="ri-alarm-warning-line"></i>${num(u.notesOverdue)}</span>` : '<span class="team-muted">0</span>'}</td>
+          <td class="text-end"><a class="btn btn-soft-secondary btn-sm team-open" href="${esc(detailHref(u.id))}" title="Ver ficha y seguimiento">Ficha <i class="ri-arrow-right-line"></i></a></td>
+        </tr>`,
+        total: s.total,
+        responses: u.responses,
+      };
     };
+
     const activeIds = new Set(v.users.map((u) => u.id));
     const inactive = [...v.team.values()]
       .filter((m) => !activeIds.has(m.id))
-      .sort((a, b) => (a.name ?? a.username ?? '').localeCompare(b.name ?? b.username ?? '', 'es'))
       .map((member) =>
         personRow(
           {
@@ -474,40 +742,120 @@ export function renderReports(v: ReportsView): string {
           member,
         ),
       );
-    const rows = [
-      ...v.users.map((u) => personRow(u, v.team.get(u.id))),
-      ...inactive,
-      ...a.responders
-        .filter((r) => r.key === 'phone')
-        .map((r) => [
-          `<div class="team-person"><span class="team-phone"><i class="ri-smartphone-line"></i></span>
+    const rows = [...v.users.map((u) => personRow(u, v.team.get(u.id))), ...inactive];
+
+    // Personas que enviaron pero no tienen cuenta del panel (p. ej. cuenta histórica).
+    for (const s of v.activity.rows.filter((r) => !usedUids.has(r.uid))) {
+      rows.push({
+        html: `<tr ${attrs(s.name, s, 0)}>
+          <td><div class="team-person">
+            <span class="team-phone"><i class="ri-user-shared-line"></i></span>
+            <div class="min-w-0"><span class="team-link is-muted">${esc(s.name)}</span>
+              <div class="adm-sub">${esc([s.area, s.phone, 'Sin cuenta del panel'].filter(Boolean).join(' · '))}</div></div>
+          </div></td>
+          ${sendCells(s, shareOf(s)).map((c) => `<td class="text-end">${c}</td>`).join('')}
+          <td class="text-end"><span class="team-muted">—</span></td>
+          <td class="text-end"><span class="team-muted">—</span></td>
+          <td class="text-end"><span class="team-muted">—</span></td>
+          <td class="text-end"><span class="team-muted">—</span></td>
+          <td class="text-end"><span class="adm-sub">Sin ficha</span></td>
+        </tr>`,
+        total: s.total,
+        responses: 0,
+      });
+    }
+
+    // Respuestas hechas desde el teléfono, sin usuario del panel.
+    for (const r of a.responders.filter((x) => x.key === 'phone')) {
+      rows.push({
+        html: `<tr ${attrs(r.name, zero, r.responses)}>
+          <td><div class="team-person"><span class="team-phone"><i class="ri-smartphone-line"></i></span>
             <div class="min-w-0"><span class="team-link is-muted">${esc(r.name)}</span>
-              <div class="adm-sub">Sin cuenta del panel · respuestas desde el teléfono</div></div></div>`,
-          `<b class="team-metric">${r.responses}</b>`,
-          `<span class="team-metric">${r.chats}</span>`,
-          `<span class="team-muted">${esc(fmtMinutes(r.avgFirstResponseMin))}</span>`,
-          '<span class="team-muted">—</span>',
-          '<span class="team-muted">—</span>',
-          '<span class="adm-sub">No disponible</span>',
-        ]),
-    ];
-    const teamTable = `<div class="table-responsive"><table class="table table-hover align-middle mb-0 ab-table team-table">
-      <thead class="table-light"><tr><th>Persona</th><th>Respuestas</th><th>Chats</th><th>1.ª respuesta</th><th>Notas del período</th><th>Notas vencidas</th><th><span class="visually-hidden">Acciones</span></th></tr></thead>
-      <tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody>
-    </table></div>`;
-    const top = [...v.users].sort((x, y) => y.responses - x.responses)[0];
-    content = `<div class="ab-kpis adm-kpis-3">
-      ${kpi('ri-team-line', 'info', 'Personas con actividad', v.users.filter((u) => u.responses || u.notesCreated).length, 'respondieron o registraron notas')}
-      ${kpi('ri-medal-line', 'ok', 'Más respuestas', top && top.responses ? esc(top.name) : '—', top && top.responses ? `${top.responses} respuestas · ${top.chats} chats` : 'sin respuestas en el período')}
-      ${kpi('ri-alarm-warning-line', v.users.some((u) => u.notesOverdue) ? 'danger' : 'ok', 'Tareas vencidas', v.users.reduce((acc, u) => acc + u.notesOverdue, 0), 'de las personas del equipo')}
+              <div class="adm-sub">Sin cuenta del panel · respuestas desde el teléfono</div></div></div></td>
+          ${sendCells(zero, 0).map((c) => `<td class="text-end">${c}</td>`).join('')}
+          <td class="text-end"><span class="team-num"><b>${num(r.responses)}</b><small>${num(r.chats)} chat${r.chats === 1 ? '' : 's'}</small></span></td>
+          <td class="text-end"><span class="team-num"><b>${esc(fmtMinutes(r.avgFirstResponseMin))}</b></span></td>
+          <td class="text-end"><span class="team-muted">—</span></td>
+          <td class="text-end"><span class="team-muted">—</span></td>
+          <td class="text-end"><span class="adm-sub">No disponible</span></td>
+        </tr>`,
+        total: 0,
+        responses: r.responses,
+      });
+    }
+
+    rows.sort((x, y) => y.total - x.total || y.responses - x.responses);
+    const teamTable = `<div class="table-responsive team-scroll">
+      <table class="table table-hover align-middle mb-0 ab-table team-table team-table-rich">
+        <thead class="table-light">
+          <tr class="team-groups">
+            <th rowspan="2">Persona</th>
+            <th colspan="4" class="text-center">Mensajes enviados</th>
+            <th colspan="2" class="text-center">Lotes</th>
+            <th colspan="2" class="text-center">Atención</th>
+            <th colspan="2" class="text-center">Notas</th>
+            <th rowspan="2"><span class="visually-hidden">Acciones</span></th>
+          </tr>
+          <tr class="team-cols">
+            <th class="text-end">Cronogramas</th>
+            <th class="text-end">Lotes panel</th>
+            <th class="text-end">Bandeja</th>
+            <th class="text-end">Total</th>
+            <th class="text-end">Cant.</th>
+            <th class="text-end">Msj/lote</th>
+            <th class="text-end">Respuestas</th>
+            <th class="text-end">1.ª resp.</th>
+            <th class="text-end">Creadas</th>
+            <th class="text-end">Vencidas</th>
+          </tr>
+        </thead>
+        <tbody>${rows.map((r) => r.html).join('')}</tbody>
+      </table>
+    </div>`;
+
+    const activePeople = new Set<string>();
+    for (const u of v.users) if (u.responses || u.notesCreated || u.notesResolved) activePeople.add(`u:${u.id}`);
+    for (const r of v.activity.rows) activePeople.add(r.userId != null ? `u:${r.userId}` : `a:${r.uid}`);
+    const topSender = [...v.activity.rows].sort((x, y) => y.total - x.total)[0];
+    const topPerson = [...v.users].sort((x, y) => y.responses - x.responses)[0];
+    const overdue = v.users.reduce((acc, u) => acc + u.notesOverdue, 0);
+    content = `<div class="ab-kpis ab-kpis-6">
+      ${kpi('ri-team-line', 'info', 'Personas con actividad', activePeople.size, `${v.team.size} cuentas en el equipo · ${num(v.activity.totals.users)} con envíos`)}
+      ${kpi('ri-send-plane-2-line', 'ok', 'Mensajes enviados', num(v.activity.totals.total), `${num(v.activity.totals.cronogramas)} cronogramas · ${num(v.activity.totals.lotes)} lotes panel · ${num(v.activity.totals.bandeja)} bandeja`)}
+      ${kpi('ri-stack-line', 'info', 'Lotes enviados', num(v.activity.totals.batches), `${num(v.activity.totals.avgPerBatch)} mensajes por lote en promedio`)}
+      ${kpi('ri-medal-line', 'ok', 'Más envíos', topSender ? esc(topSender.name) : '—', topSender && topSender.total ? `${num(topSender.total)} mensajes · ${num(topSender.batches)} lotes` : 'sin envíos en el período')}
+      ${kpi('ri-chat-check-line', 'info', 'Más respuestas', topPerson && topPerson.responses ? esc(topPerson.name) : '—', topPerson && topPerson.responses ? `${num(topPerson.responses)} respuestas · ${num(topPerson.chats)} chats` : 'sin respuestas en el período')}
+      ${kpi('ri-alarm-warning-line', overdue ? 'danger' : 'ok', 'Tareas vencidas', num(overdue), 'de las personas del equipo')}
     </div>
-    ${panel(
-      'Desempeño por persona',
-      rows.length
-        ? teamTable
-        : emptyState('ri-user-search-line', 'Sin actividad del equipo', 'No hubo respuestas ni notas en el período.'),
-      `<a class="btn btn-soft-secondary btn-sm" href="${esc(v.exportHref)}"><i class="ri-download-2-line me-1"></i>CSV</a>`,
-    )}`;
+    <div class="card ab-card team-card" id="team-card">
+      <div class="card-header team-head">
+        <div class="team-head-title">
+          <h5 class="card-title mb-0">Desempeño y envíos por persona</h5>
+          <p class="fu-chart-sub mb-0">Una sola lectura por persona: lo que envió (cronogramas, lotes y bandeja), cuánto trabajó en atención y cómo va con sus notas.</p>
+        </div>
+        <div class="team-tools">
+          <button type="button" class="btn btn-soft-secondary btn-sm" id="team-refresh"><i class="ri-refresh-line me-1"></i>Actualizar</button>
+          <label class="act-search">
+            <i class="ri-search-line" aria-hidden="true"></i>
+            <input type="search" id="team-search" placeholder="Buscar persona…" autocomplete="off" aria-label="Buscar persona" />
+          </label>
+          <select class="form-select form-select-sm" id="team-sort" aria-label="Ordenar por">
+            <option value="total">Más envíos</option>
+            <option value="cronogramas">Más cronogramas</option>
+            <option value="lotes">Más lotes de panel</option>
+            <option value="batches">Más lotes</option>
+            <option value="responses">Más respuestas</option>
+            <option value="name">Nombre</option>
+          </select>
+          <a class="btn btn-soft-secondary btn-sm" href="${esc(v.exportHref)}"><i class="ri-download-2-line me-1"></i>CSV</a>
+        </div>
+      </div>
+      <div class="card-body pt-0">
+        ${rows.length ? teamTable : emptyState('ri-user-search-line', 'Sin actividad del equipo', 'No hubo respuestas, envíos ni notas en el período.')}
+        <div class="act-empty-line" id="team-empty" hidden><i class="ri-filter-off-line me-1"></i>Ninguna persona coincide con la búsqueda.</div>
+        <p class="act-hint"><i class="ri-information-line" aria-hidden="true"></i> «Cronogramas» suma los envíos de la integración; «Lotes panel» los pedidos desde el panel; «Bandeja» los mensajes manuales. «Msj/lote» es el promedio de destinatarios por lote.</p>
+      </div>
+    </div>`;
   } else if (v.tab === 'seguimiento') {
     const created = v.notes.createdInPeriod;
     const resolved = v.notes.resolvedInPeriod;
@@ -535,26 +883,40 @@ export function renderReports(v: ReportsView): string {
     const pr = v.protection;
     const pd = v.prevDelivery;
     const maxSkip = Math.max(1, ...pr.skipped.map((x) => x.count));
-    const sendTable = (title: string, rows: Array<{ name: string; total: number; byTipo: Record<string, number> }>) =>
+    const sendTable = (
+      title: string,
+      rows: Array<{ name: string; total: number; byTipo: Record<string, number>; batches: number; avgPerBatch: number; maxBatch: number; href?: string }>,
+      sub: string,
+    ) =>
       panel(
         title,
-        rows.length
-          ? table(['', 'Total', 'Masivos', 'Contable', 'Notas', 'Bandeja'], rows.map((r) => [
-              esc(r.name),
-              `<b>${r.total}</b>`,
-              String((r.byTipo.participantes ?? 0) + (r.byTipo.grupo ?? 0)),
-              String(r.byTipo.cobranza ?? 0),
-              String(r.byTipo.notas ?? 0),
-              String(r.byTipo.inbox ?? 0),
+        `${rows.length
+          ? table(['', 'Total', 'Masivos', 'Contable', 'Notas', 'Bandeja', 'Lotes', 'Msj/lote'], rows.map((r) => [
+              r.href ? `<a class="fu-contact" href="${esc(r.href)}">${esc(r.name)}</a>` : esc(r.name),
+              `<b>${num(r.total)}</b>`,
+              num((r.byTipo.participantes ?? 0) + (r.byTipo.grupo ?? 0)),
+              num(r.byTipo.cobranza ?? 0),
+              num(r.byTipo.notas ?? 0),
+              num(r.byTipo.inbox ?? 0),
+              `<span class="team-num"><b>${num(r.batches)}</b><small>lotes</small></span>`,
+              `<span class="team-num"><b>${num(r.avgPerBatch)}</b><small>máx. ${num(r.maxBatch)}</small></span>`,
             ]))
-          : emptyState('ri-filter-off-line', 'Sin envíos', 'No hay envíos con los filtros seleccionados.'),
+          : emptyState('ri-filter-off-line', 'Sin envíos', 'No hay envíos con los filtros seleccionados.')}
+        <p class="fu-sub mb-0 mt-2">${esc(sub)}</p>`,
       );
-    content = `${compare}<div class="ab-kpis">
-      ${kpi('ri-send-plane-2-line', 'info', 'Enviados', d.sent, 'panel, lotes y cronogramas', delta(d.sent, pd.sent, 'up'))}
-      ${kpi('ri-check-double-line', d.rate != null && d.sent >= 5 && d.rate < 85 ? 'warn' : 'ok', 'Entregabilidad', d.rate == null || d.sent < 5 ? '—' : `${d.rate}%`, d.sent < 5 ? 'pocos envíos para medir' : `${d.delivered} entregados`, d.sent >= 5 && pd.sent >= 5 ? delta(d.rate, pd.rate, 'up', 'pts') : '')}
-      ${kpi('ri-eye-line', 'info', 'Leídos', d.readRate == null || d.sent < 5 ? '—' : `${d.readRate}%`, `${d.read} mensajes`)}
-      ${kpi('ri-error-warning-line', d.failed + s.totals.failed ? 'danger' : 'ok', 'Fallidos', d.failed + s.totals.failed, 'sin entrega')}
-      ${kpi('ri-shield-check-line', pr.skippedTotal ? 'warn' : 'mute', 'Frenados', pr.skippedTotal, `por protección · ${pr.pausedBatches} lote(s) pausados`)}
+    const inboxSent = s.byUser.reduce((acc, u) => acc + (u.byTipo.inbox ?? 0), 0);
+    const batchSent = Math.max(0, s.totals.cronogramas + s.totals.esam - inboxSent);
+    const batchesTotal = s.byUser.reduce((acc, u) => acc + u.batches, 0);
+    const batchTotal = s.byUser.reduce((acc, u) => acc + u.batchMessages, 0);
+    const avgBatch = batchesTotal ? Math.round(batchTotal / batchesTotal) : 0;
+    const lotKpiSub = batchesTotal ? `${num(batchesTotal)} lotes · ${num(avgBatch)} msj/lote` : 'sin lotes en el período';
+    content = `${compare}<div class="ab-kpis ab-kpis-6">
+      ${kpi('ri-send-plane-2-line', 'info', 'Enviados', num(d.sent), 'panel, lotes y cronogramas', delta(d.sent, pd.sent, 'up'))}
+      ${kpi('ri-stack-line', 'ok', 'Mensajes de lotes', num(batchSent), lotKpiSub)}
+      ${kpi('ri-scales-3-line', 'info', 'Por lote', batchesTotal ? num(avgBatch) : '—', `máx. ${num(Math.max(0, ...s.byUser.map((u) => u.maxBatch)))} en un lote`)}
+      ${kpi('ri-check-double-line', d.rate != null && d.sent >= 5 && d.rate < 85 ? 'warn' : 'ok', 'Entregabilidad', d.rate == null || d.sent < 5 ? '—' : `${d.rate}%`, d.sent < 5 ? 'pocos envíos para medir' : `${num(d.delivered)} entregados`, d.sent >= 5 && pd.sent >= 5 ? delta(d.rate, pd.rate, 'up', 'pts') : '')}
+      ${kpi('ri-error-warning-line', d.failed + s.totals.failed ? 'danger' : 'ok', 'Fallidos', num(d.failed + s.totals.failed), 'sin entrega')}
+      ${kpi('ri-shield-check-line', pr.skippedTotal ? 'warn' : 'mute', 'Frenados', num(pr.skippedTotal), `por protección · ${pr.pausedBatches} lote(s) pausados`)}
     </div>
     <div class="fu-split fu-split-even">
       <div>${chartCard('fuTipo', 'Envíos por origen', 'Lotes y cronogramas según el tipo de envío')}</div>
@@ -580,8 +942,16 @@ export function renderReports(v: ReportsView): string {
       '<a class="btn btn-soft-primary btn-sm" href="/anti-ban?tab=politicas">Políticas</a>',
     )}
     <div class="fu-split fu-split-even">
-      <div>${sendTable('Envíos por programa', s.byPrograma.map((p) => ({ name: p.programa, total: p.total, byTipo: p.byTipo })))}</div>
-      <div>${sendTable('Envíos por usuario', s.byUser.map((u) => ({ name: u.name, total: u.total, byTipo: u.byTipo })))}</div>
+      <div>${sendTable('Envíos por programa', s.byPrograma.map((p) => ({ name: p.programa, total: p.total, byTipo: p.byTipo, batches: p.batches, avgPerBatch: p.avgPerBatch, maxBatch: p.maxBatch })), 'Programas con más envíos del período. Los lotes agrupan todos los destinatarios de un mismo pedido.')}</div>
+      <div>${sendTable('Envíos por usuario', s.byUser.map((u) => ({
+        name: u.name,
+        total: u.total,
+        byTipo: u.byTipo,
+        batches: u.batches,
+        avgPerBatch: u.avgPerBatch,
+        maxBatch: u.maxBatch,
+        href: /^\d+$/.test(u.id) ? `/reports/users/${u.id}?${keepQuery({ ...keep, tab: 'equipo' })}` : undefined,
+      })), 'Quién envió cada mensaje y cuántos destinatarios tuvo por lote. Abrí una persona para ver su ficha.')}</div>
     </div>
     ${dataScript({
       kind: 'reports',
@@ -817,12 +1187,13 @@ export function renderReportUser(v: ReportUserView): string {
 
   const overdue = d.assigned.counts.overdue;
   const responseTone = p.avgFirstResponseMin == null ? 'mute' : p.avgFirstResponseMin > 60 ? 'warn' : 'ok';
+  const s = d.sends;
   const kpis = `<div class="ab-kpis ur-kpis">
+    ${kpi('ri-send-plane-2-line', 'info', 'Mensajes enviados', num(s.total), `${num(s.cronogramas)} cronogramas · ${num(s.lotes)} lotes panel · ${num(s.panel)} bandeja`)}
+    ${kpi('ri-calendar-schedule-line', 'ok', 'Desde cronogramas', num(s.cronogramas), `${num(s.cronBatches)} lote${s.cronBatches === 1 ? '' : 's'} del sistema`)}
+    ${kpi('ri-stack-line', 'info', 'Lotes enviados', num(s.batches), `${num(s.avgPerBatch)} msj/lote · máx. ${num(s.maxBatch)}`)}
     ${kpi('ri-chat-check-line', 'info', 'Respuestas', p.responses, `${p.chats} chat${p.chats === 1 ? '' : 's'} atendido${p.chats === 1 ? '' : 's'}`)}
     ${kpi('ri-speed-up-line', responseTone, '1.ª respuesta', fmtMinutes(p.avgFirstResponseMin), `${d.within15} en ≤ 15 min · ${d.within60} en ≤ 1 h`)}
-    ${kpi('ri-send-plane-2-line', 'info', 'Envíos', d.sends.total, `${d.sends.panel} bandeja · ${d.sends.batch} lotes`)}
-    ${kpi('ri-sticky-note-add-line', 'info', 'Notas creadas', p.notesCreated, `${p.notesResolved} resueltas por la persona`)}
-    ${kpi('ri-check-double-line', 'ok', 'Notas resueltas', p.notesResolved, 'marcadas como resueltas en el período')}
     ${kpi('ri-alarm-warning-line', overdue ? 'danger' : 'ok', 'Tareas vencidas', overdue, `${d.assigned.counts.today} para hoy · ${d.assigned.counts.pending} abiertas`)}
   </div>`;
 
@@ -881,6 +1252,45 @@ export function renderReportUser(v: ReportUserView): string {
         .join('')}</ul>`
     : emptyState('ri-history-line', 'Sin actividad reciente', 'No hay mensajes ni notas de esta persona en el período.');
 
+  // Origen de los envíos: misma persona, tres canales distintos.
+  const originTotal = Math.max(1, s.total);
+  const origins: Array<{ label: string; value: number; cls: string; hint: string }> = [
+    { label: 'Cronogramas', value: s.cronogramas, cls: 'is-cron', hint: `${num(s.cronBatches)} lotes del sistema` },
+    { label: 'Lotes del panel', value: s.lotes, cls: 'is-lote', hint: `${num(s.panelBatches)} lotes pedidos aquí` },
+    { label: 'Bandeja', value: s.panel, cls: 'is-band', hint: 'mensajes escritos a mano' },
+  ];
+  const originBody = s.total
+    ? `<ul class="ur-origin">${origins
+        .map(
+          (o) => `<li>
+            <span class="ur-origin-label"><span class="ur-origin-dot ${o.cls}"></span>${esc(o.label)}<small>${esc(o.hint)}</small></span>
+            <span class="ur-origin-track"><span class="${o.cls}" style="width:${Math.round((o.value / originTotal) * 100)}%"></span></span>
+            <b>${num(o.value)}</b>
+            <small>${Math.round((o.value / originTotal) * 100)}%</small>
+          </li>`,
+        )
+        .join('')}</ul>
+      <div class="ur-origin-facts">
+        <span><b>${num(s.batches)}</b> lotes en el período</span>
+        <span><b>${num(s.avgPerBatch)}</b> destinatarios por lote</span>
+        <span><b>${num(s.maxBatch)}</b> en el lote más grande</span>
+      </div>`
+    : emptyState('ri-send-plane-2-line', 'Sin envíos en el período', 'No hay mensajes de cronogramas, lotes ni bandeja con el período y filtros elegidos.');
+
+  const sendBatchLabel = (b: (typeof d.sends.list)[number]) =>
+    `${b.day.split('-').reverse().join('/')} · ${b.time} · ${b.cronograma ? 'Cronogramas' : 'Panel'}`;
+  const lotRows = d.sends.list.slice(0, 8).map((b) => [
+    `<a class="fu-contact" href="/batches/${b.id}">#${b.id} · ${esc(b.name)}</a>
+      <div class="adm-sub">${esc(sendBatchLabel(b))}</div>`,
+    esc(b.programa ?? (b.tipo ? TIPO_LABELS[b.tipo] ?? b.tipo : '—')),
+    `<span class="team-num"><b>${num(b.total)}</b><small>${num(b.sent)} enviados${b.failed ? ` · ${num(b.failed)} fallidos` : ''}</small></span>`,
+    statusBadge(b.status),
+  ]);
+  const lotsBody = lotRows.length
+    ? table(['Lote', 'Programa / tipo', 'Mensajes', 'Estado'], lotRows)
+    : emptyState('ri-stack-line', 'Sin lotes en el período', 'Esta persona no pidió lotes ni envió desde cronogramas con estos filtros.');
+  const moreLots = d.sends.list.length > 8 ? `<p class="fu-sub mb-0 mt-2">Se muestran los 8 lotes más recientes de ${num(d.sends.batches)}.</p>` : '';
+
   const loginRel = u.last_login_at ? relTime(u.last_login_at) : 'Nunca';
   const loginDetail = u.last_login_at
     ? `${fmtDate(u.last_login_at)} · ${u.login_count} ingreso${u.login_count === 1 ? '' : 's'}`
@@ -905,19 +1315,28 @@ export function renderReportUser(v: ReportUserView): string {
         <b>${esc(v.lastUse ? relTime(v.lastUse.at) : 'Sin actividad')}</b>
         <small>${esc(v.lastUse ? `${v.lastUse.label} · ${fmtDate(v.lastUse.at)}` : 'Todavía no envió mensajes, lotes ni notas')}</small>
       </div>
+      <div class="ur-fact">
+        <span class="ur-fact-label"><i class="ri-sticky-note-line" aria-hidden="true"></i>Notas</span>
+        <b>${num(p.notesCreated)} creadas</b>
+        <small>${num(p.notesResolved)} resueltas · ${num(p.notesOverdue)} vencidas</small>
+      </div>
     </div>
   </div>`;
 
   const chartSub = d.byDay.length < v.period.days
     ? `Últimos ${d.byDay.length} días del período · ${esc(v.period.label)}`
-    : `Respuestas y envíos por día · ${esc(v.period.label)}`;
+    : `Respuestas, cronogramas y panel por día · ${esc(v.period.label)}`;
   return `<div class="ab-page fu-page ur-page">
     ${periodBar(`/reports/users/${u.id}`, v.period, v.sessions, v.selectedSession, 'equipo', '', v.filters)}
     ${hero}
     ${kpis}
     <div class="ur-layout">
-      ${panel('Actividad diaria', `<div id="urDaily" class="ur-chart" role="img" aria-label="Respuestas y envíos por día"></div><p class="fu-chart-sub mb-0">${chartSub}</p>`)}
+      ${panel('Actividad diaria', `<div id="urDaily" class="ur-chart" role="img" aria-label="Respuestas, cronogramas y panel por día"></div><p class="fu-chart-sub mb-0">${chartSub}</p>`)}
       ${panel('Seguimiento asignado', taskList)}
+    </div>
+    <div class="fu-split fu-split-even">
+      ${panel('Origen de los envíos', originBody)}
+      ${panel('Lotes enviados', `${lotsBody}${moreLots}`, `<a class="btn btn-soft-secondary btn-sm" href="/reports?tab=masivos">Ver masivos</a>`)}
     </div>
     <div class="fu-split fu-split-even">
       ${panel('Contactos atendidos', chats)}
@@ -927,21 +1346,45 @@ export function renderReportUser(v: ReportUserView): string {
   </div>`;
 }
 
-/** CSV del período: desempeño por usuario y serie diaria. */
-export function reportsCsv(v: Pick<ReportsView, 'period' | 'attention' | 'users'>): string {
+/** CSV del período: desempeño por usuario, envíos y serie diaria. */
+export function reportsCsv(v: Pick<ReportsView, 'period' | 'attention' | 'users' | 'team' | 'activity'>): string {
   const q = (x: unknown) => `"${String(x ?? '').replace(/"/g, '""')}"`;
   const lines: string[] = [];
+  const byUid = new Map(v.activity.rows.map((r) => [r.uid, r]));
+  const sendsOf = (id: number) => {
+    const member = v.team.get(id);
+    for (const key of [String(id), member?.source_uid ? String(member.source_uid) : null]) {
+      if (!key) continue;
+      const row = byUid.get(key);
+      if (row) return row;
+    }
+    return undefined;
+  };
   lines.push(q(`Reporte ${v.period.from} a ${v.period.to}`));
   lines.push('');
-  lines.push(['Usuario', 'Respuestas', 'Chats atendidos', 'Tiempo prom. 1a respuesta (min)', 'Notas registradas', 'Notas resueltas', 'Notas vencidas'].map(q).join(','));
+  lines.push(
+    ['Usuario', 'Respuestas', 'Chats atendidos', 'Tiempo prom. 1a respuesta (min)', 'Notas registradas', 'Notas resueltas', 'Notas vencidas',
+      'Mensajes enviados', 'Cronogramas', 'Lotes del panel', 'Bandeja', 'Lotes', 'Mensajes por lote (prom.)', 'Lote más grande']
+      .map(q).join(','),
+  );
   for (const u of v.users) {
-    lines.push([u.name, u.responses, u.chats, u.avgFirstResponseMin ?? '', u.notesCreated, u.notesResolved, u.notesOverdue].map(q).join(','));
+    const s = sendsOf(u.id);
+    lines.push(
+      [u.name, u.responses, u.chats, u.avgFirstResponseMin ?? '', u.notesCreated, u.notesResolved, u.notesOverdue,
+        s?.total ?? 0, s?.cronogramas ?? 0, s?.lotes ?? 0, s?.bandeja ?? 0, s?.batches ?? 0, s?.avgPerBatch ?? 0, s?.maxBatch ?? 0]
+        .map(q).join(','),
+    );
   }
   for (const r of v.attention.responders.filter((x) => x.key === 'phone')) {
-    lines.push([r.name, r.responses, r.chats, r.avgFirstResponseMin ?? '', '', '', ''].map(q).join(','));
+    lines.push([r.name, r.responses, r.chats, r.avgFirstResponseMin ?? '', '', '', '', '', '', '', '', '', '', ''].map(q).join(','));
   }
   lines.push('');
   lines.push(['Día', 'Recibidos', 'Enviados', 'Mediana 1a respuesta (min)'].map(q).join(','));
   for (const d of v.attention.byDay) lines.push([d.day, d.received, d.sent, d.medianMin ?? ''].map(q).join(','));
+  lines.push('');
+  lines.push(['Usuario', 'Cronogramas', 'Lotes del panel', 'Bandeja', 'Total', 'Lotes', 'Mensajes por lote (prom.)', 'Lote más grande', 'Último envío'].map(q).join(','));
+  for (const s of v.activity.rows) {
+    lines.push([s.name, s.cronogramas, s.lotes, s.bandeja, s.total, s.batches, s.avgPerBatch, s.maxBatch, s.lastAt ?? ''].map(q).join(','));
+  }
   return '\uFEFF' + lines.join('\r\n');
 }

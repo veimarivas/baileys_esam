@@ -536,12 +536,50 @@ export interface UserRecentActivity {
   href: string | null;
 }
 
+export interface UserSendBatch {
+  id: number;
+  name: string;
+  status: string;
+  /** Último día/hora local en que el lote envió dentro del período. */
+  day: string;
+  time: string;
+  total: number;
+  sent: number;
+  failed: number;
+  skipped: number;
+  programa: string | null;
+  tipo: string | null;
+  cronograma: boolean;
+  linePhone: string | null;
+}
+
+export interface UserSendStats {
+  /** Mensajes escritos directamente en la bandeja. */
+  panel: number;
+  /** Mensajes confirmados de todos los lotes. */
+  batch: number;
+  /** Mensajes confirmados de lotes del sistema de cronogramas. */
+  cronogramas: number;
+  /** Mensajes confirmados de lotes pedidos desde el panel. */
+  lotes: number;
+  total: number;
+  batches: number;
+  cronBatches: number;
+  panelBatches: number;
+  batchMessages: number;
+  avgPerBatch: number;
+  maxBatch: number;
+  byDay: Map<string, { panel: number; batch: number; cronogramas: number }>;
+  /** Últimos lotes del período (más recientes primero). */
+  list: UserSendBatch[];
+}
+
 export interface UserReportDetail {
   performance: UserPerformance;
   within15: number;
   within60: number;
-  sends: { panel: number; batch: number; total: number };
-  byDay: Array<{ day: string; responses: number; sent: number }>;
+  sends: UserSendStats;
+  byDay: Array<{ day: string; responses: number; sent: number; cronogramas: number; panel: number }>;
   topChats: UserTopChat[];
   assigned: {
     overdue: GlobalNote[];
@@ -554,39 +592,57 @@ export interface UserReportDetail {
 
 /**
  * Envíos atribuidos al usuario: mensajes escritos desde la bandeja y
- * destinatarios de lotes. Los lotes se identifican por `meta.account` o, si
- * falta, por el dueño de la línea que los envió.
+ * destinatarios de lotes (cronogramas y panel). Los lotes se identifican por
+ * `meta.account` o, si falta, por el dueño de la línea que los envió.
  */
 function userSendStats(
   user: { id: number; source_uid: string | null },
   scope: Scope,
   period: Period,
-): { panel: number; batch: number; total: number; byDay: Map<string, { panel: number; batch: number }> } {
-  const byDay = new Map<string, { panel: number; batch: number }>();
+): UserSendStats {
+  const byDay = new Map<string, { panel: number; batch: number; cronogramas: number }>();
   const bucket = (day: string) => {
-    const b = byDay.get(day) ?? { panel: 0, batch: 0 };
+    const b = byDay.get(day) ?? { panel: 0, batch: 0, cronogramas: 0 };
     byDay.set(day, b);
     return b;
   };
 
-  const pp: unknown[] = [user.id, period.fromIso, period.toIso];
+  const pp: unknown[] = [user.id, user.source_uid ?? String(user.id), period.fromIso, period.toIso];
   const panelWhere = sessionClause(scope, 'm.session_id', pp);
   const panel = all<{ day: string; c: number }>(
     `SELECT date(m.occurred_at, 'localtime') AS day, COUNT(*) AS c
-       FROM messages m
-      WHERE m.direction = 'out' AND m.origin = 'panel' AND m.sender_uid = ?
+       FROM messages m LEFT JOIN sessions s ON s.id = m.session_id
+      WHERE m.direction = 'out' AND m.origin = 'panel'
+        AND (m.sender_uid = ? OR (m.sender_uid IS NULL AND s.owner_uid = ?))
         AND m.occurred_at >= ? AND m.occurred_at < ? AND ${panelWhere}
         AND NOT EXISTS (SELECT 1 FROM batch_items bi WHERE bi.message_id = m.wa_message_id)
       GROUP BY day`,
     ...pp,
   );
 
-  const bp: unknown[] = [period.fromIso, period.toIso];
+  const bp: unknown[] = [period.from, period.to];
   const batchWhere = sessionClause(scope, 'b.session_id', bp);
-  const batches = all<{ meta: string | null; session_id: string | null; day: string; c: number }>(
-    `SELECT b.meta AS meta, b.session_id AS session_id, date(bi.updated_at, 'localtime') AS day, COUNT(*) AS c
+  const batchRows = all<{
+    id: number;
+    name: string | null;
+    status: string;
+    total: number;
+    failed: number;
+    skipped: number;
+    meta: string | null;
+    session_id: string | null;
+    day: string;
+    last_at: string;
+    line_phone: string | null;
+    c: number;
+  }>(
+    `SELECT b.id AS id, b.name AS name, b.status AS status, b.total AS total, b.failed AS failed, b.skipped AS skipped,
+            b.meta AS meta, b.session_id AS session_id, date(bi.updated_at, 'localtime') AS day,
+            MAX(bi.updated_at) AS last_at, COALESCE(s.phone, s.expected_phone) AS line_phone, COUNT(*) AS c
        FROM batch_items bi JOIN batches b ON b.id = bi.batch_id
-      WHERE bi.status = 'sent' AND bi.updated_at >= ? AND bi.updated_at < ? AND ${batchWhere}
+       LEFT JOIN sessions s ON s.id = b.session_id
+      WHERE bi.status = 'sent' AND date(bi.updated_at, 'localtime') >= ? AND date(bi.updated_at, 'localtime') <= ?
+            AND ${batchWhere}
       GROUP BY b.id, day`,
     ...bp,
   );
@@ -597,11 +653,28 @@ function userSendStats(
 
   let panelTotal = 0;
   for (const row of panel) {
+    if (!row.day) continue;
     panelTotal += Number(row.c ?? 0);
-    if (row.day) bucket(row.day).panel += Number(row.c ?? 0);
+    bucket(row.day).panel += Number(row.c ?? 0);
   }
-  let batchTotal = 0;
-  for (const row of batches) {
+
+  interface BatchAgg {
+    id: number;
+    name: string;
+    status: string;
+    total: number;
+    failed: number;
+    skipped: number;
+    meta: Record<string, unknown>;
+    sessionId: string | null;
+    linePhone: string | null;
+    sent: number;
+    lastAt: string;
+    days: Map<string, number>;
+  }
+  const batches = new Map<number, BatchAgg>();
+  for (const row of batchRows) {
+    if (!row.day) continue;
     let meta: Record<string, unknown> = {};
     try {
       const parsed = JSON.parse(row.meta ?? '{}');
@@ -609,14 +682,91 @@ function userSendStats(
     } catch {
       meta = {};
     }
-    const raw = meta.account != null && String(meta.account).trim() !== '' ? String(meta.account) : null;
-    const account = raw ?? (row.session_id ? owners.get(row.session_id) ?? null : null);
-    if (!account || !keys.has(account)) continue;
-    batchTotal += Number(row.c ?? 0);
-    if (row.day) bucket(row.day).batch += Number(row.c ?? 0);
+    let batch = batches.get(row.id);
+    if (!batch) {
+      batch = {
+        id: row.id,
+        name: row.name ?? `Lote #${row.id}`,
+        status: row.status,
+        total: Number(row.total) || 0,
+        failed: Number(row.failed) || 0,
+        skipped: Number(row.skipped) || 0,
+        meta,
+        sessionId: row.session_id,
+        linePhone: row.line_phone ?? null,
+        sent: 0,
+        lastAt: row.last_at,
+        days: new Map(),
+      };
+      batches.set(row.id, batch);
+    }
+    batch.sent += Number(row.c ?? 0);
+    if (row.last_at && row.last_at > batch.lastAt) batch.lastAt = row.last_at;
+    batch.days.set(row.day, (batch.days.get(row.day) ?? 0) + Number(row.c ?? 0));
   }
 
-  return { panel: panelTotal, batch: batchTotal, total: panelTotal + batchTotal, byDay };
+  let batchTotal = 0;
+  let cronTotal = 0;
+  let batchSize = 0;
+  let maxBatch = 0;
+  let cronBatches = 0;
+  let panelBatches = 0;
+  const list: UserSendBatch[] = [];
+  for (const batch of batches.values()) {
+    const raw = batch.meta.account != null && String(batch.meta.account).trim() !== '' ? String(batch.meta.account) : null;
+    const account = raw ?? (batch.sessionId ? owners.get(batch.sessionId) ?? null : null);
+    if (!account || !keys.has(account)) continue;
+    const isCron = batch.meta.source === 'integration';
+    batchTotal += batch.sent;
+    if (isCron) {
+      cronTotal += batch.sent;
+      cronBatches++;
+    } else {
+      panelBatches++;
+    }
+    batchSize += batch.total || batch.sent;
+    maxBatch = Math.max(maxBatch, batch.total || batch.sent);
+    for (const [day, c] of batch.days) {
+      const b = bucket(day);
+      b.batch += c;
+      if (isCron) b.cronogramas += c;
+    }
+    const last = new Date(batch.lastAt);
+    const p = (n: number) => String(n).padStart(2, '0');
+    list.push({
+      id: batch.id,
+      name: batch.name,
+      status: batch.status,
+      day: `${last.getFullYear()}-${p(last.getMonth() + 1)}-${p(last.getDate())}`,
+      time: `${p(last.getHours())}:${p(last.getMinutes())}`,
+      total: batch.total,
+      sent: batch.sent,
+      failed: batch.failed,
+      skipped: batch.skipped,
+      programa: batch.meta.programa ? String(batch.meta.programa) : null,
+      tipo: batch.meta.tipo ? String(batch.meta.tipo) : batch.meta.category ? String(batch.meta.category) : null,
+      cronograma: isCron,
+      linePhone: batch.linePhone,
+    });
+  }
+  list.sort((a, b) => `${b.day} ${b.time}`.localeCompare(`${a.day} ${a.time}`) || b.id - a.id);
+
+  const batchesCount = list.length;
+  return {
+    panel: panelTotal,
+    batch: batchTotal,
+    cronogramas: cronTotal,
+    lotes: batchTotal - cronTotal,
+    total: panelTotal + batchTotal,
+    batches: batchesCount,
+    cronBatches,
+    panelBatches,
+    batchMessages: batchSize,
+    avgPerBatch: batchesCount ? Math.round(batchSize / batchesCount) : 0,
+    maxBatch,
+    byDay,
+    list: list.slice(0, 40),
+  };
 }
 
 /** Detalle para la ficha de seguimiento de una persona del equipo. */
@@ -730,20 +880,26 @@ export function userReportDetail(
   });
   const assignedCounts = noteStats({ assignedTo: user.id, sessionIds });
 
-  // Serie diaria del gráfico: respuestas + envíos, con días vacíos en cero.
+  // Serie diaria del gráfico: respuestas + envíos por origen, con días vacíos en cero.
   const responsesByDay = new Map((responder?.byDay ?? []).map((d) => [d.day, d.responses]));
-  const daily: Array<{ day: string; responses: number; sent: number }> = [];
+  const daily: Array<{ day: string; responses: number; sent: number; cronogramas: number; panel: number }> = [];
   for (let d = parseYmd(period.from)!; ymd(d) <= period.to; d = addDays(d, 1)) {
     const day = ymd(d);
-    const s = sends.byDay.get(day) ?? { panel: 0, batch: 0 };
-    daily.push({ day, responses: responsesByDay.get(day) ?? 0, sent: s.panel + s.batch });
+    const s = sends.byDay.get(day) ?? { panel: 0, batch: 0, cronogramas: 0 };
+    daily.push({
+      day,
+      responses: responsesByDay.get(day) ?? 0,
+      sent: s.panel + s.batch,
+      cronogramas: s.cronogramas,
+      panel: s.panel + s.batch - s.cronogramas,
+    });
   }
 
   return {
     performance: perf,
     within15: responder?.within15 ?? 0,
     within60: responder?.within60 ?? 0,
-    sends: { panel: sends.panel, batch: sends.batch, total: sends.total },
+    sends,
     byDay: daily.length > 31 ? daily.slice(-31) : daily,
     topChats,
     assigned: {

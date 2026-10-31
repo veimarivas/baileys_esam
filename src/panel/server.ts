@@ -1680,6 +1680,10 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
         attention: attentionData(scope, period),
         pending: pendingReplies(scope, { maxAgeDays: 7, limit: 60 }),
         notes: notesFollowup(scope, period),
+        activity: activityData(
+          { from: period.from, to: period.to },
+          scope.sessionId ? [scope.sessionId] : scope.sessionIds,
+        ),
       });
       res.send(
         renderLayout('Seguimiento', req.user!, 'monitoring', body, {
@@ -1709,6 +1713,7 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
         tipo: filters.tipo || undefined,
       },
       Math.min(period.days, 31),
+      scope.sessionId ? [scope.sessionId] : scope.sessionIds,
     );
     const params = new URLSearchParams();
     for (const [k, v] of Object.entries({ period: period.preset, from: period.from, to: period.to, session: selected, ...filters })) {
@@ -1731,6 +1736,17 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
       team,
       lastUse: lastUseByUser([...team.values()]),
       sends,
+      activity: activityData(
+        {
+          from: period.from,
+          to: period.to,
+          programa: filters.programa || undefined,
+          account: filters.account || undefined,
+          area: filters.area || undefined,
+          tipo: filters.tipo || undefined,
+        },
+        scope.sessionId ? [scope.sessionId] : scope.sessionIds,
+      ),
       filters,
       exportHref: `/reports/export.csv?${params.toString()}`,
       mass: tab === 'masivos' ? massActivity(scope.sessionId ? [scope.sessionId] : scope.sessionIds, period) : undefined,

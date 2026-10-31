@@ -2294,6 +2294,7 @@
       session_down: 'ri-wifi-off-line',
       line_issue: 'ri-git-merge-line',
       batch_paused: 'ri-pause-circle-line',
+      batch_reply: 'ri-reply-line',
     };
     function setBadge(n) {
       n = Number(n) || 0;

@@ -18,6 +18,7 @@ import { AWAITING, getGroup, markAwaiting, notifyGroup } from '../core/batch-con
 import { personChatsForNote } from '../core/contacts.js';
 import { linkedToOtherNumber, resolveUserLine } from '../core/line-resolver.js';
 import { lineVerdict, sendBlockedReason } from '../core/line-verdict.js';
+import { batchEngagement, summarizeEngagement } from '../core/batch-engagement.js';
 import { ProspectError, removeProspect, upsertProspect } from '../core/prospects.js';
 import { panelBus } from '../panel/events.js';
 import type { SessionRow } from '../types.js';
@@ -25,6 +26,24 @@ import type { SessionRow } from '../types.js';
 function ah(fn: (req: Request, res: Response) => Promise<unknown>) {
   return (req: Request, res: Response, next: NextFunction) => {
     fn(req, res).catch(next);
+  };
+}
+
+/** Lectura y respuestas de un lote para la API (resumen + quiénes respondieron). */
+function engagementJson(batchId: number) {
+  const items = batchEngagement(batchId);
+  const sum = summarizeEngagement(items.values());
+  return {
+    delivered: sum.delivered,
+    read: sum.read,
+    replied: sum.replied,
+    delivered_rate: sum.deliveredRate,
+    read_rate: sum.readRate,
+    reply_rate: sum.replyRate,
+    reply_kinds: sum.kinds,
+    replies: [...items.values()]
+      .filter((e) => e.reply)
+      .map((e) => ({ phone: e.chatId.replace(/@.*$/, ''), kind: e.reply!.kind, at: e.reply!.at, text: (e.reply!.body ?? '').slice(0, 300) })),
   };
 }
 
@@ -651,6 +670,8 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
         pending,
         progress,
         anti_ban: antiBan,
+        // Lectura y respuestas (primeras 48 h): entregados, leídos, quiénes respondieron.
+        engagement: batch.sent > 0 ? engagementJson(batch.id) : null,
         // Quién pidió el lote (usuario de cronogramas): cronogramas deja ver el
         // progreso a esa persona aunque no tenga permisos de administración.
         requested_by: meta.solicitado_por_id != null ? String(meta.solicitado_por_id) : meta.account ?? null,

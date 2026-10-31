@@ -27,7 +27,9 @@ export type NotificationKind =
   /** Inconsistencia entre cuentas y líneas (p. ej. una cuenta con la línea de otra área). */
   | 'line_issue'
   /** El anti-baneo pausó un lote (cuarentena, bloqueos, entregabilidad baja…). */
-  | 'batch_paused';
+  | 'batch_paused'
+  /** Alguien respondió a una cobranza («ya pagué», comprobante, «no puedo pagar»). */
+  | 'batch_reply';
 
 export interface NotificationRow {
   id: number;

@@ -236,6 +236,13 @@ el bloque A (red de seguridad) va primero.
   `webhooks.ts` (hoy solo salen los principales).
 - **Esfuerzo**: S · **Riesgo**: Bajo · **Aceptación**: un integrador recibe el evento.
 
+### E4. Respuestas y acuses de los envíos masivos
+- **Qué**: de cada lote, cuántos mensajes se entregaron, cuántos se leyeron y quién
+  respondió (y qué). En las cobranzas, las respuestas «ya pagué», comprobante y «no
+  puedo pagar» crean una tarea para Contabilidad.
+- **Por qué**: hasta ahora se sabía si un mensaje salía, no si la comunicación funcionaba.
+- **✅ Hecho (2026-10-30)**: ver `CAMBIOS.md` §61.
+
 ---
 
 ## 2. Orden sugerido

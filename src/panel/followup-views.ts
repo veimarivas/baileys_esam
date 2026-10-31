@@ -981,6 +981,7 @@ export function renderReports(v: ReportsView): string {
 // ── Envíos masivos: quién envía, cuántas veces por día y cuántos mensajes ─────
 
 const MASS_TIPOS: Record<string, string> = {
+  notas: 'Notas', asistencia: 'Asistencia',
   participantes: 'Participantes', grupo: 'Grupo', grupos: 'Grupos', prospectos: 'Prospectos', cuotas: 'Cuotas', cobranza: 'Cobranza',
   recordatorio: 'Recordatorio', academico: 'Académico', contable: 'Contable',
 };
@@ -1017,10 +1018,13 @@ function massTab(a: MassActivity | undefined, period: Period): string {
   };
   const area = (x: string | null) => (x ? MASS_AREAS[x] ?? x : '');
   const rate = t.messages ? Math.round((t.sent / t.messages) * 100) : 0;
+  const pctOf = (n: number, d: number) => (d ? Math.round((n / d) * 100) : 0);
 
-  const kpis = `<div class="ab-kpis">
+  const kpis = `<div class="ab-kpis ab-kpis-6 ma-kpis">
     ${kpi('ri-stack-line', 'info', 'Lotes enviados', t.batches, `en ${t.daysActive} día${t.daysActive === 1 ? '' : 's'} con envíos`)}
     ${kpi('ri-mail-send-line', 'ok', 'Mensajes', t.messages, `${t.sent} enviados (${rate}%) · ${t.failed} fallidos`)}
+    ${kpi('ri-check-double-line', 'ok', 'Leídos', t.tracked ? `${pctOf(t.read, t.tracked)}%` : '—', t.tracked ? `${t.read} de ${t.tracked} con acuse` : 'sin acuses registrados')}
+    ${kpi('ri-reply-line', 'warn', 'Respondieron', `${pctOf(t.replied, t.sent)}%`, `${t.replied} personas en las primeras 48 h`)}
     ${kpi('ri-team-line', 'info', 'Personas que enviaron', t.requesters, `${t.daysActive ? (Math.round((t.batches / t.daysActive) * 10) / 10) : 0} lotes por día en promedio`)}
     ${kpi('ri-fire-line', 'warn', 'Día con más envíos', t.busiestDay ? `${t.busiestDay.batches} lotes` : '—', t.busiestDay ? `${esc(fmtDay(t.busiestDay.day))} · ${t.busiestDay.messages} mensajes` : '')}
   </div>`;
@@ -1033,6 +1037,7 @@ function massTab(a: MassActivity | undefined, period: Period): string {
       <td><b>${r.avgPerDay}</b><small class="d-block">máx. ${r.maxPerDay}${r.maxDay ? ` (${esc(shortDay(r.maxDay))})` : ''}</small></td>
       <td><b>${r.messages}</b><small class="d-block"><span class="text-success">${r.sent} enviados</span>${r.failed ? ` · <span class="text-danger">${r.failed} fallidos</span>` : ''}</small></td>
       <td><b>${r.avgPerBatch}</b><small class="d-block">máx. ${r.maxPerBatch}</small></td>
+      <td>${r.sent ? `<b>${r.tracked ? `${pctOf(r.read, r.tracked)}%` : '—'}</b><small class="d-block">leídos · ${r.replied} respuesta${r.replied === 1 ? '' : 's'}</small>` : '—'}</td>
       <td class="ma-lines">${r.lines.map((l) => `<span>${esc(l)}</span>`).join('') || '—'}</td>
       <td class="text-nowrap">${r.lastAt ? esc(fmtDate(r.lastAt)) : '—'}</td>
       <td><button type="button" class="btn btn-soft-primary btn-sm ma-see" data-person="${esc(r.key)}" title="Ver sus lotes en el registro"><i class="ri-list-check-2"></i></button></td>
@@ -1040,9 +1045,24 @@ function massTab(a: MassActivity | undefined, period: Period): string {
   const summary = panel(
     'Quién envía mensajes masivos',
     `<div class="table-responsive"><table class="table table-hover align-middle mb-0 ab-table ma-table">
-      <thead class="table-light"><tr><th>Persona</th><th>Lotes</th><th>Días con envíos</th><th>Lotes por día</th><th>Mensajes</th><th>Mensajes por lote</th><th>Líneas usadas</th><th>Último envío</th><th><span class="visually-hidden">Ver</span></th></tr></thead>
+      <thead class="table-light"><tr><th>Persona</th><th>Lotes</th><th>Días con envíos</th><th>Lotes por día</th><th>Mensajes</th><th>Mensajes por lote</th><th>Lectura</th><th>Líneas usadas</th><th>Último envío</th><th><span class="visually-hidden">Ver</span></th></tr></thead>
       <tbody>${people}</tbody></table></div>`,
   );
+
+  // Lectura y respuestas por tipo de envío.
+  const bar = (n: number, d: number, tone: string) => !d ? '<span class="text-muted">sin acuses</span>' :
+    `<div class="ma-rate"><div class="ma-rate-bar is-${tone}"><span style="width:${pctOf(n, d)}%"></span></div><b>${pctOf(n, d)}%</b><small>${n}</small></div>`;
+  const tipos = a.byTipo.length
+    ? panel(
+        'Lectura y respuestas por tipo de envío',
+        `<p class="fu-sub">De los mensajes enviados en el período: cuántos se entregaron y cuántos se leyeron (sobre los que tienen acuse registrado) y cuántas personas respondieron en las primeras 48 h. Mide si la información realmente llega.</p>
+         <div class="table-responsive"><table class="table align-middle mb-0 ma-tipos">
+          <thead class="table-light"><tr><th>Tipo</th><th>Lotes</th><th>Enviados</th><th>Entregados</th><th>Leídos</th><th>Respondieron</th></tr></thead>
+          <tbody>${a.byTipo.map((x) => `<tr><td><b>${esc(MASS_TIPOS[x.tipo] ?? (x.tipo === 'otro' ? 'Sin tipo' : x.tipo))}</b></td><td>${x.batches}</td><td>${x.sent}</td>
+            <td>${bar(x.delivered, x.tracked, 'ok')}</td><td>${bar(x.read, x.tracked, 'info')}</td><td>${bar(x.replied, x.sent, 'warn')}</td></tr>`).join('')}</tbody>
+         </table></div>`,
+      )
+    : '';
 
   // Calendario: lotes por persona y día (días con actividad, el más reciente primero).
   const days = a.days.slice(0, 31);
@@ -1082,7 +1102,7 @@ function massTab(a: MassActivity | undefined, period: Period): string {
           <td class="ma-who"><b>${esc(b.requesterName)}</b><small>${esc(b.linePhone ?? '—')}${b.lineOwner ? ` · ${esc(b.lineOwner)}` : ''}</small></td>
           <td class="ma-lote"><a href="/batches/${b.id}">#${b.id} · ${esc(b.name)}</a><small>${[b.programa, b.tipo ? MASS_TIPOS[b.tipo] ?? b.tipo : null, b.origen].filter(Boolean).map((x) => esc(String(x))).join(' · ')}</small></td>
           <td class="ma-n"><b>${b.total}</b><small>mensajes</small></td>
-          <td class="ma-res"><span class="text-success">${b.sent} enviados</span>${b.failed ? `<span class="text-danger">${b.failed} fallidos</span>` : ''}${b.skipped ? `<span class="text-warning">${b.skipped} omitidos</span>` : ''}</td>
+          <td class="ma-res"><span class="text-success">${b.sent} enviados</span>${b.failed ? `<span class="text-danger">${b.failed} fallidos</span>` : ''}${b.skipped ? `<span class="text-warning">${b.skipped} omitidos</span>` : ''}${b.sent ? `<span class="text-muted">${b.tracked ? `${pctOf(b.read, b.tracked)}% leídos` : 'sin acuses'} · ${b.replied} resp.</span>` : ''}</td>
           <td class="ma-dur">${esc(massDuration(b.durationMs))}</td>
           <td>${statusBadge(b.status)}</td>
         </tr>`).join('')}</tbody>
@@ -1101,6 +1121,7 @@ function massTab(a: MassActivity | undefined, period: Period): string {
   return `<div class="mass-activity" id="mass-activity">
     ${kpis}
     ${summary}
+    ${tipos ? `<div class="mt-3">${tipos}</div>` : ''}
     <div class="mt-3">${calendar}</div>
     <div class="mt-3" id="ma-registro">${registro}</div>
   </div>

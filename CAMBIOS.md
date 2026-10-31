@@ -2051,6 +2051,41 @@ Cierra el origen del incidente del 28/10 (cobranzas enviadas desde el número de
 
 ---
 
+## 61. Respuestas y acuses de los envíos masivos (2026-10-30)
+
+Hasta ahora se sabía si un mensaje masivo **salía**, pero no si **llegaba, se leía o alguien contestaba**. Ahora cada lote lo mide, y en las cobranzas las respuestas se convierten en tareas.
+
+- **Cálculo** (`src/core/batch-engagement.ts`):
+  - **acuse** de cada destinatario: el estado del mensaje guardado, buscado por su id de WhatsApp en cualquier línea;
+  - **respuesta**: el primer mensaje entrante del mismo chat y la misma línea dentro de las **48 h** posteriores al envío y **antes del siguiente envío masivo** a ese chat, para que una respuesta no se cuente en dos lotes;
+  - quien responde cuenta como entregado y leído aunque el acuse no haya llegado;
+  - si no se encuentra el mensaje guardado, el envío queda «sin acuse» y **no entra** en el porcentaje de entregados y leídos, en lugar de figurar como no entregado.
+- **Clasificación** (`classifyReply`), solo en lotes de cobranza (`cobranza`, `cuotas`, `contable`): «ya pagó», «envió un comprobante» (imagen o documento), «no puede pagar / pide plazo», «hace una consulta», «pide no recibir mensajes» u «otra respuesta».
+- **Detalle del lote:**
+  - tarjeta **Lectura y respuestas** con barras de enviados, entregados, leídos y respondieron, la mediana del tiempo de respuesta y qué respondieron;
+  - aviso de cuántas personas **no leyeron**, con un enlace para filtrarlas y volver a escribirles;
+  - nueva columna **Lectura · respuesta** (✓, ✓✓ o ✓✓ leído, más la respuesta con su tipo y a los cuántos minutos llegó; lleva a la conversación);
+  - filtros **Leyeron**, **No leyeron** y **Respondieron**.
+- **Lista de Lotes:** cada lote con envíos muestra «% leídos · N respondieron».
+- **Reportes › Envíos masivos:**
+  - indicadores de **Leídos** y **Respondieron**;
+  - columna **Lectura** por persona;
+  - nueva tabla **Lectura y respuestas por tipo de envío** (cobranza, notas, asistencia…);
+  - lectura y respuestas en cada lote del registro y en el CSV.
+- **Tareas para Contabilidad** (`src/core/reply-followup.ts`, cada 10 min):
+  - una respuesta «ya pagó», un comprobante o «no puede pagar» a una cobranza crea una **tarea para hoy**;
+  - la tarea queda asignada a quien pidió el envío (o, si no se sabe, al dueño de la línea), con la etiqueta «Respuesta a cobranza», el texto de la respuesta, el lote y el programa;
+  - llega un aviso a la campana (`batch_reply`);
+  - se crea una sola tarea por respuesta (`source_message_id`);
+  - las consultas no generan tarea, porque ya llegan a Conversaciones;
+  - al actualizar se revisan las cobranzas de los últimos ~6 días, así que pueden aparecer tareas de respuestas recientes.
+- **API:** `GET /api/v1/batches/:id` agrega `engagement` (entregados, leídos, respondieron, porcentajes, tipos y la lista de respuestas).
+- **Pruebas:**
+  - `test/batch-engagement.test.ts` (7): clasificación, acuse y primera respuesta, corte por el siguiente envío, ventana de 48 h, «sin acuse», tareas sin duplicar y totales en Reportes. `npm run lint`, `npm run typecheck` y `npm test` (175/175) limpios;
+  - en la vista previa, sobre la copia: detalle, filtros, lista, Reportes (claro y oscuro) y las tareas en Notas.
+
+---
+
 ## Notas de operación
 
 - En producción usar `start-baileys.bat` / pm2 / systemd (no `npm run dev`).

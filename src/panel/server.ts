@@ -7,6 +7,7 @@ import { all, get, run } from '../db/index.js';
 import { logger } from '../logger.js';
 import { SessionManager } from '../baileys/manager.js';
 import { batchDetailPage, batchesPage } from './batches-view.js';
+import { batchEngagement, batchesEngagement } from '../core/batch-engagement.js';
 import { lineVerdictCard, linesHealthCard, linesHealthPage } from './lines-view.js';
 import { lineVerdict } from '../core/line-verdict.js';
 import { applyLineFix, lineIssues, type LineFixAction } from '../core/line-health.js';
@@ -1052,7 +1053,8 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
            </form>`
         : '';
       today.active = active;
-      const body = pendingCard + stopAll + batchesPage(rows, today);
+      const eng = batchesEngagement(rows.filter((r: any) => r.sent > 0).map((r: any) => Number(r.id)));
+      const body = pendingCard + stopAll + batchesPage(rows, today, eng);
       res.send(
         renderLayout('Lotes', req.user!, 'batches', body, {
           subtitle: 'Envíos masivos por día: quién los pidió, desde qué línea y cómo avanzan, en vivo.',
@@ -1090,7 +1092,7 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
       const b = withRequester([raw])[0];
       const ITEMS_MAX = 3000;
       const items = all<any>('SELECT * FROM batch_items WHERE batch_id = ? ORDER BY id LIMIT ?', b.id, ITEMS_MAX);
-      const body = batchDetailPage(b, items, { truncated: items.length >= ITEMS_MAX && b.total > ITEMS_MAX });
+      const body = batchDetailPage(b, items, { truncated: items.length >= ITEMS_MAX && b.total > ITEMS_MAX, engagement: batchEngagement(b.id) });
       res.send(
         renderLayout('Lote #' + b.id, req.user!, 'batches', body, {
           subtitle: 'Detalle del envío: quién lo pidió, la línea, el mensaje, los tiempos y cada destinatario.',

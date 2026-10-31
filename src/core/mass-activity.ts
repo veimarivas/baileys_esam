@@ -1,5 +1,6 @@
 import { all } from '../db/index.js';
 import type { Period } from './followup.js';
+import { batchesEngagement } from './batch-engagement.js';
 
 /**
  * Actividad de envíos masivos: quién pide los lotes, cuántas veces por día,
@@ -35,6 +36,11 @@ export interface MassBatch {
   requesterKey: string;
   requesterName: string;
   area: string | null;
+  /** Lectura y respuestas (primeras 48 h). `tracked`: enviados con acuse conocido. */
+  tracked: number;
+  delivered: number;
+  read: number;
+  replied: number;
 }
 
 export interface MassRequester {
@@ -47,6 +53,10 @@ export interface MassRequester {
   failed: number;
   skipped: number;
   cancelled: number;
+  tracked: number;
+  delivered: number;
+  read: number;
+  replied: number;
   daysActive: number;
   /** Promedio de lotes por día con actividad. */
   avgPerDay: number;
@@ -62,15 +72,30 @@ export interface MassRequester {
   byDay: Record<string, { batches: number; messages: number }>;
 }
 
+/** Lectura y respuestas por tipo de envío (cobranza, notas, asistencia…). */
+export interface MassByTipo {
+  tipo: string;
+  batches: number;
+  sent: number;
+  tracked: number;
+  delivered: number;
+  read: number;
+  replied: number;
+}
+
 export interface MassActivity {
   batches: MassBatch[];
   requesters: MassRequester[];
+  byTipo: MassByTipo[];
   days: string[];
   totals: {
     batches: number;
     messages: number;
     sent: number;
     failed: number;
+    tracked: number;
+    read: number;
+    replied: number;
     requesters: number;
     daysActive: number;
     busiestDay: { day: string; batches: number; messages: number } | null;
@@ -120,7 +145,7 @@ function origin(meta: Record<string, any>): string {
 /** Lotes del período (por fecha de pedido) en las líneas del alcance. */
 export function massActivity(scope: string[] | null, period: Pick<Period, 'fromIso' | 'toIso'>): MassActivity {
   if (scope && scope.length === 0) {
-    return { batches: [], requesters: [], days: [], totals: { batches: 0, messages: 0, sent: 0, failed: 0, requesters: 0, daysActive: 0, busiestDay: null } };
+    return { batches: [], requesters: [], byTipo: [], days: [], totals: { batches: 0, messages: 0, sent: 0, failed: 0, tracked: 0, read: 0, replied: 0, requesters: 0, daysActive: 0, busiestDay: null } };
   }
   const where = ['b.created_at >= ?', 'b.created_at < ?'];
   const params: unknown[] = [period.fromIso, period.toIso];
@@ -144,6 +169,7 @@ export function massActivity(scope: string[] | null, period: Pick<Period, 'fromI
     ).map((u) => [String(u.source_uid), u]),
   );
 
+  const eng = batchesEngagement(rows.filter((r) => Number(r.sent) > 0).map((r) => r.id));
   const batches: MassBatch[] = rows.map((r) => {
     const meta = parseMeta(r.meta);
     const created = new Date(r.created_at);
@@ -186,6 +212,10 @@ export function massActivity(scope: string[] | null, period: Pick<Period, 'fromI
       requesterKey: key,
       requesterName: name,
       area: meta.area ? String(meta.area) : u?.esam_area ?? null,
+      tracked: eng.get(r.id)?.tracked ?? 0,
+      delivered: eng.get(r.id)?.delivered ?? 0,
+      read: eng.get(r.id)?.read ?? 0,
+      replied: eng.get(r.id)?.replied ?? 0,
     };
   });
 
@@ -194,7 +224,7 @@ export function massActivity(scope: string[] | null, period: Pick<Period, 'fromI
     let r = map.get(b.requesterKey);
     if (!r) {
       r = {
-        key: b.requesterKey, name: b.requesterName, area: b.area, batches: 0, messages: 0, sent: 0, failed: 0, skipped: 0, cancelled: 0,
+        key: b.requesterKey, name: b.requesterName, area: b.area, batches: 0, messages: 0, sent: 0, failed: 0, skipped: 0, cancelled: 0, tracked: 0, delivered: 0, read: 0, replied: 0,
         daysActive: 0, avgPerDay: 0, maxPerDay: 0, maxDay: null, avgPerBatch: 0, maxPerBatch: 0, lines: [], programas: [],
         firstAt: null, lastAt: null, byDay: {},
       };
@@ -205,6 +235,10 @@ export function massActivity(scope: string[] | null, period: Pick<Period, 'fromI
     r.sent += b.sent;
     r.failed += b.failed;
     r.skipped += b.skipped;
+    r.tracked += b.tracked;
+    r.delivered += b.delivered;
+    r.read += b.read;
+    r.replied += b.replied;
     if (b.status === 'cancelled') r.cancelled++;
     r.maxPerBatch = Math.max(r.maxPerBatch, b.total);
     if (!r.area && b.area) r.area = b.area;
@@ -235,17 +269,34 @@ export function massActivity(scope: string[] | null, period: Pick<Period, 'fromI
     d.messages += b.total;
     byDay.set(b.day, d);
   }
+  const tipos = new Map<string, MassByTipo>();
+  for (const b of batches) {
+    if (!b.sent) continue;
+    const key = b.tipo ?? 'otro';
+    const t = tipos.get(key) ?? { tipo: key, batches: 0, sent: 0, tracked: 0, delivered: 0, read: 0, replied: 0 };
+    t.batches++;
+    t.sent += b.sent;
+    t.tracked += b.tracked;
+    t.delivered += b.delivered;
+    t.read += b.read;
+    t.replied += b.replied;
+    tipos.set(key, t);
+  }
   const busiest = [...byDay.entries()].sort((x, y) => y[1].batches - x[1].batches || y[1].messages - x[1].messages)[0];
 
   return {
     batches,
     requesters,
+    byTipo: [...tipos.values()].sort((x, y) => y.sent - x.sent),
     days: [...byDay.keys()].sort().reverse(),
     totals: {
       batches: batches.length,
       messages: batches.reduce((s, b) => s + b.total, 0),
       sent: batches.reduce((s, b) => s + b.sent, 0),
       failed: batches.reduce((s, b) => s + b.failed, 0),
+      tracked: batches.reduce((s, b) => s + b.tracked, 0),
+      read: batches.reduce((s, b) => s + b.read, 0),
+      replied: batches.reduce((s, b) => s + b.replied, 0),
       requesters: requesters.length,
       daysActive: byDay.size,
       busiestDay: busiest ? { day: busiest[0], ...busiest[1] } : null,
@@ -258,14 +309,14 @@ export function massActivityCsv(a: MassActivity, label: string): string {
   const q = (x: unknown) => `"${String(x ?? '').replace(/"/g, '""')}"`;
   const local = (iso: string | null) => (iso ? `${localDay(new Date(iso))} ${localTime(new Date(iso))}` : '');
   const lines: string[] = [q(`Envíos masivos · ${label}`), ''];
-  lines.push(['Persona', 'Área', 'Lotes', 'Días con envíos', 'Lotes por día (prom.)', 'Máx. lotes en un día', 'Día con más lotes', 'Mensajes', 'Enviados', 'Fallidos', 'Mensajes por lote (prom.)', 'Lote más grande', 'Cancelados', 'Líneas', 'Último envío'].map(q).join(','));
+  lines.push(['Persona', 'Área', 'Lotes', 'Días con envíos', 'Lotes por día (prom.)', 'Máx. lotes en un día', 'Día con más lotes', 'Mensajes', 'Enviados', 'Fallidos', 'Mensajes por lote (prom.)', 'Lote más grande', 'Cancelados', 'Leídos', 'Respondieron', 'Líneas', 'Último envío'].map(q).join(','));
   for (const r of a.requesters) {
-    lines.push([r.name, r.area ?? '', r.batches, r.daysActive, r.avgPerDay, r.maxPerDay, r.maxDay ?? '', r.messages, r.sent, r.failed, r.avgPerBatch, r.maxPerBatch, r.cancelled, r.lines.join(' | '), local(r.lastAt)].map(q).join(','));
+    lines.push([r.name, r.area ?? '', r.batches, r.daysActive, r.avgPerDay, r.maxPerDay, r.maxDay ?? '', r.messages, r.sent, r.failed, r.avgPerBatch, r.maxPerBatch, r.cancelled, r.read, r.replied, r.lines.join(' | '), local(r.lastAt)].map(q).join(','));
   }
   lines.push('');
-  lines.push(['Día', 'Hora', 'Lote', 'Nombre', 'Persona', 'Línea', 'Programa', 'Tipo', 'Origen', 'Estado', 'Mensajes', 'Enviados', 'Fallidos', 'Omitidos', 'Duración (min)'].map(q).join(','));
+  lines.push(['Día', 'Hora', 'Lote', 'Nombre', 'Persona', 'Línea', 'Programa', 'Tipo', 'Origen', 'Estado', 'Mensajes', 'Enviados', 'Fallidos', 'Omitidos', 'Leídos', 'Respondieron', 'Duración (min)'].map(q).join(','));
   for (const b of a.batches) {
-    lines.push([b.day, b.time, b.id, b.name, b.requesterName, `${b.linePhone ?? ''} ${b.lineOwner ?? ''}`.trim(), b.programa ?? '', b.tipo ?? '', b.origen, b.status, b.total, b.sent, b.failed, b.skipped,
+    lines.push([b.day, b.time, b.id, b.name, b.requesterName, `${b.linePhone ?? ''} ${b.lineOwner ?? ''}`.trim(), b.programa ?? '', b.tipo ?? '', b.origen, b.status, b.total, b.sent, b.failed, b.skipped, b.read, b.replied,
       b.durationMs != null ? Math.round(b.durationMs / 60000) : ''].map(q).join(','));
   }
   return '﻿' + lines.join('\r\n');

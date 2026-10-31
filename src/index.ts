@@ -1,4 +1,5 @@
 import { startLineHealthWorker } from './core/line-health.js';
+import { startReplyFollowupWorker } from './core/reply-followup.js';
 import { config } from './config.js';
 import { logger } from './logger.js';
 import { migrate } from './db/index.js';
@@ -81,6 +82,7 @@ async function main(): Promise<void> {
   startBackupWorker();
   startNoteReminderWorker();
   startLineHealthWorker();
+  startReplyFollowupWorker();
   setInterval(() => {
     try {
       pruneCooldownsImpl();

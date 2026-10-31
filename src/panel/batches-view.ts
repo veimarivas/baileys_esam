@@ -1,5 +1,15 @@
 import { esc } from './layout.js';
 import { emptyState, statusBadge } from './views.js';
+import { fmtMinutes } from '../core/followup.js';
+import {
+  COBRANZA_TIPOS,
+  REPLY_KIND_LABEL,
+  REPLY_WINDOW_HOURS,
+  summarizeEngagement,
+  type EngagementSummary,
+  type ItemEngagement,
+  type ReplyKind,
+} from '../core/batch-engagement.js';
 
 /**
  * Vistas de Lotes: lista compacta (agrupada por día, con filtros y progreso en
@@ -98,7 +108,20 @@ function progressOf(b: BatchListRow): number {
   return b.total > 0 ? Math.round(((b.sent + b.failed + b.skipped) / b.total) * 100) : 0;
 }
 
-export function batchesPage(rows: BatchListRow[], today: { batches: number; sent: number; failed: number; active: number }): string {
+/** Resumen corto de lectura y respuestas para la lista de lotes. */
+function engLine(e: EngagementSummary | undefined): string {
+  if (!e?.sent) return '';
+  return `<div class="bt-eng" title="Leídos y respuestas (primeras ${REPLY_WINDOW_HOURS} h)">
+    <span><i class="ri-check-double-line"></i>${e.tracked ? `${e.readRate ?? 0}% leídos` : 'sin acuses'}</span>
+    <span${e.replied ? ' class="has"' : ''}><i class="ri-reply-line"></i>${e.replied} respondi${e.replied === 1 ? 'ó' : 'eron'}</span>
+  </div>`;
+}
+
+export function batchesPage(
+  rows: BatchListRow[],
+  today: { batches: number; sent: number; failed: number; active: number },
+  eng: Map<number, EngagementSummary> = new Map(),
+): string {
   if (rows.length === 0) {
     return `<div class="card"><div class="card-body">${emptyState(
       'ri-send-plane-line',
@@ -163,6 +186,7 @@ export function batchesPage(rows: BatchListRow[], today: { batches: number; sent
         <div class="bt-prog-top"><span><b data-f="sent">${b.sent}</b> / <span data-f="total">${b.total}</span> enviados</span><span class="bt-pct">${pct}%</span></div>
         <div class="progress progress-sm"><div class="progress-bar ${b.failed ? 'bg-warning' : 'bg-success'}" style="width:${pct}%"></div></div>
         <div class="bt-prog-sub">${b.failed ? `<span class="text-danger"><b data-f="failed">${b.failed}</b> fallidos</span>` : '<span data-f="failed" hidden>0</span>'}${b.skipped ? `<span class="text-warning">${b.skipped} omitidos</span>` : ''}</div>
+        ${engLine(eng.get(b.id))}
       </div>
       <div class="bt-state">${statusBadge(b.status)}</div>
       <div class="bt-act">
@@ -278,10 +302,80 @@ const ITEM_GROUPS: Array<[string, string, string]> = [
   ['cancelled', 'Cancelados', 'ri-close-circle-line'],
 ];
 
+const ENG_GROUPS: Array<[string, string, string]> = [
+  ['read', 'Leyeron', 'ri-check-double-line'],
+  ['unread', 'No leyeron', 'ri-eye-off-line'],
+  ['replied', 'Respondieron', 'ri-reply-line'],
+];
+
 const MEDIA_LABEL: Record<string, string> = { image: 'Imagen', video: 'Video', audio: 'Audio', document: 'Documento', sticker: 'Sticker' };
 
 /** Detalle completo de un lote. */
-export function batchDetailPage(b: BatchDetailRow, items: BatchItemRow[], extra: { truncated: boolean }): string {
+const ACK_VIEW: Record<string, [string, string, string]> = {
+  sent: ['ri-check-line', 'is-sent', 'Enviado'],
+  delivered: ['ri-check-double-line', 'is-delivered', 'Entregado'],
+  read: ['ri-check-double-line', 'is-read', 'Leído'],
+};
+
+const KIND_ICON: Record<ReplyKind, string> = {
+  pagado: 'ri-money-dollar-circle-line',
+  comprobante: 'ri-bill-line',
+  no_puede: 'ri-time-line',
+  consulta: 'ri-question-line',
+  baja: 'ri-forbid-line',
+  otro: 'ri-chat-1-line',
+};
+
+/** Tarjeta «Lectura y respuestas» del detalle del lote. */
+function engagementCard(sum: EngagementSummary, cobranza: boolean): string {
+  if (!sum.sent) return '';
+  const bar = (label: string, n: number, pct: number | null, tone: string, filter: string | null) =>
+    `<div class="bd-funnel-row is-${tone}">
+      <span class="bd-funnel-l">${filter ? `<button type="button" class="bd-link" data-goto="${filter}">${esc(label)}</button>` : esc(label)}</span>
+      <div class="bd-funnel-bar"><span style="width:${pct ?? 0}%"></span></div>
+      <span class="bd-funnel-v"><b>${n}</b> <small>${pct ?? 0}%</small></span>
+    </div>`;
+  const unread = sum.tracked - sum.read;
+  const untracked = sum.sent - sum.tracked;
+  const kinds = cobranza
+    ? (Object.keys(sum.kinds) as ReplyKind[])
+        .filter((k) => sum.kinds[k] > 0)
+        .map((k) => `<li class="k-${k}"><i class="${KIND_ICON[k]}"></i><span>${esc(REPLY_KIND_LABEL[k])}</span><b>${sum.kinds[k]}</b></li>`)
+        .join('')
+    : '';
+  return `<div class="bd-card bd-eng">
+    <div class="bd-card-h"><span class="ri-eye-line" aria-hidden="true"></span><h6>Lectura y respuestas</h6>
+      <span class="bd-pill" title="Se cuenta la primera respuesta dentro de las ${REPLY_WINDOW_HOURS} h del envío">respuestas en ${REPLY_WINDOW_HOURS} h</span></div>
+    <div class="bd-eng-grid">
+      <div class="bd-funnel">
+        ${bar('Enviados', sum.sent, 100, 'brand', null)}
+        ${bar('Entregados', sum.delivered, sum.deliveredRate, 'ok', null)}
+        ${bar('Leídos', sum.read, sum.readRate, 'info', 'read')}
+        ${bar('Respondieron', sum.replied, sum.replyRate, 'warn', 'replied')}
+      </div>
+      <div class="bd-eng-side">
+        <div class="bd-eng-fig"><b>${sum.medianReplyMinutes === null ? '—' : esc(fmtMinutes(sum.medianReplyMinutes))}</b><span>tardan en responder (mediana)</span></div>
+        ${unread > 0
+          ? `<p class="bd-eng-hint"><i class="ri-lightbulb-line"></i> <b>${unread}</b> persona${unread === 1 ? '' : 's'} no ${unread === 1 ? 'leyó' : 'leyeron'} todavía. <button type="button" class="bd-link" data-goto="unread">Ver quiénes</button> para volver a escribirles.</p>`
+          : sum.tracked
+            ? '<p class="bd-eng-hint"><i class="ri-checkbox-circle-line"></i> Todos los que recibieron el mensaje lo leyeron.</p>'
+            : ''}
+        ${untracked > 0
+          ? `<p class="bd-eng-note"><i class="ri-information-line"></i> ${untracked} envío${untracked === 1 ? '' : 's'} sin acuse registrado: no ${untracked === 1 ? 'entra' : 'entran'} en el porcentaje de entregados y leídos.</p>`
+          : ''}
+      </div>
+    </div>
+    ${kinds ? `<div class="bd-kinds"><h6>Qué respondieron</h6><ul>${kinds}</ul>
+      <p class="bd-eng-note"><i class="ri-task-line"></i> «Ya pagó», comprobantes y «no puede pagar» crean una tarea en Notas para quien pidió el envío.</p></div>` : ''}
+  </div>`;
+}
+
+export function batchDetailPage(
+  b: BatchDetailRow,
+  items: BatchItemRow[],
+  extra: { truncated: boolean; engagement?: Map<number, ItemEngagement> },
+): string {
+  const eng = extra.engagement ?? new Map<number, ItemEngagement>();
   const meta = safeMeta(b.meta);
   const pct = progressOf(b);
   const pending = Math.max(0, b.total - b.sent - b.failed - b.skipped);
@@ -302,6 +396,15 @@ export function batchDetailPage(b: BatchDetailRow, items: BatchItemRow[], extra:
 
   const counts: Record<string, number> = { todos: items.length };
   for (const it of items) counts[it.status] = (counts[it.status] ?? 0) + 1;
+  const engTokens = (e: ItemEngagement | undefined): string[] => {
+    if (!e?.sentAt) return [];
+    if (e.reply) return ['read', 'replied'];
+    if (e.ack === 'read') return ['read'];
+    return e.ack === 'unknown' ? [] : ['unread'];
+  };
+  for (const it of items) for (const t of engTokens(eng.get(it.id))) counts[t] = (counts[t] ?? 0) + 1;
+  const summary = summarizeEngagement(eng.values());
+  const cobranza = COBRANZA_TIPOS.has(String(meta.tipo ?? ''));
 
   // Mensaje: único para todos o personalizado.
   const bodies = new Map<string, number>();
@@ -375,16 +478,27 @@ export function batchDetailPage(b: BatchDetailRow, items: BatchItemRow[], extra:
     const body = it.body ?? '';
     const short = body.length > 90 ? body.slice(0, 90) + '…' : body;
     const when = it.status === 'sent' && it.updated_at ? fmtTime(it.updated_at) : '—';
-    const search = `${it.contact_name ?? ''} ${phone} ${body} ${it.error ?? ''}`.toLowerCase();
+    const e = eng.get(it.id);
+    const r = e?.reply ?? null;
+    const search = `${it.contact_name ?? ''} ${phone} ${body} ${it.error ?? ''} ${r?.body ?? ''}`.toLowerCase();
+    const ack = e?.ack && ACK_VIEW[e.ack] ? ACK_VIEW[r && e.ack !== 'read' ? 'read' : e.ack] : null;
+    const replyText = r ? (r.body?.trim() ? r.body.trim() : r.contentType === 'text' ? '(sin texto)' : `(${MEDIA_LABEL[r.contentType] ?? 'adjunto'})`) : '';
+    const lectura = `${ack ? `<span class="bd-ack ${ack[1]}"><i class="${ack[0]}"></i>${ack[2]}</span>` : ''}${r
+      ? `<a class="bd-reply k-${r.kind}" href="/conversations/${encodeURIComponent(it.chat_id)}" title="Abrir la conversación">
+          ${cobranza ? `<span class="bd-reply-k"><i class="${KIND_ICON[r.kind]}"></i>${esc(REPLY_KIND_LABEL[r.kind])}</span>` : ''}
+          <span class="bd-reply-t">${esc(replyText.length > 120 ? replyText.slice(0, 120) + '…' : replyText)}</span>
+          <small>respondió a los ${esc(fmtMinutes(r.minutes))}</small></a>`
+      : ''}`;
     const msg = body.length > 90
       ? `<details><summary>${esc(short)}</summary><div class="bd-full">${esc(body)}</div></details>`
       : `<span>${esc(short || '—')}</span>`;
-    return `<tr data-st="${esc(it.status)}" data-search="${esc(search)}">
+    return `<tr data-st="${esc(it.status)}" data-eng="${engTokens(e).join(' ')}" data-search="${esc(search)}">
       <td class="text-muted">${n}</td>
       <td><div class="bd-dest">${esc(it.contact_name ?? (isGroup ? 'Grupo' : '—'))}</div>
         <a class="bd-phone ff-monospace" href="/conversations/${encodeURIComponent(it.chat_id)}" title="Abrir la conversación">${isGroup ? '<i class="ri-group-line"></i> ' : ''}${esc(phone)}</a></td>
       <td>${statusBadge(it.status)}</td>
       <td class="text-nowrap">${esc(when)}</td>
+      <td class="bd-read">${lectura || '<span class="text-muted">—</span>'}</td>
       <td class="bd-msg">${msg}</td>
       <td class="bd-err">${it.error ? esc(it.error) : ''}${it.external_ref ? `<div class="bd-ref" title="Referencia de origen">${esc(it.external_ref)}</div>` : ''}</td>
     </tr>`;
@@ -392,7 +506,10 @@ export function batchDetailPage(b: BatchDetailRow, items: BatchItemRow[], extra:
 
   const chips = ITEM_GROUPS.filter(([k]) => k === 'todos' || counts[k])
     .map(([k, l, i]) => `<button type="button" class="bt-chip${k === 'todos' ? ' on' : ''}" data-st="${k}"><span class="${i}" aria-hidden="true"></span>${esc(l)}<b>${counts[k] ?? 0}</b></button>`)
-    .join('');
+    .join('') +
+    ENG_GROUPS.filter(([k]) => counts[k])
+      .map(([k, l, i]) => `<button type="button" class="bt-chip is-eng" data-st="${k}"><span class="${i}" aria-hidden="true"></span>${esc(l)}<b>${counts[k]}</b></button>`)
+      .join('');
 
   return `<div class="batch-detail" id="batch-detail" data-batch="${b.id}">
     <div class="bd-head">
@@ -435,6 +552,8 @@ export function batchDetailPage(b: BatchDetailRow, items: BatchItemRow[], extra:
       </form>
     </div>
 
+    ${engagementCard(summary, cobranza)}
+
     <div class="bd-grid">
       ${ficha}
       <div class="bd-col">${mensaje}${fallos}</div>
@@ -449,7 +568,7 @@ export function batchDetailPage(b: BatchDetailRow, items: BatchItemRow[], extra:
       </div>
       <div class="table-responsive">
         <table class="table table-hover align-middle mb-0 bd-table">
-          <thead class="table-light"><tr><th>#</th><th>Destinatario</th><th>Estado</th><th>Hora</th><th>Mensaje</th><th>Detalle</th></tr></thead>
+          <thead class="table-light"><tr><th>#</th><th>Destinatario</th><th>Estado</th><th>Hora</th><th>Lectura · respuesta</th><th>Mensaje</th><th>Detalle</th></tr></thead>
           <tbody>${items.map((it, i) => itemRow(it, i + 1)).join('')}</tbody>
         </table>
       </div>
@@ -464,7 +583,8 @@ export function batchDetailPage(b: BatchDetailRow, items: BatchItemRow[], extra:
     function apply() {
       var n = 0;
       root.querySelectorAll('.bd-table tbody tr').forEach(function (r) {
-        var ok = (st.s === 'todos' || r.dataset.st === st.s) && (!st.q || r.dataset.search.indexOf(st.q) !== -1);
+        var ok = (st.s === 'todos' || r.dataset.st === st.s || (' ' + (r.dataset.eng || '') + ' ').indexOf(' ' + st.s + ' ') !== -1) &&
+          (!st.q || r.dataset.search.indexOf(st.q) !== -1);
         r.hidden = !ok;
         if (ok) n++;
       });
@@ -479,6 +599,14 @@ export function batchDetailPage(b: BatchDetailRow, items: BatchItemRow[], extra:
     });
     var q = document.getElementById('bd-q');
     q.addEventListener('input', function () { st.q = q.value.trim().toLowerCase(); apply(); });
+    root.querySelectorAll('[data-goto]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var chip = root.querySelector('.bd-items .bt-chip[data-st="' + b.dataset.goto + '"]');
+        if (!chip) return;
+        chip.click();
+        root.querySelector('.bd-items').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    });
   })();
   </script>`;
 }

@@ -17,6 +17,7 @@ import {
 } from './anti-ban.js';
 import { recomputeHealth } from './health.js';
 import { isQuarantined, quarantineAndRotate, rotateBatches } from './session-pool.js';
+import { alertBatchPaused } from './notifications.js';
 import { isBlocked, looksLikeBlock, markBlocked } from './optout.js';
 import { mediaExists, readMedia } from './media.js';
 import { typeForMime } from './phone.js';
@@ -90,7 +91,7 @@ export class BatchRunner {
         logger.info({ batch: batchId, from: sessionId, to: rot.to }, 'Lote rotado a una sesión sana');
         return; // se reprocesa con la nueva sesión (ya encolado)
       }
-      pauseBatch(batchId, 'Sesión en cuarentena y sin reemplazo sano en el pool');
+      pauseBatch(batchId, 'La línea está en cuarentena. El lote se pausó para no enviar desde otro número: revisá la línea en Conexión y reanudalo cuando esté sana.');
       recomputeHealth(sessionId);
       return;
     }
@@ -300,8 +301,9 @@ export class BatchRunner {
           );
           logger.warn({ sessionId, moved: rot.moved, to: rot.to }, 'Sesión en cuarentena por fallos consecutivos');
           recount(batchId);
-          if (rot.moved > 0) return; // el lote ya quedó encolado en la sesión sana
-          pauseBatch(batchId, 'Sesión en cuarentena y sin reemplazo sano en el pool');
+          if (rot.moved > 0) return; // lote del sistema: quedó encolado en otra sesión sana
+          // Línea personal o lote de una cuenta: se pausa (nunca sale desde otro número).
+          pauseBatch(batchId, `La línea quedó en cuarentena tras ${fails} fallos seguidos. El lote se pausó para no enviar desde otro número: revisá la conexión y reanudalo cuando la línea esté sana.`);
           recomputeHealth(sessionId);
           return;
         }
@@ -387,6 +389,11 @@ function pauseBatch(batchId: number, reason: string): void {
   meta.anti_ban_pause = reason;
   run("UPDATE batches SET status = 'paused', meta = ?, updated_at = ? WHERE id = ?", JSON.stringify(meta), nowIso(), batchId);
   audit('batch.paused', { batch_id: batchId, reason });
+  try {
+    alertBatchPaused(batchId, reason);
+  } catch {
+    // el aviso no debe frenar el runner
+  }
 }
 
 function parseMeta(raw: string | null): { programa: string | null; programaId: number | null } {

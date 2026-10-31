@@ -120,6 +120,8 @@ el bloque A (red de seguridad) va primero.
 - **Por qué**: es la causa más común de baneo de números nuevos.
 - **Esfuerzo**: M · **Riesgo**: Medio (toca el ritmo de envío) · **Aceptación**: un
   número nuevo no supera su cupo del día y el panel muestra el día de calentamiento.
+- **✅ Ya existía** (`warmupState` en `anti-ban.ts`); desde 2026-10-30 el día de
+  calentamiento y el cupo se ven en el semáforo de Conexión (ver B3).
 
 ### B2. Pausa por cansancio y enfriamiento automático
 - **Qué**: si la tasa de fallos o de descifrado sube en una ventana corta
@@ -128,6 +130,11 @@ el bloque A (red de seguridad) va primero.
 - **Por qué**: hoy el sistema no se frena solo cuando WhatsApp empieza a rechazar.
 - **Esfuerzo**: M · **Riesgo**: Medio · **Aceptación**: al simular fallos el lote se
   pausa y se avisa.
+- **✅ Hecho (2026-10-30)**: la pausa por bloqueos, entregabilidad baja y fallos
+  consecutivos ya existía; se agregó el **aviso en la campana** (`batch_paused`) y
+  se corrigió que la cuarentena **rotaba los lotes a otra línea** (salían desde el
+  número de otra persona): ahora las líneas personales y los lotes de una cuenta se
+  pausan, y solo rotan los del sistema entre líneas del sistema. CAMBIOS §60.
 
 ### B3. Panel de salud del número (semáforo)
 - **Qué**: vista que combine `health.ts`, `session_health_metrics` y las políticas
@@ -135,6 +142,9 @@ el bloque A (red de seguridad) va primero.
 - **Por qué**: hoy los datos existen pero están repartidos en varias pantallas.
 - **Esfuerzo**: M · **Riesgo**: Bajo (solo lectura) · **Aceptación**: una sola
   pantalla responde "¿este número está sano?".
+- **✅ Hecho (2026-10-30)**: `lineVerdict` (verde/amarillo/rojo con motivos y acción)
+  en Conexión para el dueño de cada línea y en la app móvil; la API **no crea envíos
+  inmediatos** desde una línea en cuarentena o en rojo. CAMBIOS §60.
 
 ---
 

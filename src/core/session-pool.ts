@@ -3,6 +3,7 @@ import { nowIso } from '../util/async.js';
 import { audit } from './webhooks.js';
 import { setQuarantine } from './health.js';
 import { logger } from '../logger.js';
+import { alertBatchPaused } from './notifications.js';
 import type { SessionRow } from '../types.js';
 
 /** ¿La sesión está marcada en cuarentena? */
@@ -13,11 +14,13 @@ export function isQuarantined(sessionId: string): boolean {
 
 /**
  * Elige una sesión sana del pool (conectada, sin cuarentena y no en rojo),
- * prefiriendo las verdes y con menos envíos en las últimas 24h.
+ * prefiriendo las verdes y con menos envíos en las últimas 24h. Solo líneas
+ * del sistema (sin dueño): un lote rotado nunca sale desde el número personal
+ * de alguien.
  */
 export function pickHealthySession(excludeId?: string): SessionRow | undefined {
   const params: unknown[] = [];
-  let filter = "s.status = 'ready' AND COALESCE(h.quarantine, 0) = 0 AND COALESCE(h.health, 'green') <> 'red'";
+  let filter = "s.status = 'ready' AND s.owner_uid IS NULL AND COALESCE(h.quarantine, 0) = 0 AND COALESCE(h.health, 'green') <> 'red'";
   if (excludeId) {
     filter += ' AND s.id <> ?';
     params.push(excludeId);
@@ -51,13 +54,20 @@ export function rotateBatches(
   fromSessionId: string,
   enqueue: (batchId: number) => void,
 ): { moved: number; to: string | null } {
+  // Una línea personal (con dueño) nunca rota: sus envíos salen SOLO de su número.
+  // Antes se movían a cualquier línea sana y los mensajes salían desde el número
+  // de otra persona; ahora esos lotes se pausan (lo hace el runner).
+  const from = get<{ owner_uid: string | null }>('SELECT owner_uid FROM sessions WHERE id = ?', fromSessionId);
+  if (from?.owner_uid) return { moved: 0, to: null };
+
   const target = pickHealthySession(fromSessionId);
   if (!target) return { moved: 0, to: null };
 
-  const batches = all<{ id: number }>(
-    "SELECT id FROM batches WHERE session_id = ? AND status IN ('scheduled','running','paused')",
+  // Tampoco rotan los lotes pedidos por una cuenta (cronogramas): son de esa persona.
+  const batches = all<{ id: number; meta: string | null }>(
+    "SELECT id, meta FROM batches WHERE session_id = ? AND status IN ('scheduled','running','paused')",
     fromSessionId,
-  );
+  ).filter((b) => !ownedBatch(b.meta));
   const now = nowIso();
   for (const b of batches) {
     run(
@@ -76,6 +86,16 @@ export function rotateBatches(
   return { moved: batches.length, to: target.id };
 }
 
+/** ¿El lote lo pidió una cuenta concreta? (entonces solo puede salir de su línea). */
+function ownedBatch(meta: string | null): boolean {
+  try {
+    const m = meta ? (JSON.parse(meta) as Record<string, unknown>) : {};
+    return m.account != null || m.solicitado_por_id != null;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Pone una sesión en cuarentena y rota sus lotes a otra sesión sana del pool.
  * Si no hay reemplazo, no mueve nada (el runner pausará el lote).
@@ -87,6 +107,38 @@ export function quarantineAndRotate(
 ): { moved: number; to: string | null } {
   setQuarantine(sessionId, true, reason);
   const rot = rotateBatches(sessionId, enqueue);
-  audit('anti_ban.quarantine', { session_id: sessionId, quarantine: true, reason, moved: rot.moved, to: rot.to });
+  // Lo que no se pudo mover (línea personal o lote de una cuenta) se pausa ya:
+  // un lote en curso no debe seguir enviando desde una línea en cuarentena.
+  const paused = pauseSessionBatches(
+    sessionId,
+    `La línea quedó en cuarentena (${reason}). El lote se pausó para no enviar desde otro número: revisá la línea y reanudalo cuando esté sana.`,
+  );
+  audit('anti_ban.quarantine', { session_id: sessionId, quarantine: true, reason, moved: rot.moved, to: rot.to, paused });
   return rot;
+}
+
+/** Pausa los lotes activos de una línea con el motivo (y avisa). Devuelve cuántos. */
+export function pauseSessionBatches(sessionId: string, reason: string): number {
+  const rows = all<{ id: number; meta: string | null }>(
+    "SELECT id, meta FROM batches WHERE session_id = ? AND status IN ('scheduled','running')",
+    sessionId,
+  );
+  const now = nowIso();
+  for (const b of rows) {
+    let meta: Record<string, unknown> = {};
+    try {
+      meta = b.meta ? (JSON.parse(b.meta) as Record<string, unknown>) : {};
+    } catch {
+      meta = {};
+    }
+    meta.anti_ban_pause = reason;
+    run("UPDATE batches SET status = 'paused', meta = ?, updated_at = ? WHERE id = ?", JSON.stringify(meta), now, b.id);
+    audit('batch.paused', { batch_id: b.id, reason });
+    try {
+      alertBatchPaused(b.id, reason);
+    } catch {
+      // el aviso no debe frenar la cuarentena
+    }
+  }
+  return rows.length;
 }

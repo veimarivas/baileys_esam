@@ -25,7 +25,9 @@ export type NotificationKind =
   /** Una línea quedó sin conexión (se desvinculó, la bloquearon o se cayó). */
   | 'session_down'
   /** Inconsistencia entre cuentas y líneas (p. ej. una cuenta con la línea de otra área). */
-  | 'line_issue';
+  | 'line_issue'
+  /** El anti-baneo pausó un lote (cuarentena, bloqueos, entregabilidad baja…). */
+  | 'batch_paused';
 
 export interface NotificationRow {
   id: number;
@@ -152,4 +154,34 @@ export function markRead(userId: number, ids: number[] | 'all'): number {
 /** Al abrir una nota, sus avisos pendientes para ese usuario quedan leídos. */
 export function markNoteRead(userId: number, noteId: number): number {
   return run('UPDATE notifications SET read_at = ? WHERE user_id = ? AND note_id = ? AND read_at IS NULL', nowIso(), userId, noteId).changes;
+}
+
+/**
+ * Avisa que el anti-baneo pausó un lote: al dueño de la línea y a quienes
+ * supervisan, con el motivo y el enlace al lote. Un aviso por lote mientras
+ * siga sin leer.
+ */
+export function alertBatchPaused(batchId: number, reason: string): boolean {
+  const batch = get<{ name: string | null; session_id: string | null }>('SELECT name, session_id FROM batches WHERE id = ?', batchId);
+  if (!batch) return false;
+  const pending = get<{ c: number }>(
+    `SELECT COUNT(*) AS c FROM notifications WHERE kind = 'batch_paused' AND link = ? AND read_at IS NULL`,
+    `/batches/${batchId}`,
+  )?.c ?? 0;
+  if (pending > 0) return false;
+  const owner = batch.session_id
+    ? get<{ id: number }>(
+        `SELECT u.id FROM users u JOIN sessions s ON s.owner_uid = u.source_uid OR CAST(u.id AS TEXT) = s.owner_uid
+          WHERE s.id = ? LIMIT 1`,
+        batch.session_id,
+      )
+    : undefined;
+  notify([owner?.id ?? null, ...supervisorIds()], {
+    kind: 'batch_paused',
+    sessionId: batch.session_id,
+    title: `Envío pausado por el anti-baneo: #${batchId} ${batch.name ?? ''}`.trim(),
+    body: reason,
+    link: `/batches/${batchId}`,
+  });
+  return true;
 }

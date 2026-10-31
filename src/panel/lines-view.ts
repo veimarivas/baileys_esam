@@ -1,6 +1,7 @@
 import { esc } from './layout.js';
 import { statusBadge } from './views.js';
 import type { LineIssue } from '../core/line-health.js';
+import type { LineVerdict } from '../core/line-verdict.js';
 
 /**
  * Consistencia de líneas (Configuración): problemas entre cuentas y líneas de
@@ -85,4 +86,26 @@ export function linesHealthPage(issues: LineIssue[], flash: { ok?: string; error
   }).join('');
 
   return `<div class="lines-health">${banner}${intro}${resumen}<div class="lh-list">${cards}</div></div>`;
+}
+
+const VERDICT_ICON: Record<LineVerdict['level'], string> = { green: 'ri-shield-check-line', yellow: 'ri-alert-line', red: 'ri-forbid-line' };
+
+/** Semáforo del número para Conexión: «¿está sano para enviar?». */
+export function lineVerdictCard(v: LineVerdict): string {
+  const s = v.stats;
+  const fig = (label: string, value: string) => `<div class="lv-fig"><b>${esc(value)}</b><span>${esc(label)}</span></div>`;
+  return `<section class="lv-card lv-${v.level}" aria-label="Salud del número">
+    <div class="lv-light" aria-hidden="true"><span class="lv-r"></span><span class="lv-y"></span><span class="lv-g"></span></div>
+    <div class="lv-main">
+      <h6><i class="${VERDICT_ICON[v.level]}"></i> ${esc(v.title)}</h6>
+      <ul class="lv-reasons">${v.reasons.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>
+      ${v.action ? `<p class="lv-action"><i class="ri-lightbulb-line"></i> ${esc(v.action)}</p>` : ''}
+    </div>
+    <div class="lv-figs">
+      ${fig('enviados 24 h', String(s.sent24h))}
+      ${fig('entrega', s.deliveryRate === null ? '—' : `${Math.round(s.deliveryRate * 100)}%`)}
+      ${fig('bloqueos 24 h', String(s.blocked24h))}
+      ${fig('cupo hoy', s.dailyLimit ? `${s.dailyUsed}/${s.dailyLimit}` : '—')}
+    </div>
+  </section>`;
 }

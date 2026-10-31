@@ -17,6 +17,7 @@ import { countNewContactsToday, getPolicy, limitState } from '../core/anti-ban.j
 import { AWAITING, getGroup, markAwaiting, notifyGroup } from '../core/batch-confirm.js';
 import { personChatsForNote } from '../core/contacts.js';
 import { linkedToOtherNumber, resolveUserLine } from '../core/line-resolver.js';
+import { lineVerdict, sendBlockedReason } from '../core/line-verdict.js';
 import { ProspectError, removeProspect, upsertProspect } from '../core/prospects.js';
 import { panelBus } from '../panel/events.js';
 import type { SessionRow } from '../types.js';
@@ -502,6 +503,13 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
       const notReady = needsConfirm ? null : notReadyMessage(session, body);
       if (notReady) {
         res.status(422).json({ message: notReady });
+        return;
+      }
+      // Semáforo: con la línea en cuarentena o en rojo no se crean envíos inmediatos
+      // (antes se aceptaban y se frenaban a mitad de camino).
+      const blocked = needsConfirm || body.dry_run || body.scheduled_at ? null : sendBlockedReason(session);
+      if (blocked) {
+        res.status(422).json({ message: blocked, health: lineVerdict(session) });
         return;
       }
 

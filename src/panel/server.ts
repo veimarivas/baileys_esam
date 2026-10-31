@@ -7,7 +7,8 @@ import { all, get, run } from '../db/index.js';
 import { logger } from '../logger.js';
 import { SessionManager } from '../baileys/manager.js';
 import { batchDetailPage, batchesPage } from './batches-view.js';
-import { linesHealthCard, linesHealthPage } from './lines-view.js';
+import { lineVerdictCard, linesHealthCard, linesHealthPage } from './lines-view.js';
+import { lineVerdict } from '../core/line-verdict.js';
 import { applyLineFix, lineIssues, type LineFixAction } from '../core/line-health.js';
 import { massActivity, massActivityCsv } from '../core/mass-activity.js';
 import { card, connectionCard, connectionDiagnosis, emptyState, fmtDate, initials, insight, kvList, safeJson, sectionHead, statusBadge, table, type ConnectionDiagnosis } from './views.js';
@@ -598,7 +599,7 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
       );
       const diagnosis = session ? connectionDiagnosis(await diagnosisFor(session)) : '';
       const admin = esamEsAdmin(req.user!);
-      const body = `<div class="row g-3">
+      const body = `${session ? lineVerdictCard(lineVerdict(session)) : ''}<div class="row g-3">
         <div class="col-lg-7">${connectionCard(session, session?.owner_name ?? undefined)}</div>
         <div class="col-lg-5">${diagnosis}</div>
       </div>
@@ -963,6 +964,7 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
       res.json({
         session: { id: session.id, name: session.name, status: session.status, phone: session.phone ?? session.expected_phone ?? null },
         diagnosis: await diagnosisFor(session),
+        verdict: lineVerdict(session),
       });
     }),
   );

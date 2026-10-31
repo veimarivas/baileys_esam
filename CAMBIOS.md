@@ -2030,6 +2030,27 @@ Cierra el origen del incidente del 28/10 (cobranzas enviadas desde el número de
 
 ---
 
+## 60. Anti-baneo inteligente: cuarentena sin cambiar de número, avisos y semáforo (2026-10-30)
+
+**Hallazgo grave corregido:** cuando una línea entraba en cuarentena (fallos seguidos o manual), `rotateBatches` movía **todos** sus lotes a otra línea sana, y esa línea podía ser **la personal de otra persona** (`pickHealthySession` no distinguía). Los mensajes salían desde un número ajeno. Puede explicar parte de lo vivido a mediados de octubre («envió… desde todos los números»).
+
+- **Rotación** (`src/core/session-pool.ts`):
+  - una línea **con dueño** nunca rota;
+  - en una línea del sistema solo rotan los lotes que **no** pidió una cuenta (`meta.account` / `solicitado_por_id`);
+  - el destino es siempre otra línea **del sistema** (sin dueño).
+- **Cuarentena:** lo que no se puede mover **se pausa en el acto** (`pauseSessionBatches`), aunque el lote ya esté enviando, con el motivo «… se pausó para no enviar desde otro número». Al arrancar un lote en una línea en cuarentena, también se pausa con ese motivo.
+- **Aviso en la campana** (`batch_paused`, `alertBatchPaused`): cada vez que el anti-baneo pausa un lote (bloqueos, entregabilidad baja, cuarentena), al dueño de la línea y al Super Admin, con el motivo y el enlace al lote. Un aviso por lote mientras siga sin leer.
+- **Semáforo del número** (`src/core/line-verdict.ts`, `lineVerdict`): verde, amarillo o rojo, con motivos y qué hacer. Combina conexión, cuarentena, salud de 24 h, calentamiento (día y cupo), cupo restante del día y lotes pausados.
+  - Se muestra arriba en **Conexión** para el dueño de cada línea (luz, motivos, acción y cifras: enviados 24 h, entrega, bloqueos, cupo de hoy).
+  - Lo recibe la app móvil (`verdict` en `/api/mobile/connection`).
+- **Freno antes de enviar:** `POST /api/v1/batches` **no crea envíos inmediatos** desde una línea en cuarentena o en rojo. Responde 422 con el motivo y la acción, y cronogramas lo muestra tal cual. Los programados con confirmación sí se crean, porque el ejecutor vuelve a revisar al enviar.
+- El calentamiento (B1) y la pausa por bloqueos y entregabilidad (B2) ya existían; `MEJORAS_2.md` lo marca.
+- **Pruebas:**
+  - `test/anti-ban-smart.test.ts` (6): línea personal sin rotación, rotación solo de lotes del sistema hacia líneas del sistema (detectó y quedó corregido que el destino podía ser una línea personal), cuarentena que pausa el lote en curso y avisa, y semáforo rojo (cuarentena o desconectada) y verde con el freno de envío. `npm run lint`, `npm run typecheck` y `npm test` (168/168) limpios;
+  - en la vista previa: semáforo verde «Número sano» y, con la línea en cuarentena en la copia, rojo «No conviene enviar ahora» con el motivo y la acción.
+
+---
+
 ## Notas de operación
 
 - En producción usar `start-baileys.bat` / pm2 / systemd (no `npm run dev`).

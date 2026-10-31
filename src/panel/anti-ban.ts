@@ -246,7 +246,7 @@ function sessionCard(sess: SessionRow, health: HealthRow | undefined, custom: bo
         quarantine
           ? `<form method="post" action="/anti-ban/quarantine/${id}" class="ms-auto"><input type="hidden" name="action" value="release"/>
                <button class="btn btn-sm btn-soft-success" type="submit"><i class="ri-lock-unlock-line me-1"></i>Liberar</button></form>`
-          : `<form method="post" action="/anti-ban/quarantine/${id}" class="ms-auto" data-confirm="¿Poner la línea en cuarentena? Deja de enviar lotes y se rotan a otra línea sana.">
+          : `<form method="post" action="/anti-ban/quarantine/${id}" class="ms-auto" data-confirm="¿Poner la línea en cuarentena? Deja de enviar: los lotes de una línea personal se pausan (nunca salen desde otro número); solo los del sistema se pasan a otra línea sana.">
                <input type="hidden" name="action" value="apply"/>
                <button class="btn btn-sm btn-soft-danger" type="submit"><i class="ri-lock-line me-1"></i>Cuarentena</button></form>`
       }
@@ -860,7 +860,7 @@ export function registerAntiBanRoutes(
     }
     const rot = quarantineAndRotate(id, (batchId) => ctx.runner.enqueue(batchId), 'Puesta en cuarentena manualmente');
     res.redirect(
-      back('monitoreo', rot.moved ? `Línea en cuarentena; ${rot.moved} lote(s) rotados a otra línea.` : 'Línea en cuarentena (sin lotes pendientes o sin otra línea sana).'),
+      back('monitoreo', rot.moved ? `Línea en cuarentena; ${rot.moved} lote(s) del sistema pasados a otra línea. Los de la línea quedaron en pausa.` : 'Línea en cuarentena: sus lotes en curso quedaron en pausa (no se envían desde otro número).'),
     );
   });
 

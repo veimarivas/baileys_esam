@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { config } from '../config.js';
+import { APP_TIMEZONE, config } from '../config.js';
+import { get } from '../db/index.js';
 import { lastBackup } from './backup.js';
 import { webhookQueueStats } from './webhook-queue.js';
 import { runtimeInfo, type RuntimeInfo } from './runtime.js';
@@ -87,6 +88,8 @@ export function systemHealth(sessions: Array<{ status: string }> = []): SystemHe
   if (queue.dead > 0) warnings.push(`${queue.dead} webhook(s) descartado(s) tras agotar los reintentos.`);
   if (walMb > 200) warnings.push(`El WAL de la base creció a ${walMb} MB: conviene reiniciar para hacer checkpoint.`);
   if (runtime.pendingRestart) warnings.push('Hay una compilación más nueva sin aplicar: reiniciá el servicio.');
+  const tz = timezoneDrift();
+  if (tz) warnings.push(tz);
 
   return {
     ok: true,
@@ -108,4 +111,23 @@ export function systemHealth(sessions: Array<{ status: string }> = []): SystemHe
     memoryMb: Math.round(process.memoryUsage().rss / MB),
     warnings,
   };
+}
+
+/**
+ * ¿La base (SQLite, `localtime`) usa la misma hora que el proceso? Ambos deben
+ * estar en `APP_TIMEZONE` (La Paz). Si el servicio arrancó con otra zona y el
+ * sistema no la pudo cambiar, los cortes por día de la base quedarían corridos.
+ */
+export function timezoneDrift(): string | null {
+  try {
+    const sqlite = get<{ t: string }>("SELECT strftime('%Y-%m-%d %H', 'now', 'localtime') AS t")?.t;
+    const d = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const js = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}`;
+    return sqlite && sqlite !== js
+      ? `La base usa otra zona horaria que el servicio (${APP_TIMEZONE}): definí TZ=${APP_TIMEZONE} en el servicio o ajustá la zona del servidor.`
+      : null;
+  } catch {
+    return null;
+  }
 }

@@ -1,7 +1,7 @@
 import { esc } from './layout.js';
 import { statusBadge } from './views.js';
 import type { LineIssue } from '../core/line-health.js';
-import type { LineVerdict } from '../core/line-verdict.js';
+import type { LineVerdict, VerdictCheck } from '../core/line-verdict.js';
 
 /**
  * Consistencia de líneas (Configuración): problemas entre cuentas y líneas de
@@ -89,23 +89,53 @@ export function linesHealthPage(issues: LineIssue[], flash: { ok?: string; error
 }
 
 const VERDICT_ICON: Record<LineVerdict['level'], string> = { green: 'ri-shield-check-line', yellow: 'ri-alert-line', red: 'ri-forbid-line' };
+const CHECK_VIEW: Record<VerdictCheck['status'], [string, string]> = {
+  ok: ['ri-checkbox-circle-fill', 'En orden'],
+  warn: ['ri-error-warning-fill', 'Atención'],
+  bad: ['ri-close-circle-fill', 'Problema'],
+  info: ['ri-information-fill', 'Sin datos suficientes'],
+};
 
-/** Semáforo del número para Conexión: «¿está sano para enviar?». */
+/** Semáforo del número para Conexión: «¿está sano para enviar?» y por qué. */
 export function lineVerdictCard(v: LineVerdict): string {
   const s = v.stats;
   const fig = (label: string, value: string) => `<div class="lv-fig"><b>${esc(value)}</b><span>${esc(label)}</span></div>`;
+  const checks = v.checks.map((c) => {
+    const [icon, label] = CHECK_VIEW[c.status];
+    const open = c.status === 'warn' || c.status === 'bad';
+    return `<details class="lv-check is-${c.status}"${open ? ' open' : ''}>
+      <summary>
+        <i class="${icon}" aria-label="${esc(label)}"></i>
+        <span class="lv-check-l">${esc(c.label)}</span>
+        <span class="lv-check-v">${esc(c.value)}</span>
+      </summary>
+      <div class="lv-check-b">
+        <p><b>Qué mide:</b> ${esc(c.why)}</p>
+        <p><b>Cuándo cambia de color:</b> ${esc(c.rule)}</p>
+        ${c.fix ? `<p class="lv-check-fix"><i class="ri-tools-line"></i> <b>Cómo solucionarlo:</b> ${esc(c.fix)}</p>` : ''}
+      </div>
+    </details>`;
+  }).join('');
   return `<section class="lv-card lv-${v.level}" aria-label="Salud del número">
-    <div class="lv-light" aria-hidden="true"><span class="lv-r"></span><span class="lv-y"></span><span class="lv-g"></span></div>
-    <div class="lv-main">
-      <h6><i class="${VERDICT_ICON[v.level]}"></i> ${esc(v.title)}</h6>
-      <ul class="lv-reasons">${v.reasons.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>
-      ${v.action ? `<p class="lv-action"><i class="ri-lightbulb-line"></i> ${esc(v.action)}</p>` : ''}
+    <div class="lv-top">
+      <div class="lv-light" aria-hidden="true"><span class="lv-r"></span><span class="lv-y"></span><span class="lv-g"></span></div>
+      <div class="lv-main">
+        <h6><i class="${VERDICT_ICON[v.level]}"></i> ${esc(v.title)}</h6>
+        <ul class="lv-reasons">${v.reasons.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>
+        ${v.action ? `<p class="lv-action"><i class="ri-lightbulb-line"></i> ${esc(v.action)}</p>` : ''}
+      </div>
+      <div class="lv-figs">
+        ${fig('enviados por el sistema 24 h', String(s.sent24h))}
+        ${fig('entrega', s.deliveryRate === null ? '—' : `${Math.round(s.deliveryRate * 100)}%`)}
+        ${fig('bloqueos 24 h', String(s.blocked24h))}
+        ${fig('cupo hoy', s.dailyLimit ? `${s.dailyUsed}/${s.dailyLimit}` : '—')}
+      </div>
     </div>
-    <div class="lv-figs">
-      ${fig('enviados 24 h', String(s.sent24h))}
-      ${fig('entrega', s.deliveryRate === null ? '—' : `${Math.round(s.deliveryRate * 100)}%`)}
-      ${fig('bloqueos 24 h', String(s.blocked24h))}
-      ${fig('cupo hoy', s.dailyLimit ? `${s.dailyUsed}/${s.dailyLimit}` : '—')}
+    <div class="lv-why">
+      <h6>Por qué este color</h6>
+      <p class="lv-legend"><span class="is-g">Verde</span> todo en orden · <span class="is-y">Amarillo</span> se puede enviar, con cuidado · <span class="is-r">Rojo</span> no se crean envíos masivos hasta resolverlo.
+        ${s.phone24h ? ` Los ${s.phone24h} mensajes que escribiste hoy desde el teléfono o WhatsApp Web <b>no cuentan</b> para el semáforo ni para el cupo.` : ' Lo que escribís desde el teléfono o WhatsApp Web no cuenta para el semáforo ni para el cupo.'}</p>
+      <div class="lv-checks">${checks}</div>
     </div>
   </section>`;
 }

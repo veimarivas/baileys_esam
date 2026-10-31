@@ -86,3 +86,35 @@ describe('semáforo del número', () => {
     assert.equal(sendBlockedReason(session('ab-caida')), null);
   });
 });
+
+describe('semáforo: mensajes desde el teléfono / WhatsApp Web', () => {
+  it('no cuentan para la entrega ni para el cupo, y el semáforo explica cada punto', () => {
+    line('ab-web', 'ab-web');
+    const old = new Date(Date.now() - 3600_000).toISOString();
+    // 12 mensajes escritos desde WhatsApp Web: quedan «sent» (sin acuse en el gateway).
+    for (let i = 0; i < 12; i++) {
+      run(
+        `INSERT INTO messages (session_id, chat_id, direction, content_type, body, status, origin, occurred_at, created_at)
+         VALUES ('ab-web', ?, 'out', 'text', 'hola', 'sent', 'phone', ?, ?)`,
+        `5917700000${i}@c.us`, old, old,
+      );
+    }
+    // 6 del sistema, todos entregados.
+    for (let i = 0; i < 6; i++) {
+      run(
+        `INSERT INTO messages (session_id, chat_id, direction, content_type, body, status, origin, occurred_at, created_at)
+         VALUES ('ab-web', ?, 'out', 'text', 'hola', 'delivered', 'panel', ?, ?)`,
+        `5917800000${i}@c.us`, old, old,
+      );
+    }
+    const v = lineVerdict(session('ab-web'));
+    assert.notEqual(v.level, 'red');
+    assert.equal(v.canSend, true);
+    assert.equal(v.stats.phone24h, 12);
+    assert.equal(v.stats.deliveryRate, 1);
+    const delivery = v.checks.find((c) => c.key === 'delivery')!;
+    assert.equal(delivery.status, 'ok');
+    assert.match(delivery.why, /WhatsApp Web/);
+    assert.ok(v.checks.every((c) => c.label && c.value && c.rule && c.why));
+  });
+});

@@ -6148,7 +6148,7 @@ html[data-bs-theme="dark"] .lines-health, html[data-bs-theme="dark"] .lh-card { 
 @media (max-width: 575.98px) { .lh-sum { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 
 /* Conexión › semáforo del número */
-.lv-card { --lv: #0e9f6e; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 1rem; align-items: center; margin-bottom: 1rem;
+.lv-card { --lv: #0e9f6e; margin-bottom: 1rem;
   background: var(--vz-card-bg, #fff); border: 1px solid var(--vz-border-color, #e6ebf1); border-left: 5px solid var(--lv); border-radius: 14px; padding: 0.9rem 1.1rem; }
 html[data-bs-theme="dark"] .lv-card { background: #1d2125; border-color: #2a2f34; }
 .lv-card.lv-yellow { --lv: #d97706; } .lv-card.lv-red { --lv: #dc3545; }
@@ -6164,9 +6164,36 @@ html[data-bs-theme="dark"] .lv-card { background: #1d2125; border-color: #2a2f34
 .lv-figs { display: grid; grid-template-columns: repeat(2, minmax(5.5rem, auto)); gap: 0.35rem 0.8rem; }
 .lv-fig b { display: block; font-size: 1rem; line-height: 1.1; font-variant-numeric: tabular-nums; }
 .lv-fig span { font-size: 0.68rem; color: var(--esam-muted, #6b7280); }
+.lv-top { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 1rem; align-items: center; }
+.lv-why { border-top: 1px dashed var(--vz-border-color, #e6ebf1); margin-top: 0.85rem; padding-top: 0.75rem; }
+html[data-bs-theme="dark"] .lv-why { border-color: #2a2f34; }
+.lv-why h6 { margin: 0 0 0.3rem; font-size: 0.78rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em; color: var(--esam-muted, #6b7280); }
+.lv-legend { margin: 0 0 0.6rem; font-size: 0.78rem; }
+.lv-legend span { font-weight: 700; } .lv-legend .is-g { color: #0e9f6e; } .lv-legend .is-y { color: #d97706; } .lv-legend .is-r { color: #dc3545; }
+.lv-checks { display: flex; flex-direction: column; gap: 0.35rem; }
+.lv-check { --c: #0e9f6e; border: 1px solid var(--vz-border-color, #e6ebf1); border-radius: 10px; background: color-mix(in srgb, var(--c) 4%, transparent); }
+html[data-bs-theme="dark"] .lv-check { border-color: #2a2f34; }
+.lv-check.is-warn { --c: #d97706; border-color: color-mix(in srgb, #d97706 40%, transparent); }
+.lv-check.is-bad { --c: #dc3545; border-color: color-mix(in srgb, #dc3545 40%, transparent); }
+.lv-check.is-info { --c: #6b7280; }
+.lv-check summary { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 0.5rem; align-items: center; padding: 0.45rem 0.7rem; cursor: pointer; list-style: none; font-size: 0.82rem; }
+.lv-check summary::-webkit-details-marker { display: none; }
+.lv-check summary::after { content: '\ea4e'; font-family: remixicon; color: var(--esam-muted, #6b7280); transition: transform 0.15s; }
+.lv-check[open] summary::after { transform: rotate(180deg); }
+.lv-check summary > i { color: var(--c); font-size: 1.05rem; }
+.lv-check-l { font-weight: 700; }
+.lv-check-v { font-size: 0.78rem; color: var(--esam-muted, #6b7280); text-align: right; }
+.lv-check.is-warn .lv-check-v, .lv-check.is-bad .lv-check-v { color: var(--c); font-weight: 700; }
+.lv-check-b { padding: 0 0.8rem 0.6rem 2.2rem; font-size: 0.78rem; }
+.lv-check-b p { margin: 0 0 0.3rem; }
+.lv-check-fix { padding: 0.4rem 0.55rem; border-radius: 8px; background: color-mix(in srgb, var(--c) 10%, transparent); }
+.lv-check-fix i { color: var(--c); }
 @media (max-width: 767.98px) {
-  .lv-card { grid-template-columns: auto minmax(0, 1fr); }
-  .lv-figs { grid-column: 1 / -1; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .lv-top { grid-template-columns: auto minmax(0, 1fr); }
+  .lv-figs { grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .lv-check summary { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .lv-check-v { grid-column: 2 / -1; grid-row: 2; text-align: left; }
+  .lv-check-b { padding-left: 0.8rem; }
 }
 
 /* ── Lotes y Reportes: lectura y respuestas de los envíos masivos ── */

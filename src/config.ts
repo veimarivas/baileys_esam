@@ -1,5 +1,15 @@
 import 'dotenv/config';
 
+/**
+ * Zona horaria del sistema: La Paz, Bolivia (UTC-4, sin horario de verano).
+ * Define el «día» del cupo diario, la ventana horaria de envío, los
+ * recordatorios, los reportes por día y las fechas del panel, sin depender de
+ * la zona del servidor (un VPS suele estar en UTC). Se fija antes que nada:
+ * `config.ts` es de los primeros módulos que se cargan.
+ */
+export const APP_TIMEZONE = process.env.APP_TIMEZONE?.trim() || 'America/La_Paz';
+process.env.TZ = APP_TIMEZONE;
+
 function int(value: string | undefined, fallback: number): number {
   const n = parseInt(value ?? '', 10);
   return Number.isFinite(n) ? n : fallback;

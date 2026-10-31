@@ -68,7 +68,7 @@ export function trend7d(sessionId: string): TrendDay[] {
             SUM(CASE WHEN direction = 'out' THEN 1 ELSE 0 END) AS sent,
             SUM(CASE WHEN direction = 'out' AND status IN ('delivered','read','played') THEN 1 ELSE 0 END) AS delivered,
             SUM(CASE WHEN direction = 'out' AND status = 'failed' THEN 1 ELSE 0 END) AS failed
-       FROM messages WHERE session_id = ? AND occurred_at >= ?
+       FROM messages WHERE session_id = ? AND occurred_at >= ? AND COALESCE(origin, '') <> 'phone'
       GROUP BY day`,
     sessionId,
     since,

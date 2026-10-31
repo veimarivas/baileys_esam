@@ -490,8 +490,9 @@ function startOfLocalDayIso(): string {
 /** Mensajes salientes de la sesion desde un instante (ISO). */
 export function countSentSince(sessionId: string, sinceIso: string): number {
   const row = get<{ c: number }>(
+    // Los escritos desde el teléfono / WhatsApp Web no gastan el cupo del sistema.
     `SELECT COUNT(*) AS c FROM messages
-     WHERE session_id = ? AND direction = 'out' AND occurred_at >= ?`,
+     WHERE session_id = ? AND direction = 'out' AND COALESCE(origin, '') <> 'phone' AND occurred_at >= ?`,
     sessionId,
     sinceIso,
   );

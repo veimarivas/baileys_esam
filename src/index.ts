@@ -17,12 +17,15 @@ import { startBackupWorker } from './core/backup.js';
 import { startNoteReminderWorker } from './core/note-reminders.js';
 import { acquireInstanceLock } from './core/instance-lock.js';
 import { runtime } from './core/runtime.js';
+import { timezoneDrift } from './core/system-health.js';
 
 async function main(): Promise<void> {
   // Antes que nada: una sola instancia por carpeta de credenciales.
   acquireInstanceLock(runtime.mode);
   logger.info({ version: runtime.version, pid: runtime.pid, mode: runtime.mode, buildAt: runtime.buildAt }, 'Arrancando baileys_esam');
   migrate();
+  const tzDrift = timezoneDrift();
+  if (tzDrift) logger.warn(tzDrift);
   seedDefaultTemplates();
 
   const manager = new SessionManager();

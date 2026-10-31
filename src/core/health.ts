@@ -24,6 +24,17 @@ export interface HealthRow {
 }
 
 const DAY_MS = 86_400_000;
+/** Minutos que se le da a un mensaje para que llegue su acuse antes de medirlo. */
+export const SETTLE_MINUTES = 15;
+
+/**
+ * Mensajes que cuentan para la salud: los que envió el SISTEMA (panel, lotes,
+ * cronogramas, API) a chats individuales. Los escritos desde el teléfono o
+ * WhatsApp Web (`origin = 'phone'`) no reciben acuse en el gateway: quedaban
+ * siempre como «enviado» y hundían la tasa de entrega sin riesgo real. Los
+ * grupos tampoco: su acuse no indica que el número esté en riesgo.
+ */
+export const SYSTEM_OUT_SQL = `direction = 'out' AND COALESCE(origin, '') <> 'phone' AND chat_id NOT LIKE '%@g.us' AND chat_id <> 'status@broadcast'`;
 
 function num(v: unknown): number {
   return typeof v === 'number' ? v : Number(v ?? 0) || 0;
@@ -38,18 +49,24 @@ export function recomputeHealth(sessionId: string, opts: { lastError?: string | 
   const session = get<SessionRow>('SELECT * FROM sessions WHERE id = ?', sessionId) ?? null;
   const policy = getPolicy(sessionId);
 
-  const counts = get<{ sent: number; delivered: number; read: number; failed: number }>(
+  const settled = new Date(Date.now() - SETTLE_MINUTES * 60_000).toISOString();
+  const counts = get<{ sent: number; settled: number; delivered: number; read: number; failed: number }>(
     `SELECT
-       SUM(CASE WHEN direction = 'out' THEN 1 ELSE 0 END) AS sent,
-       SUM(CASE WHEN direction = 'out' AND status IN ('delivered','read','played') THEN 1 ELSE 0 END) AS delivered,
-       SUM(CASE WHEN direction = 'out' AND status IN ('read','played') THEN 1 ELSE 0 END) AS read,
+       COUNT(*) AS sent,
+       SUM(CASE WHEN occurred_at <= ? THEN 1 ELSE 0 END) AS settled,
+       SUM(CASE WHEN occurred_at <= ? AND status IN ('delivered','read','played') THEN 1 ELSE 0 END) AS delivered,
+       SUM(CASE WHEN status IN ('read','played') THEN 1 ELSE 0 END) AS read,
        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed
-     FROM messages WHERE session_id = ? AND occurred_at >= ?`,
+     FROM messages WHERE session_id = ? AND occurred_at >= ? AND ${SYSTEM_OUT_SQL}`,
+    settled,
+    settled,
     sessionId,
     since,
   );
 
   const sent = num(counts?.sent);
+  // La entrega se mide sobre los mensajes con tiempo para recibir su acuse.
+  const measured = num(counts?.settled);
   const delivered = num(counts?.delivered);
   const read = num(counts?.read);
   const failed = num(counts?.failed);
@@ -62,7 +79,7 @@ export function recomputeHealth(sessionId: string, opts: { lastError?: string | 
       since,
     )?.c,
   );
-  const deliveryRate = sent > 0 ? delivered / sent : 1;
+  const deliveryRate = measured > 0 ? delivered / measured : 1;
   const reportRate = sent > 0 ? blocked / sent : 0;
 
   const warm = warmupState(policy, warmupStartMs(policy, session));
@@ -81,10 +98,10 @@ export function recomputeHealth(sessionId: string, opts: { lastError?: string | 
   } else if (sent >= 20 && blocked >= 2 && reportRate >= policy.block_rate_threshold) {
     health = 'red';
     reason = `Muchos bloqueos y bajas (${blocked} · ${(reportRate * 100).toFixed(1)}% de lo enviado)`;
-  } else if (sent >= 5 && deliveryRate < policy.health_delivery_threshold) {
+  } else if (measured >= 5 && deliveryRate < policy.health_delivery_threshold) {
     health = 'red';
     reason = `Tasa de entrega baja (${Math.round(deliveryRate * 100)}%)`;
-  } else if (sent >= 5 && deliveryRate < policy.health_delivery_threshold + 0.05) {
+  } else if (measured >= 5 && deliveryRate < policy.health_delivery_threshold + 0.05) {
     health = 'yellow';
     reason = `Tasa de entrega acercandose al umbral (${Math.round(deliveryRate * 100)}%)`;
   } else if (blocked >= 2 && reportRate >= policy.block_rate_threshold / 2) {

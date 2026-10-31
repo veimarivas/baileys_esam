@@ -2086,6 +2086,33 @@ Hasta ahora se sabía si un mensaje masivo **salía**, pero no si **llegaba, se 
 
 ---
 
+## 62. Semáforo explicado y hora de Bolivia (2026-10-30)
+
+**Problema reportado:** quien escribe desde WhatsApp Web (o el teléfono) veía su número «en riesgo» sin haber enviado masivos.
+
+**Causa:** la salud de 24 h contaba **todos** los mensajes salientes. Los escritos desde el teléfono o WhatsApp Web (`origin = 'phone'`) no reciben acuse en el gateway y quedan siempre como «enviado», así que hundían la tasa de entrega: con el mínimo de 90 %, unos pocos ya la ponían en rojo. Desde §60, una línea en rojo además **bloquea los masivos** en la API.
+
+- **Salud** (`src/core/health.ts`, `SYSTEM_OUT_SQL`):
+  - solo cuentan los mensajes que envía el sistema (panel, lotes, cronogramas, API) a chats individuales;
+  - no cuentan los escritos desde el teléfono o WhatsApp Web, los de grupos ni los estados;
+  - la entrega se mide sobre los mensajes con más de 15 minutos, que ya tuvieron tiempo de recibir el acuse.
+- **Cupo diario y horario** (`countSentSince`) y la tendencia de 7 días: lo escrito desde el teléfono tampoco gasta el cupo del sistema.
+- **Semáforo explicado** (`lineVerdict().checks`): cada punto revisado (conexión, cuarentena, entrega, bloqueos y bajas, calentamiento, cupo de hoy y envíos pausados) muestra:
+  - qué se midió, con los valores reales;
+  - cuándo cambia de color, con los umbrales de la política de esa línea;
+  - qué mide y por qué importa;
+  - **cómo solucionarlo**.
+
+  En Conexión aparece como **Por qué este color**: los puntos en amarillo o rojo se muestran abiertos, con una leyenda de colores y cuántos mensajes de WhatsApp Web no se contaron. La app móvil recibe `checks` en `verdict`.
+- **Cuarentena:** muestra el motivo real (`last_error`) en lugar del genérico «por el sistema».
+- El semáforo se recalcula al consultarlo, para no mostrar un color viejo.
+- **Zona horaria** (`src/config.ts`):
+  - `APP_TIMEZONE` (por defecto `America/La_Paz`) fija `TZ` para todo el proceso: cupo diario (se renueva a las 00:00 de Bolivia), ventana horaria de envío, recordatorios, reportes por día y fechas del panel, aunque el servidor esté en UTC;
+  - `/healthz` y el log de arranque avisan si SQLite (`localtime`) quedara con otra zona.
+- **Pruebas:** `test/anti-ban-smart.test.ts` (+1): 12 mensajes de WhatsApp Web sin acuse y 6 del sistema entregados dan entrega 100 %, línea habilitada y el punto «Entrega» explicado. `npm test` (176/176), `typecheck` y `lint` limpios. En la vista previa: rojo con el motivo y la solución, y verde con 15 mensajes de WhatsApp Web.
+
+---
+
 ## Notas de operación
 
 - En producción usar `start-baileys.bat` / pm2 / systemd (no `npm run dev`).

@@ -2292,6 +2292,7 @@
       contacted: 'ri-phone-line', resolved: 'ri-check-double-line',
       batch_confirm: 'ri-calendar-schedule-line',
       session_down: 'ri-wifi-off-line',
+      line_issue: 'ri-git-merge-line',
     };
     function setBadge(n) {
       n = Number(n) || 0;

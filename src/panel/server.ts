@@ -7,6 +7,8 @@ import { all, get, run } from '../db/index.js';
 import { logger } from '../logger.js';
 import { SessionManager } from '../baileys/manager.js';
 import { batchDetailPage, batchesPage } from './batches-view.js';
+import { linesHealthCard, linesHealthPage } from './lines-view.js';
+import { applyLineFix, lineIssues, type LineFixAction } from '../core/line-health.js';
 import { massActivity, massActivityCsv } from '../core/mass-activity.js';
 import { card, connectionCard, connectionDiagnosis, emptyState, fmtDate, initials, insight, kvList, safeJson, sectionHead, statusBadge, table, type ConnectionDiagnosis } from './views.js';
 import { countNewContactsToday, getPolicy, limitState } from '../core/anti-ban.js';
@@ -600,7 +602,7 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
         <div class="col-lg-7">${connectionCard(session, session?.owner_name ?? undefined)}</div>
         <div class="col-lg-5">${diagnosis}</div>
       </div>
-      ${admin ? `<div class="row g-3 mt-0"><div class="col-lg-5">${gatewayCard}</div></div>` : ''}
+      ${admin ? `<div class="row g-3 mt-0"><div class="col-lg-5">${gatewayCard}</div><div class="col-lg-7">${linesHealthCard(lineIssues())}</div></div>` : ''}
       ${admin ? sessionsCard : ''}`;
       res.send(
         renderLayout('Conexión', req.user!, 'settings', body, {
@@ -609,6 +611,40 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
           restrictToSettings: !isConnected(req.user!),
         }),
       );
+    }),
+  );
+
+  // Consistencia de líneas (cuentas ↔ números): solo administradores.
+  app.get(
+    '/settings/lines',
+    requireUser,
+    requireSection('settings'),
+    ah(async (req: AuthedRequest, res) => {
+      if (!esamEsAdmin(req.user!)) return res.status(403).send(renderPlain('Acceso denegado', 'Solo el Super Admin revisa la consistencia de las líneas.'));
+      const q = (k: string) => (typeof req.query[k] === 'string' ? String(req.query[k]) : undefined);
+      res.send(
+        renderLayout('Consistencia de líneas', req.user!, 'settings', linesHealthPage(lineIssues(), { ok: q('ok'), error: q('error') }), {
+          subtitle: 'Cada usuario envía solo desde la línea de su número: acá se detecta y repara lo que esté desordenado.',
+          activeHref: '/settings',
+        }),
+      );
+    }),
+  );
+
+  app.post(
+    '/settings/lines/fix',
+    requireUser,
+    requireSection('settings'),
+    ah(async (req: AuthedRequest, res) => {
+      if (!esamEsAdmin(req.user!)) return res.status(403).send(renderPlain('Acceso denegado', 'Solo el Super Admin repara las líneas.'));
+      const action = String(req.body?.action ?? '') as LineFixAction;
+      if (!['release_owner', 'assign_owner', 'align_expected'].includes(action)) return res.redirect('/settings/lines?error=' + encodeURIComponent('Acción no válida.'));
+      try {
+        const msg = applyLineFix(action, String(req.body?.session ?? ''), req.user!.id, req.body?.uid ? String(req.body.uid) : null);
+        res.redirect('/settings/lines?ok=' + encodeURIComponent(msg));
+      } catch (err) {
+        res.redirect('/settings/lines?error=' + encodeURIComponent((err as Error).message));
+      }
     }),
   );
 

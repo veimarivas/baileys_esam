@@ -23,7 +23,9 @@ export type NotificationKind =
   /** Hay envíos masivos programados esperando tu confirmación. */
   | 'batch_confirm'
   /** Una línea quedó sin conexión (se desvinculó, la bloquearon o se cayó). */
-  | 'session_down';
+  | 'session_down'
+  /** Inconsistencia entre cuentas y líneas (p. ej. una cuenta con la línea de otra área). */
+  | 'line_issue';
 
 export interface NotificationRow {
   id: number;

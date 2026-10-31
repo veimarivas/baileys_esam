@@ -2002,6 +2002,34 @@ Objetivo: seguir en la ficha de cada persona todo lo que le envió el sistema (c
 
 ---
 
+## 59. Consistencia de líneas: diagnóstico y reparación de cuentas ↔ números (2026-10-30)
+
+Cierra el origen del incidente del 28/10 (cobranzas enviadas desde el número de Contabilidad): la relación entre cuentas y líneas se había desordenado.
+
+- **`src/core/line-health.ts` → `lineIssues()`:** detecta, de lo más grave a lo más leve:
+  - **Grave:**
+    - línea con **otro teléfono vinculado** del que espera;
+    - **una cuenta con varias líneas**;
+    - **un número en varias líneas**.
+  - **Atención:**
+    - la línea de un usuario **espera otro número** que el registrado en cronogramas;
+    - la línea con el número de un usuario **figura a nombre de otra cuenta**.
+  - **Aviso:**
+    - usuario autorizado **sin línea** con su número;
+    - **línea sin dueño**.
+- **Reparación de un clic** (`applyLineFix`), solo cuando es segura y si el problema sigue vigente (si cambió, pide recargar). Queda auditada.
+  - `release_owner`: suelta de la cuenta las líneas que no son de su número.
+  - `align_expected`: alinea el número esperado con cronogramas, solo si no hay otro teléfono vinculado.
+  - `assign_owner`: asigna la línea a quien tiene ese número.
+  - Lo que exige reescanear el QR no se toca solo: se explica qué hacer.
+- **Página `/settings/lines`** (solo Super Admin): resumen por gravedad y, por problema, su explicación, las líneas involucradas (dueño, espera, vinculado, estado), los botones de reparación con confirmación y la indicación de qué hacer. En **Conexión**, una tarjeta con el estado («Cuentas y líneas en orden», «N graves…») enlaza a la página.
+- **Aviso en la campana** (`line_issue`): la revisión corre al minuto de arrancar y cada hora (`startLineHealthWorker`). Avisa a quienes supervisan solo los problemas nuevos, graves o de atención. Un problema que se resuelve y vuelve se avisa de nuevo.
+- **Pruebas:**
+  - `test/line-health.test.ts` (7) reproduce el desorden del incidente: detección de cada tipo, las tres reparaciones, la línea con otro teléfono sin reparación automática, el rechazo de una reparación vencida y el aviso único. `npm run lint`, `npm run typecheck` y `npm test` (162/162) limpios;
+  - en la vista previa, con la copia de la base local, detectó el desorden real (una cuenta con 2 líneas, 3 líneas para revisar, 2 usuarios sin línea). Se reparó la cuenta con dos líneas desde la página (graves: 1 → 0) y un usuario no administrador recibe 403 al ver o reparar.
+
+---
+
 ## Notas de operación
 
 - En producción usar `start-baileys.bat` / pm2 / systemd (no `npm run dev`).

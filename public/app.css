@@ -6308,3 +6308,32 @@ html[data-bs-theme="dark"] .cx-faq { border-color: #2a2f34; }
 .cx-tech > summary::-webkit-details-marker { display: none; }
 @media (max-width: 991.98px) { .cx-help { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 575.98px) { .cx-line { grid-template-columns: auto minmax(0, 1fr) auto; } .cx-line-state { display: none; } }
+
+/* ── Conversaciones: estado de la atención y responsable ── */
+.cl-state { display: flex; gap: 0.3rem; overflow-x: auto; padding: 0 0.75rem 0.5rem; scrollbar-width: none; }
+.cl-state::-webkit-scrollbar { display: none; }
+.cl-st { flex-shrink: 0; border: 1px solid var(--vz-border-color, #e3e6eb); background: var(--vz-card-bg, #fff); color: var(--esam-ink-soft, #4b5563);
+  font-size: 0.74rem; font-weight: 600; padding: 0.2rem 0.6rem; border-radius: 999px; white-space: nowrap; }
+.cl-st b { font-weight: 700; margin-left: 0.15rem; color: var(--esam-brand, #045474); }
+.cl-st b:empty { display: none; }
+.cl-st.on { background: color-mix(in srgb, var(--esam-brand, #045474) 12%, transparent); border-color: transparent; color: var(--esam-brand, #045474); }
+html[data-bs-theme="dark"] .cl-st { background: #1a1c1f; border-color: #2a2d31; color: #c9ced6; }
+html[data-bs-theme="dark"] .cl-st.on, html[data-bs-theme="dark"] .cl-st b { color: #6cc3e3; }
+.convo-state { font-size: 0.68rem; font-weight: 700; padding: 0 0.45rem; border-radius: 999px; }
+.convo-state.is-pending { color: #b45309; background: color-mix(in srgb, #b45309 12%, transparent); }
+.convo-state.is-closed { color: #0f7b55; background: color-mix(in srgb, #0f7b55 12%, transparent); }
+.convo-agent { display: inline-flex; align-items: center; gap: 0.2rem; font-size: 0.7rem; color: var(--esam-ink-soft, #4b5563); }
+.chat-state-ctl { display: flex; gap: 0.35rem; }
+.chat-state-ctl .form-select { width: auto; max-width: 11rem; font-size: 0.78rem; padding-top: 0.2rem; padding-bottom: 0.2rem; }
+@media (max-width: 767.98px) { .chat-state-ctl #chat-assign { display: none; } .chat-state-ctl .form-select { max-width: 8rem; } }
+
+/* ── Lote › Volver a escribir ── */
+.bd-followup { margin-bottom: 0.9rem; }
+.bd-followup > summary { cursor: pointer; list-style: none; margin-bottom: 0; }
+.bd-followup > summary::-webkit-details-marker { display: none; }
+.bd-followup[open] > summary { margin-bottom: 0.65rem; }
+.bd-fu-form { display: flex; flex-direction: column; gap: 0.6rem; }
+.bd-fu-row { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+.bd-fu-row label, .bd-fu-text { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.78rem; font-weight: 600; color: var(--bt-ink); }
+.bd-fu-row label { flex: 1 1 12rem; }
+.bd-fu-form .btn { align-self: flex-start; }

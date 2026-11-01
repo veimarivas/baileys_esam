@@ -8,9 +8,10 @@ import { logger } from '../logger.js';
 import { SessionManager } from '../baileys/manager.js';
 import { batchDetailPage, batchesPage } from './batches-view.js';
 import { mobileSections, registerMobileApi } from './mobile-api.js';
-import { batchEngagement, batchesEngagement } from '../core/batch-engagement.js';
+import { pushEnabled, registerDevice, removeDevice } from '../core/push.js';
+import { batchEngagement, batchesEngagement, followUpTargets, FOLLOW_UP_LABEL, type FollowUpMode } from '../core/batch-engagement.js';
 import { connectionHelp, lineVerdictCard, linesHealthCard, linesHealthPage, linesOverview } from './lines-view.js';
-import { lineVerdict } from '../core/line-verdict.js';
+import { lineVerdict, sendBlockedReason } from '../core/line-verdict.js';
 import { applyLineFix, lineIssues, type LineFixAction } from '../core/line-health.js';
 import { massActivity, massActivityCsv } from '../core/mass-activity.js';
 import { card, connectionCard, connectionDiagnosis, emptyState, fmtDate, insight, kvList, safeJson, sectionHead, statusBadge, table, type ConnectionDiagnosis } from './views.js';
@@ -944,6 +945,8 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
   });
 
   app.post('/api/mobile/logout', (req, res) => {
+    // El teléfono deja de recibir notificaciones de esta cuenta.
+    if (typeof req.body?.device_token === 'string') removeDevice(req.body.device_token);
     sessionStore.destroy(sessionToken(req));
     res.json({ ok: true });
   });
@@ -995,6 +998,20 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
       }),
     );
   }
+
+  // Notificaciones push: el teléfono registra (o quita) su token de Firebase.
+  app.post('/api/mobile/devices', requireUser, (req: AuthedRequest, res) => {
+    try {
+      registerDevice(req.user!.id, String(req.body?.token ?? ''), String(req.body?.platform ?? 'android'));
+      res.json({ ok: true, push: pushEnabled() });
+    } catch (err) {
+      res.status(422).json({ error: (err as Error).message });
+    }
+  });
+  app.delete('/api/mobile/devices', requireUser, (req: AuthedRequest, res) => {
+    removeDevice(String(req.body?.token ?? req.query.token ?? ''));
+    res.json({ ok: true });
+  });
 
   // Seguimiento, Reportes y Lotes para la app móvil.
   registerMobileApi(app, { requireUser: requireUser as never, requireSection: requireSection as never });
@@ -1093,7 +1110,7 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
       const b = withRequester([raw])[0];
       const ITEMS_MAX = 3000;
       const items = all<any>('SELECT * FROM batch_items WHERE batch_id = ? ORDER BY id LIMIT ?', b.id, ITEMS_MAX);
-      const body = batchDetailPage(b, items, { truncated: items.length >= ITEMS_MAX && b.total > ITEMS_MAX, engagement: batchEngagement(b.id) });
+      const body = batchDetailPage(b, items, { truncated: items.length >= ITEMS_MAX && b.total > ITEMS_MAX, engagement: batchEngagement(b.id), error: typeof req.query.error === 'string' ? req.query.error : undefined });
       res.send(
         renderLayout('Lote #' + b.id, req.user!, 'batches', body, {
           subtitle: 'Detalle del envío: quién lo pidió, la línea, el mensaje, los tiempos y cada destinatario.',
@@ -1130,6 +1147,55 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
       recount(id);
       run("UPDATE batches SET status = 'running', finished_at = NULL, updated_at = ? WHERE id = ?", new Date().toISOString(), id);
       res.redirect('/batches/' + id);
+    }),
+  );
+
+  // Volver a escribir a quienes no leyeron / no respondieron / fallaron: un lote
+  // nuevo desde la misma línea, con el texto que se elija (o el original).
+  app.post(
+    '/batches/:id/followup',
+    requireUser,
+    requireSection('batches'),
+    ah(async (req: AuthedRequest, res) => {
+      const id = Number(req.params.id);
+      const json = wantsJson(req);
+      const fail = (status: number, msg: string) =>
+        json ? res.status(status).json({ error: msg }) : res.redirect(`/batches/${id}?error=${encodeURIComponent(msg)}`);
+      const b = get<{ id: number; name: string | null; session_id: string; meta: string | null }>('SELECT id, name, session_id, meta FROM batches WHERE id = ?', id);
+      if (!b) return fail(404, 'Lote no encontrado.');
+      const mode = (['unread', 'unreplied', 'failed'].includes(String(req.body?.mode)) ? String(req.body.mode) : 'unread') as FollowUpMode;
+      const targets = followUpTargets(id, mode);
+      if (!targets.length) return fail(422, `No hay destinatarios en «${FOLLOW_UP_LABEL[mode]}».`);
+      const session = get<SessionRow>('SELECT * FROM sessions WHERE id = ?', b.session_id);
+      const blocked = session ? sendBlockedReason(session) : 'La línea del lote ya no existe.';
+      if (blocked) return fail(422, blocked);
+      const text = String(req.body?.body ?? '').trim();
+      const when = String(req.body?.scheduled_at ?? '').trim();
+      const scheduledAt = when && !Number.isNaN(new Date(when).getTime()) && new Date(when).getTime() > Date.now() ? new Date(when).toISOString() : null;
+      const meta = (safeJson(b.meta ?? '{}') as Record<string, unknown>) ?? {};
+      // Se conserva quién lo pidió, el tipo y el programa; no el estado del lote anterior.
+      const keep = ['tipo', 'modo', 'programa', 'gestion', 'area', 'solicitado_por', 'solicitado_por_id', 'account', 'origen_sistema', 'source'];
+      const newMeta: Record<string, unknown> = Object.fromEntries(keep.filter((k) => meta[k] !== undefined).map((k) => [k, meta[k]]));
+      newMeta.seguimiento_de = id;
+      newMeta.seguimiento_modo = mode;
+      try {
+        const result = createBatch(
+          {
+            sessionId: b.session_id,
+            name: `Seguimiento de #${id} · ${FOLLOW_UP_LABEL[mode]}`.slice(0, 120),
+            items: targets.map((t) => ({ chat_id: t.chat_id, contact_name: t.contact_name, body_override: text || t.body })),
+            meta: newMeta,
+            scheduledAt,
+            allowResend: true,
+          },
+          runner,
+        );
+        audit('batch.followup', { from: id, to: result.batchId, mode, total: result.total, by: req.user!.id });
+        if (json) return res.json({ ok: true, batch_id: result.batchId, total: result.total });
+        res.redirect(`/batches/${result.batchId}`);
+      } catch (err) {
+        return fail(422, (err as Error).message);
+      }
     }),
   );
 
@@ -1446,7 +1512,7 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     const sessionBadge = sessionPhone
       ? `<span class="cl-session" title="Número de WhatsApp de esta cuenta"><span class="ri-whatsapp-line"></span> ${esc(sessionPhone)}</span>`
       : '';
-    return `<div class="inbox contact-hidden" id="inbox" data-active="${esc(activeChat)}" data-session="${esc(session?.id ?? '')}">
+    return `<div class="inbox contact-hidden" id="inbox" data-active="${esc(activeChat)}" data-session="${esc(session?.id ?? '')}" data-user="${user.id}">
       <button type="button" class="list-rail" id="list-rail" title="Mostrar conversaciones">
         <span class="ri-chat-smile-2-line"></span>
         <span class="rail-label">Chats</span>
@@ -1479,6 +1545,13 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
           <input type="search" id="chat-search" placeholder="Buscar nombre, número o programa…" autocomplete="off" />
           <button type="button" class="cl-clear" id="chat-clear" hidden aria-label="Limpiar"><span class="ri-close-line"></span></button>
         </label>
+        <div class="cl-state" id="chat-state" role="tablist" aria-label="Estado de la atención">
+          <button type="button" class="cl-st on" data-state="all">Todos</button>
+          <button type="button" class="cl-st" data-state="unanswered">Sin responder <b data-n="unanswered"></b></button>
+          <button type="button" class="cl-st" data-state="mine">Míos <b data-n="mine"></b></button>
+          <button type="button" class="cl-st" data-state="pending">En atención <b data-n="pending"></b></button>
+          <button type="button" class="cl-st" data-state="closed">Resueltos</button>
+        </div>
         <div class="chatlist-items" id="chatlist-items"></div>
       </aside>
       <section class="chat-col" id="chat-pane"></section>

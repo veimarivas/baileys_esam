@@ -2170,6 +2170,67 @@ Hasta ahora se sabía si un mensaje masivo **salía**, pero no si **llegaba, se 
 
 ---
 
+## 66. Notificaciones push en la app (Firebase) (2026-11-01)
+
+- `src/core/push.ts`: envío por FCM HTTP v1, sin dependencias nuevas (JWT RS256 con `node:crypto` y `fetch` nativo; el token OAuth se reutiliza). Se activa con `FCM_SERVICE_ACCOUNT` (ruta al JSON de la cuenta de servicio); sin esa variable no hace nada.
+- **Qué dispara un push:**
+  - todo aviso de la campana (`notification` del bus);
+  - cada mensaje entrante en un chat individual, a los usuarios de esa línea. Los del mismo chat se reemplazan (`tag`), van por el canal `mensajes` y no incluyen grupos ni historial.
+- **Teléfonos:**
+  - tabla `device_tokens`;
+  - `POST` y `DELETE /api/mobile/devices`;
+  - al cerrar sesión en la app se quita el token (`device_token` en `/api/mobile/logout`);
+  - los tokens que Firebase da por vencidos se borran solos.
+- **Configuración:** la guía para crear el proyecto y obtener los dos archivos está en `baileys_esam_app/FIREBASE.md`. Las claves están en `.gitignore`.
+- **Pruebas:** `test/push.test.ts` (3), con `fetch` simulado y una clave RSA generada en la prueba.
+
+## 67. Estado y responsable de las conversaciones (2026-11-01)
+
+- `src/core/conversation-state.ts`:
+  - estado `open` (Por atender), `pending` (En atención) y `closed` (Resuelto), con el responsable en `assigned_agent_id`;
+  - `POST /inbox/:session/:chat/state`;
+  - al asignar se avisa al responsable (`chat_assigned`, con push que abre el chat);
+  - un chat resuelto vuelve a «Por atender» cuando la persona escribe de nuevo.
+- **Panel:**
+  - filtros **Todos / Sin responder / Míos / En atención / Resueltos**, con cuentas, bajo la búsqueda;
+  - estado y responsable en cada fila;
+  - selectores de estado y responsable en la cabecera del chat.
+- **App:**
+  - los mismos filtros en Números y Grupos;
+  - estado y responsable en la fila y bajo el nombre del chat;
+  - hoja **Estado y responsable** en el chat.
+- **Pruebas:** `test/conversation-state.test.ts` (4).
+
+## 68. Resumen diario (2026-11-01)
+
+- `src/core/daily-digest.ts`: a las `DIGEST_TIME` (07:30, hora de Bolivia), una vez por día, por campana y push. Incluye:
+  - envíos de ayer, con su lectura y respuestas;
+  - respuestas a cobranzas (pagó, comprobante, plazo);
+  - tareas vencidas;
+  - chats esperando respuesta;
+  - líneas en amarillo o rojo con su motivo.
+- El Super Admin recibe el de todas las líneas; cada usuario, el de su línea y solo si hay novedades.
+- **Pruebas:** `test/daily-digest.test.ts` (3).
+
+## 69. Volver a escribir a quienes no leyeron (2026-11-01)
+
+- `followUpTargets` agrupa a los destinatarios de un lote en tres casos:
+  - **No leyeron:** tienen acuse de enviado o entregado y no respondieron;
+  - **No respondieron;**
+  - **Fallidos.**
+- `POST /batches/:id/followup` (HTML o JSON) crea un lote nuevo desde la misma línea:
+  - con el texto elegido, o el original si se deja vacío, y una hora opcional;
+  - conserva el tipo, el programa y quién lo pidió (`seguimiento_de` en el meta);
+  - pasa por `createBatch`, el semáforo y las protecciones anti-baneo de siempre.
+- **Panel:** tarjeta **Volver a escribir** en el detalle del lote. **App:** botón con el mismo formulario. Probado en la copia: creó el lote programado con los 7 que no leyeron (después se canceló).
+- **Pruebas:** `test/batch-followup.test.ts` (3).
+
+## 70. Notas de voz servidas con su tipo (2026-11-01)
+
+- `/inbox/notes/:id/audio` devuelve el tipo según la extensión: las notas grabadas en la app son m4a (AAC), y antes se servían siempre como `audio/ogg`.
+
+---
+
 ## Notas de operación
 
 - En producción usar `start-baileys.bat` / pm2 / systemd (no `npm run dev`).

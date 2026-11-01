@@ -111,6 +111,16 @@ export function migrate(): void {
   addColumnIfMissing('anti_ban_policies', 'optout_keywords', 'TEXT');
   // Línea en la que se originó la baja o el bloqueo (para la salud de cada sesión).
   addColumnIfMissing('optouts', 'session_id', 'TEXT');
+  // Teléfonos con la app móvil (token de Firebase) para las notificaciones push.
+  db.exec(`CREATE TABLE IF NOT EXISTS device_tokens (
+    token        TEXT PRIMARY KEY,
+    user_id      INTEGER NOT NULL,
+    platform     TEXT NOT NULL DEFAULT 'android',
+    created_at   TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+  )`);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_device_tokens_user ON device_tokens(user_id)');
   // Motivo y momento de la cuarentena (last_error lo pisa el siguiente error de la línea).
   addColumnIfMissing('session_health_metrics', 'quarantine_reason', 'TEXT');
   addColumnIfMissing('session_health_metrics', 'quarantine_at', 'TEXT');

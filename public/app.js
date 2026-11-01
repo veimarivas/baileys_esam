@@ -2295,6 +2295,8 @@
       line_issue: 'ri-git-merge-line',
       batch_paused: 'ri-pause-circle-line',
       batch_reply: 'ri-reply-line',
+      chat_assigned: 'ri-user-follow-line',
+      daily_digest: 'ri-sun-line',
     };
     function setBadge(n) {
       n = Number(n) || 0;
@@ -2546,6 +2548,9 @@
       selectedChat: '',
       search: '',
       tab: 'individual',
+      // Filtro de atención: all | unanswered | mine | pending | closed.
+      stateFilter: 'all',
+      assignees: null,
       quickReplies: [],
       replyTo: null,
       // Imagen pegada (captura) esperando confirmación; se envía con el texto del campo como pie de foto.
@@ -2589,6 +2594,7 @@
       search: root.querySelector('#chat-search'),
       clear: root.querySelector('#chat-clear'),
       tabs: root.querySelector('#chat-tabs'),
+      stateBar: root.querySelector('#chat-state'),
       pane: root.querySelector('#chat-pane'),
       contact: root.querySelector('#contact-pane'),
       rail: root.querySelector('#list-rail'),
@@ -2680,10 +2686,39 @@
         .catch(function () {});
     }
 
+    // Estado de la atención: Sin responder (el último mensaje es de la persona),
+    // Míos (soy responsable), En atención y Resueltos.
+    function matchState(c, f) {
+      f = f || state.stateFilter;
+      if (f === 'unanswered') return c.last_direction === 'in' && c.status !== 'closed';
+      if (f === 'mine') return !!c.assigned_agent && String(c.assigned_agent.id) === String(root.getAttribute('data-user') || '');
+      if (f === 'pending') return c.status === 'pending';
+      if (f === 'closed') return c.status === 'closed';
+      return true;
+    }
+
+    function renderStateBar() {
+      if (!els.stateBar) return;
+      var show = state.tab === 'individual' || state.tab === 'group';
+      els.stateBar.hidden = !show;
+      if (!show) return;
+      var inTab = state.conversations.filter(inActiveTab);
+      Array.prototype.forEach.call(els.stateBar.querySelectorAll('.cl-st'), function (b) {
+        var f = b.getAttribute('data-state');
+        b.classList.toggle('on', f === state.stateFilter);
+        var n = b.querySelector('[data-n]');
+        if (n) {
+          var count = inTab.filter(function (c) { return matchState(c, f); }).length;
+          n.textContent = count ? String(count) : '';
+        }
+      });
+    }
+
     function filteredConversations() {
       var s = state.search.trim().toLowerCase();
       return state.conversations.filter(function (c) {
         if (!inActiveTab(c)) return false;
+        if ((state.tab === 'individual' || state.tab === 'group') && !matchState(c)) return false;
         if (!s) return true;
         var name = (c.contact && c.contact.name) || '';
         var phone = (c.contact && c.contact.phone) || '';
@@ -3002,6 +3037,7 @@
 
     function renderList() {
       if (!els.list) return;
+      renderStateBar();
       renderListSummary();
       if (state.tab === 'team') { els.list.innerHTML = ''; renderTeamList(); return; }
       if (state.tab === 'contacts') { renderDirectoryList(); return; }
@@ -3073,6 +3109,12 @@
         meta += '<span class="convo-number is-hidden" title="WhatsApp no comparte el número de esta persona. Podés responderle igual y registrar su nombre en la ficha.">' +
           '<span class="ri-eye-off-line" aria-hidden="true"></span>Número oculto</span>';
       }
+      // Estado y responsable al frente de la fila (Por atender no se marca: es lo normal).
+      var stateHtml = '';
+      if (c.status === 'pending') stateHtml += '<span class="convo-state is-pending">En atención</span>';
+      if (c.status === 'closed') stateHtml += '<span class="convo-state is-closed">Resuelto</span>';
+      if (c.assigned_agent) stateHtml += '<span class="convo-agent" title="Responsable"><span class="ri-user-follow-line" aria-hidden="true"></span>' + escapeHtml(c.assigned_agent.name || 'Asignado') + '</span>';
+      meta = stateHtml + meta;
       var outbound = c.last_direction === 'out' && c.last_message_text;
       el.innerHTML =
         avatarHtml(name, 'avatar-sm', convoPhoto(c), isGroup ? 'is-group' : '') +
@@ -3779,10 +3821,53 @@
           '<div id="chat-meta" class="chat-meta">' + chatMetaHtml(c) + '</div>' +
         '</div>' +
         '<div class="chat-actions">' +
+          (isGroup || !c.id ? '' : chatStateHtml(c)) +
           '<button type="button" class="btn btn-icon btn-soft-secondary" id="toggle-search" title="Buscar en la conversación (Ctrl+F)" aria-label="Buscar en la conversación"><span class="ri-search-line"></span></button>' +
           '<button type="button" class="btn btn-soft-primary btn-sm" id="sync-history" title="Sincronizar historial"><span class="ri-refresh-line"></span><span class="d-none d-md-inline ms-1">Sincronizar</span></button>' +
           '<button type="button" class="btn btn-icon btn-soft-secondary" id="toggle-contact" title="Ficha del contacto" aria-label="Abrir la ficha del contacto"><span class="ri-user-line"></span></button>' +
         '</div></div>';
+    }
+
+    // Estado de la atención y responsable del chat abierto.
+    function chatStateHtml(c) {
+      var st = c.status || 'open';
+      var opt = function (v, l) { return '<option value="' + v + '"' + (st === v ? ' selected' : '') + '>' + l + '</option>'; };
+      var agent = c.assigned_agent;
+      return '<div class="chat-state-ctl">' +
+        '<select id="chat-status" class="form-select form-select-sm" aria-label="Estado de la atención" title="Estado de la atención">' +
+          opt('open', 'Por atender') + opt('pending', 'En atención') + opt('closed', 'Resuelto') + '</select>' +
+        '<select id="chat-assign" class="form-select form-select-sm" aria-label="Responsable" title="Responsable">' +
+          '<option value="">Sin responsable</option>' +
+          (agent ? '<option value="' + agent.id + '" selected>' + escapeHtml(agent.name || 'Asignado') + '</option>' : '') +
+        '</select></div>';
+    }
+
+    function fillAssignees(select, current) {
+      var apply = function (list) {
+        select.innerHTML = '<option value="">Sin responsable</option>' + list.map(function (u) {
+          return '<option value="' + u.id + '"' + (String(u.id) === String(current || '') ? ' selected' : '') + '>' +
+            escapeHtml(u.name + (u.area ? ' · ' + u.area : '')) + '</option>';
+        }).join('');
+      };
+      if (state.assignees) { apply(state.assignees); return; }
+      jsonApi('/notes/assignees').then(function (d) {
+        state.assignees = (d && d.users) || [];
+        apply(state.assignees);
+      }).catch(function () {});
+    }
+
+    function saveChatState(c, body) {
+      return jsonApi('/inbox/' + encodeURIComponent(c.session_id) + '/' + encodeURIComponent(c.chat_id) + '/state', 'POST', body)
+        .then(function (d) {
+          state.conversations.forEach(function (x) {
+            if (x.session_id === c.session_id && x.chat_id === c.chat_id) { x.status = d.status; x.assigned_agent = d.assigned_agent; }
+          });
+          c.status = d.status;
+          c.assigned_agent = d.assigned_agent;
+          renderList();
+          toast(body.status ? 'Estado actualizado.' : (d.assigned_agent ? 'Responsable: ' + (d.assigned_agent.name || '') : 'Sin responsable.'));
+        })
+        .catch(function (e) { toast(e.message, true); });
     }
 
     function composerHtml() {
@@ -3817,6 +3902,13 @@
     }
 
     function bindPane(c) {
+      var stSel = els.pane.querySelector('#chat-status');
+      if (stSel) stSel.addEventListener('change', function () { saveChatState(c, { status: stSel.value }); });
+      var asSel = els.pane.querySelector('#chat-assign');
+      if (asSel) {
+        asSel.addEventListener('focus', function () { fillAssignees(asSel, c.assigned_agent && c.assigned_agent.id); }, { once: true });
+        asSel.addEventListener('change', function () { saveChatState(c, { assigned_to: asSel.value ? Number(asSel.value) : null }); });
+      }
       var syncBtn = els.pane.querySelector('#sync-history');
       if (syncBtn) syncBtn.addEventListener('click', function () {
         syncBtn.disabled = true;
@@ -5373,6 +5465,16 @@
           var nmEl = btn.querySelector('.member-name');
           var person = rows.filter(function (p) { return String(p.id) === String(jid); })[0] || null;
           if (jid) openContactChat(jid, nmEl ? nmEl.textContent : null, person);
+        });
+      });
+    }
+
+    /* ── Filtro de atención (Sin responder / Míos / En atención / Resueltos) ── */
+    if (els.stateBar) {
+      Array.prototype.forEach.call(els.stateBar.querySelectorAll('.cl-st'), function (btn) {
+        btn.addEventListener('click', function () {
+          state.stateFilter = btn.getAttribute('data-state') || 'all';
+          renderList();
         });
       });
     }

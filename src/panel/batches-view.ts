@@ -370,10 +370,35 @@ function engagementCard(sum: EngagementSummary, cobranza: boolean): string {
   </div>`;
 }
 
+/** «Volver a escribir»: lote nuevo a quienes no leyeron, no respondieron o fallaron. */
+function followUpCard(id: number, n: { unread: number; unreplied: number; failed: number }, sample: string): string {
+  if (!n.unread && !n.unreplied && !n.failed) return '';
+  const opt = (v: string, label: string, count: number, first: boolean) =>
+    count ? `<option value="${v}"${first ? ' selected' : ''}>${esc(label)} (${count})</option>` : '';
+  const first = n.unread ? 'unread' : n.unreplied ? 'unreplied' : 'failed';
+  return `<details class="bd-card bd-followup">
+    <summary class="bd-card-h"><span class="ri-repeat-line" aria-hidden="true"></span><h6>Volver a escribir</h6>
+      <span class="bd-pill">${n.unread ? `${n.unread} no leyeron` : n.unreplied ? `${n.unreplied} sin respuesta` : `${n.failed} fallidos`}</span></summary>
+    <form method="post" action="/batches/${id}/followup" class="bd-fu-form js-once">
+      <p class="bd-eng-note">Crea un envío nuevo desde la misma línea, con el mismo ritmo y las mismas protecciones del anti-baneo
+        (puede omitir a quien recibió otro masivo hace poco o pidió la baja). Mejor con otro texto y en otro horario.</p>
+      <div class="bd-fu-row">
+        <label>A quiénes<select name="mode" class="form-select form-select-sm">
+          ${opt('unread', 'No leyeron', n.unread, first === 'unread')}${opt('unreplied', 'No respondieron', n.unreplied, first === 'unreplied')}${opt('failed', 'No se les pudo enviar', n.failed, first === 'failed')}
+        </select></label>
+        <label>Cuándo<input type="datetime-local" name="scheduled_at" class="form-control form-control-sm" /></label>
+      </div>
+      <label class="bd-fu-text">Mensaje (vacío = el mismo de cada destinatario)
+        <textarea name="body" rows="4" class="form-control form-control-sm" placeholder="${esc(sample.slice(0, 300))}"></textarea></label>
+      <button type="submit" class="btn btn-primary btn-sm"><i class="ri-send-plane-2-line me-1"></i>Crear envío de seguimiento</button>
+    </form>
+  </details>`;
+}
+
 export function batchDetailPage(
   b: BatchDetailRow,
   items: BatchItemRow[],
-  extra: { truncated: boolean; engagement?: Map<number, ItemEngagement> },
+  extra: { truncated: boolean; engagement?: Map<number, ItemEngagement>; error?: string },
 ): string {
   const eng = extra.engagement ?? new Map<number, ItemEngagement>();
   const meta = safeMeta(b.meta);
@@ -552,7 +577,9 @@ export function batchDetailPage(
       </form>
     </div>
 
+    ${extra.error ? `<div class="alert alert-danger d-flex gap-2"><i class="ri-error-warning-line"></i><div>${esc(extra.error)}</div></div>` : ''}
     ${engagementCard(summary, cobranza)}
+    ${followUpCard(b.id, { unread: counts.unread ?? 0, unreplied: Math.max(0, summary.sent - summary.replied), failed: b.failed }, items.find((i) => i.body)?.body ?? '')}
 
     <div class="bd-grid">
       ${ficha}

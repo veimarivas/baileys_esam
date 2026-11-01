@@ -29,7 +29,11 @@ export type NotificationKind =
   /** El anti-baneo pausó un lote (cuarentena, bloqueos, entregabilidad baja…). */
   | 'batch_paused'
   /** Alguien respondió a una cobranza («ya pagué», comprobante, «no puedo pagar»). */
-  | 'batch_reply';
+  | 'batch_reply'
+  /** Te asignaron una conversación para atender. */
+  | 'chat_assigned'
+  /** Resumen diario de la mañana (envíos de ayer, cobranzas, tareas, chats, líneas). */
+  | 'daily_digest';
 
 export interface NotificationRow {
   id: number;

@@ -38,3 +38,7 @@ skills-lock.json
 .idea/
 Thumbs.db
 .DS_Store
+
+# Claves de Firebase (push): nunca al repositorio
+*service-account*.json
+fcm-*.json

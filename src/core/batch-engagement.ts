@@ -213,3 +213,34 @@ function safeMeta(raw: string | null): Record<string, any> {
     return {};
   }
 }
+
+export type FollowUpMode = 'unread' | 'unreplied' | 'failed';
+
+export const FOLLOW_UP_LABEL: Record<FollowUpMode, string> = {
+  unread: 'No leyeron',
+  unreplied: 'No respondieron',
+  failed: 'No se les pudo enviar',
+};
+
+/**
+ * Destinatarios de un lote para volver a escribirles: quienes no leyeron (con
+ * acuse conocido y sin respuesta), quienes no respondieron, o los fallidos.
+ */
+export function followUpTargets(batchId: number, mode: FollowUpMode): Array<{ chat_id: string; contact_name: string | null; body: string | null }> {
+  const items = all<{ id: number; chat_id: string; contact_name: string | null; body: string | null; status: string }>(
+    'SELECT id, chat_id, contact_name, body, status FROM batch_items WHERE batch_id = ? ORDER BY id',
+    batchId,
+  );
+  const eng = batchEngagement(batchId);
+  const seen = new Set<string>();
+  return items
+    .filter((it) => {
+      const e = eng.get(it.id);
+      if (mode === 'failed') return it.status === 'failed';
+      if (it.status !== 'sent' || !e) return false;
+      if (mode === 'unreplied') return !e.reply;
+      return !e.reply && (e.ack === 'sent' || e.ack === 'delivered');
+    })
+    .filter((it) => (seen.has(it.chat_id) ? false : (seen.add(it.chat_id), true)))
+    .map((it) => ({ chat_id: it.chat_id, contact_name: it.contact_name, body: it.body }));
+}

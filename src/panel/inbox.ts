@@ -39,6 +39,7 @@ import {
 import * as noteTags from '../core/note-tags.js';
 import { personTagsByKeys, phoneKeyOf, setPersonName } from '../core/person.js';
 import { personSends } from '../core/person-sends.js';
+import { setConversationState, type ConversationStatus, type StateChange } from '../core/conversation-state.js';
 import * as directory from '../core/directory.js';
 import { teamMembers, teamTagFor } from '../core/team.js';
 import { listNotifications, markNoteRead, markRead, notify, supervisorIds, unreadCount, type NotificationKind } from '../core/notifications.js';
@@ -653,6 +654,27 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
 
   // Envíos del sistema a la persona (cobranzas, notas, asistencias, avisos del
   // programa): quién los pidió, desde qué línea y si los recibió.
+  // Estado (Por atender / En atención / Resuelto) y responsable del chat.
+  app.post(
+    '/inbox/:session/:chat/state',
+    ...auth,
+    ah((req, res) => {
+      const resolved = resolveAuthorized(req, res, String(req.params.session), String(req.params.chat));
+      if (!resolved) return;
+      const body = (req.body ?? {}) as { status?: string; assigned_to?: number | string | null };
+      const change: StateChange = {};
+      if (body.status !== undefined) change.status = String(body.status) as ConversationStatus;
+      if (body.assigned_to !== undefined) change.assignedTo = body.assigned_to === null || body.assigned_to === '' ? null : Number(body.assigned_to);
+      try {
+        const state = setConversationState(resolved.session.id, resolved.chatId, change, { id: req.user!.id, name: req.user!.name ?? req.user!.username });
+        if (!state) return res.status(404).json({ error: 'La conversación todavía no existe: escribí el primer mensaje.' });
+        res.json({ ok: true, ...state });
+      } catch (err) {
+        res.status(422).json({ error: (err as Error).message });
+      }
+    }),
+  );
+
   app.get(
     '/inbox/:session/:chat/sends',
     ...auth,
@@ -1387,7 +1409,10 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       const note = accessibleNote(req, res, { allowDeleted: true });
       if (!note) return;
       if (!note.audio_path || !fs.existsSync(note.audio_path)) return res.status(404).end();
-      res.sendFile(path.resolve(note.audio_path), { headers: { 'Content-Type': 'audio/ogg' } });
+      // El tipo según la extensión: las notas grabadas en la app móvil son m4a (AAC).
+      const ext = path.extname(note.audio_path).toLowerCase();
+      const type = ({ '.m4a': 'audio/mp4', '.mp4': 'audio/mp4', '.aac': 'audio/aac', '.webm': 'audio/webm', '.mp3': 'audio/mpeg', '.wav': 'audio/wav' } as Record<string, string>)[ext] ?? 'audio/ogg';
+      res.sendFile(path.resolve(note.audio_path), { headers: { 'Content-Type': type } });
     }),
   );
 

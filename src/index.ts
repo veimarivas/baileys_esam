@@ -1,5 +1,9 @@
 import { startLineHealthWorker } from './core/line-health.js';
 import { startReplyFollowupWorker } from './core/reply-followup.js';
+import { startPushWorker } from './core/push.js';
+import { startConversationStateWorker } from './core/conversation-state.js';
+import { startDailyDigestWorker } from './core/daily-digest.js';
+import { listUsers } from './auth/users.js';
 import { config } from './config.js';
 import { logger } from './logger.js';
 import { migrate } from './db/index.js';
@@ -86,6 +90,9 @@ async function main(): Promise<void> {
   startNoteReminderWorker();
   startLineHealthWorker();
   startReplyFollowupWorker();
+  startPushWorker();
+  startConversationStateWorker();
+  startDailyDigestWorker(listUsers);
   setInterval(() => {
     try {
       pruneCooldownsImpl();

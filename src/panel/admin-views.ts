@@ -496,6 +496,7 @@ function templateCard(t: TemplateRow, editingId: number): string {
           ${t.active ? '<span class="ab-pill ab-ok">Activa</span>' : '<span class="ab-pill ab-mute">Inactiva</span>'}
           <span class="adm-sub">Editada ${esc(relTime(t.updated_at))}</span></div>
       </div>
+      <a class="btn btn-sm btn-soft-primary tpl-card-edit" href="${templatesUrl({ id: t.id })}#tpl-editor" title="Editar mensaje" aria-label="Editar el mensaje de ${esc(t.name)}"><i class="ri-pencil-line"></i></a>
     </header>
     <div class="tpl-bubble">${waPreview(t.body)}</div>
     <div class="tpl-card-info">
@@ -504,7 +505,7 @@ function templateCard(t: TemplateRow, editingId: number): string {
       <span><i class="ri-text"></i>${t.body.length} caracteres</span>
     </div>
     <footer class="tpl-card-actions">
-      <a class="btn btn-sm btn-soft-primary" href="${templatesUrl({ id: t.id })}#tpl-editor"><i class="ri-pencil-line me-1"></i>Editar</a>
+      <a class="btn btn-sm btn-soft-primary" href="${templatesUrl({ id: t.id })}#tpl-editor"><i class="ri-pencil-line me-1"></i>Editar mensaje</a>
       <form method="post" action="/templates/${t.id}/duplicate"><button class="btn btn-sm btn-light" type="submit"><i class="ri-file-copy-line me-1"></i>Duplicar</button></form>
       <form method="post" action="/templates/${t.id}/toggle" ${t.active ? `data-confirm="¿Desactivar «${esc(t.name)}»? Los envíos dejarán de usarla."` : ''}>
         <button class="btn btn-sm btn-light" type="submit">${t.active ? '<i class="ri-pause-line me-1"></i>Desactivar' : '<i class="ri-play-line me-1"></i>Activar'}</button></form>

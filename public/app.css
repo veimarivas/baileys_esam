@@ -4259,6 +4259,8 @@ html:has(.ab-page), body:has(.ab-page) { overflow-x: clip; }
 .tpl-card.is-off { background: var(--esam-surface-2); }
 .tpl-card.is-off .tpl-bubble { opacity: 0.65; }
 .tpl-card.is-editing { border-color: var(--ab-brand); box-shadow: 0 0 0 1px var(--ab-brand) inset; }
+.tpl-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.6rem; }
+.tpl-card-edit { flex: 0 0 auto; padding: 0.28rem 0.5rem; }
 .tpl-card-name { font-weight: 700; color: var(--esam-ink); }
 .tpl-id { font-size: 0.7rem; font-weight: 600; color: var(--esam-muted); font-variant-numeric: tabular-nums; }
 .tpl-card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; margin-top: 0.25rem; }

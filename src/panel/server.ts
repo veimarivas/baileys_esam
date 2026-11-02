@@ -625,7 +625,7 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
            })))}`
         : '';
       const gatewayCard = `<details class="cx-tech card"><summary class="card-body"><i class="ri-server-line"></i> Datos técnicos del gateway</summary><div class="card-body pt-0">${kvList([
-          ['Motor', '<span class="badge bg-success-subtle text-success">Baileys · sin Chromium</span>'],
+          ['Aplicación', '<span class="badge bg-success-subtle text-success">Seguimiento ESAM</span>'],
           ['Gateway', `<span class="ff-monospace">http://${esc(config.host)}:${config.port}</span>`],
           ['API v1', `<span class="ff-monospace">http://${esc(config.host)}:${config.apiPort}/api/v1</span>`],
           ['Panel', `<span class="ff-monospace">http://${esc(config.host)}:${config.panelPort}</span>`],

@@ -230,8 +230,8 @@ export function renderLayout(
       <div class="navbar-header">
         <div class="d-flex">
           <div class="navbar-brand-box horizontal-logo">
-            <a href="/" class="logo logo-dark"><span class="logo-lg"><b>baileys_esam</b></span></a>
-            <a href="/" class="logo logo-light"><span class="logo-lg"><b>baileys_esam</b></span></a>
+            <a href="/" class="logo logo-dark"><span class="logo-lg"><b>Seguimiento ESAM</b></span></a>
+            <a href="/" class="logo logo-light"><span class="logo-lg"><b>Seguimiento ESAM</b></span></a>
           </div>
           <button type="button" class="btn btn-sm px-3 fs-16 header-item vertical-menu-btn topnav-hamburger material-shadow-none" id="topnav-hamburger-icon">
             <span class="hamburger-icon"><span></span><span></span><span></span></span>
@@ -317,8 +317,6 @@ export function renderLayout(
           <div class="footer-brand">
             <span class="footer-mark"><i class="ri-whatsapp-line"></i></span>
             <span class="footer-name">Seguimiento ESAM</span>
-            <span class="footer-sep" aria-hidden="true"></span>
-            <span class="footer-note">Gateway Baileys · sin Chromium</span>
           </div>
           <div class="footer-meta">
             <span class="footer-copy">© ${new Date().getFullYear()} Seguimiento ESAM</span>
@@ -346,10 +344,10 @@ export function renderLogin(error?: string): string {
   <section class="auth-brand">
     <div class="auth-logo"><i class="ri-whatsapp-line"></i><span>Seguimiento ESAM</span></div>
     <h1>Mensajería institucional, en un solo lugar</h1>
-    <p>Gateway de WhatsApp sobre Baileys: envíos por lotes, plantillas, auto-respuestas y monitoreo en tiempo real, sin Chromium.</p>
+    <p>Envíos por lotes, plantillas, auto-respuestas y monitoreo en tiempo real para la mensajería institucional.</p>
     <ul class="auth-points">
       <li><i class="ri-shield-check-line"></i> Ritmo anti-baneo con ventanas de envío</li>
-      <li><i class="ri-flashlight-line"></i> Liviano y estable, sin navegador headless</li>
+      <li><i class="ri-flashlight-line"></i> Liviano y estable</li>
       <li><i class="ri-line-chart-line"></i> Reportes, auditoría y control de opt-out</li>
     </ul>
     <svg class="auth-pattern" viewBox="0 0 300 300" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -387,7 +385,7 @@ export function renderLogin(error?: string): string {
           <button class="btn btn-primary w-100" type="submit">Ingresar <i class="ri-arrow-right-line ms-1"></i></button>
         </div>
       </form>
-      <p class="auth-hint">© ${new Date().getFullYear()} Seguimiento ESAM · Gateway Baileys</p>
+      <p class="auth-hint">© ${new Date().getFullYear()} Seguimiento ESAM</p>
     </div>
   </section>
 </main>

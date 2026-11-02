@@ -144,7 +144,30 @@ export function isLastActiveOfCategory(id: number): boolean {
   return (others?.c ?? 0) === 0;
 }
 
-const COBRANZA_BODY = `Sr(a). *{{ nombre_completo }}*, participante del programa *{{ programa }}* ({{ programa_codigo }}).
+const COBRANZA_BODY = `Hola, *{{ nombre_completo }}* 👋
+
+Le escribimos de *{{ programa }}* ({{ programa_codigo }}) para recordarle sus cuotas *{{ situacion }}*.
+
+📋 *Detalle de cuotas*
+{{ detalle_cuotas }}
+
+💰 *Total adeudado: Bs {{ total_adeudado }}*
+
+🙏 {{ cierre }}`;
+
+const ACADEMICO_BODY = `Hola, *{{ nombre_completo }}* 🎓
+
+Le compartimos el resultado del módulo *{{ modulo }}* del programa *{{ programa }}*.
+
+📊 *Nota final: {{ nota }}*
+📌 *Estado: {{ estado }}*
+
+{{ nivelacion }}
+
+Quedamos atentos a cualquier consulta. 🙌`;
+
+/** Cuerpos anteriores: solo se reemplazan si nadie los editó. */
+const LEGACY_COBRANZA_BODY = `Sr(a). *{{ nombre_completo }}*, participante del programa *{{ programa }}* ({{ programa_codigo }}).
 
 Le informamos que mantiene cuotas *{{ situacion }}*:
 
@@ -154,17 +177,34 @@ Le informamos que mantiene cuotas *{{ situacion }}*:
 
 {{ cierre }}`;
 
-const ACADEMICO_BODY = `Sr(a). *{{ nombre_completo }}*, participante del programa *{{ programa }}*.
+const LEGACY_ACADEMICO_BODY = `Sr(a). *{{ nombre_completo }}*, participante del programa *{{ programa }}*.
 
 En el módulo *{{ modulo }}* su nota final es *{{ nota }}* ({{ estado }}).
 {{ nivelacion }}
 
 Saludos cordiales.`;
 
-/** Crea las plantillas por defecto si la tabla está vacía. */
+/**
+ * Crea las plantillas por defecto si la tabla está vacía y actualiza las que
+ * todavía conservan el texto original (sin pisar las que editó el equipo).
+ */
 export function seedDefaultTemplates(): void {
   const row = get<{ c: number }>('SELECT COUNT(*) AS c FROM templates');
-  if ((row?.c ?? 0) > 0) return;
-  createTemplate('Cobranza', 'cobranza', COBRANZA_BODY);
-  createTemplate('Académico', 'academico', ACADEMICO_BODY);
+  if ((row?.c ?? 0) === 0) {
+    createTemplate('Cobranza', 'cobranza', COBRANZA_BODY);
+    createTemplate('Académico', 'academico', ACADEMICO_BODY);
+    return;
+  }
+  const defaults: Array<[string, string, string]> = [
+    ['cobranza', LEGACY_COBRANZA_BODY, COBRANZA_BODY],
+    ['academico', LEGACY_ACADEMICO_BODY, ACADEMICO_BODY],
+  ];
+  for (const [category, oldBody, newBody] of defaults) {
+    const current = get<{ id: number; name: string }>(
+      'SELECT id, name FROM templates WHERE category = ? AND body = ? LIMIT 1',
+      category,
+      oldBody,
+    );
+    if (current) updateTemplate(current.id, current.name, category, newBody);
+  }
 }

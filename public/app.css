@@ -671,18 +671,44 @@ b, strong { font-weight: 600; }
    ============================================================================= */
 html, body { overflow-x: hidden; }
 body { min-width: 0; }
-#layout-wrapper { width: 100%; max-width: 100%; padding-left: 0; }
+/* El shell ocupa siempre el alto del viewport: el contenido crece y el footer
+   queda pegado al borde inferior aunque la página tenga poco contenido. */
+#layout-wrapper {
+  width: 100%;
+  max-width: 100%;
+  padding-left: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
 .main-content {
   background: var(--esam-canvas);
   min-width: 0;
   display: flex;
   flex-direction: column;
-  min-height: calc(100vh - 64px);
+  flex: 1 0 auto;
+  min-height: 100vh;
 }
 .main-content > .page-content { flex: 1 0 auto; }
+.main-content > .footer { margin-top: auto; flex-shrink: 0; }
 .container-fluid { min-width: 0; }
 /* Padding inferior justo para no dejar hueco grande antes del footer. */
 .page-content { padding-bottom: 0.4rem; }
+
+/* Al colapsar el menú, Velzon aplica `min-height: 1400px` al documento y pasa
+   el menú a posición absoluta; eso estiraba la página al pulsar la hamburguesa.
+   Limitamos el alto al viewport y mantenemos el menú colapsado fijo. */
+@media (min-width: 768px) {
+  html[data-layout="vertical"][data-sidebar-size="sm"] { min-height: 100vh; }
+  html[data-layout="vertical"][data-sidebar-size="sm"] .app-menu.navbar-menu {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    height: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+}
 
 /* Ítem activo del menú lateral (más claro y amigable) */
 .app-menu .navbar-nav .nav-link.menu-link { position: relative; border-radius: 10px; }

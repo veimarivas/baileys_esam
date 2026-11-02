@@ -28,9 +28,8 @@ plantillas y un panel web de operación.
   - Acceso por **SSO de cronogramas** o admin local; cada usuario ve solo las
     conversaciones de su número.
 - **Operación segura**: instancia única (bloqueo sobre las credenciales),
-  `npm run restart` que solo reinicia si compila, versión visible en el panel,
-  **respaldo diario** automático, retención de media y cola de reintentos de
-  webhooks.
+  versión visible en el panel, **respaldo diario** automático, retención de media
+  y cola de reintentos de webhooks.
 
 ## Licencia y terceros
 

@@ -1,7 +1,17 @@
 import './helpers/temp-env.js';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { alertSessionDown, listNotifications, markRead, notificationCategory, notify, unreadCount, unreadCounts } from '../src/core/notifications.js';
+import {
+  alertSessionDown,
+  listNotificationHistory,
+  listNotifications,
+  markRead,
+  notificationCategory,
+  notificationCounts,
+  notify,
+  unreadCount,
+  unreadCounts,
+} from '../src/core/notifications.js';
 import { upsertUser } from '../src/auth/users.js';
 import { get, run } from '../src/db/index.js';
 import { nowIso } from '../src/util/async.js';
@@ -158,5 +168,34 @@ describe('divisiones de la campana', () => {
 
     assert.deepEqual(unreadCounts(user.id), { all: 5, notes: 1, whatsapp: 1, batches: 1, chats: 1, system: 1 });
     assert.equal(unreadCount(user.id), 5);
+  });
+
+  it('la campana lista solo las pendientes', () => {
+    assert.equal(listNotifications(user.id, 50, 'all', true).length, 5);
+    assert.ok(listNotifications(user.id, 50, 'all', true).every((n) => !n.read_at));
+    assert.equal(listNotifications(user.id, 50, 'notes', true).length, 1);
+  });
+
+  it('el historial incluye leídas y pagina los resultados', () => {
+    const page1 = listNotificationHistory(user.id, { page: 1, pageSize: 4 });
+    assert.equal(page1.total, 6);
+    assert.equal(page1.items.length, 4);
+    assert.equal(page1.pages, 2);
+
+    const page2 = listNotificationHistory(user.id, { page: 2, pageSize: 4 });
+    assert.equal(page2.items.length, 2);
+
+    const leidas = listNotificationHistory(user.id, { state: 'read' });
+    assert.equal(leidas.total, 1);
+    assert.equal(leidas.items[0].category, 'notes');
+
+    const notasPendientes = listNotificationHistory(user.id, { category: 'notes', state: 'unread' });
+    assert.equal(notasPendientes.total, 1);
+  });
+
+  it('cuenta todos, leídos y no leídos por división', () => {
+    assert.deepEqual(notificationCounts(user.id, 'all'), { all: 6, notes: 2, whatsapp: 1, batches: 1, chats: 1, system: 1 });
+    assert.deepEqual(notificationCounts(user.id, 'read'), { all: 1, notes: 1, whatsapp: 0, batches: 0, chats: 0, system: 0 });
+    assert.deepEqual(notificationCounts(user.id, 'unread'), unreadCounts(user.id));
   });
 });

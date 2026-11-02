@@ -2344,19 +2344,31 @@
       if (next[cat] !== undefined) next[cat] = Math.max(0, (Number(next[cat]) || 0) - 1);
       setCounts(next);
     }
+    function emptyHtml() {
+      return '<div class="notif-empty"><span class="ri-notification-off-line"></span>' + (EMPTY[currentCat] || EMPTY.all) + '</div>';
+    }
     function go(item, el) {
       var done = function () { if (item.link) location.href = item.link; };
       if (item.read_at) { done(); return; }
       item.read_at = new Date().toISOString();
-      if (el) el.classList.remove('unread');
+      // La campana solo muestra pendientes: al leerla, desaparece de la lista.
+      if (el && el.parentElement) {
+        var parent = el.parentElement;
+        el.remove();
+        if (!parent.querySelector('.notif-item')) parent.innerHTML = emptyHtml();
+      }
       decrementLocal(item.category || 'all');
       jsonApi('/notifications/read', 'POST', { ids: [item.id] })
-        .then(function (r) { setCounts(r.counts); if (!r.counts) setBadge(r.unread); done(); })
+        .then(function (r) {
+          if (r.counts) setCounts(r.counts); else setBadge(r.unread);
+          if (!item.link) load();
+          done();
+        })
         .catch(function () { if (!item.link) load(); done(); });
     }
     function render(items) {
       if (!items.length) {
-        list.innerHTML = '<div class="notif-empty"><span class="ri-notification-off-line"></span>' + (EMPTY[currentCat] || EMPTY.all) + '</div>';
+        list.innerHTML = emptyHtml();
         return;
       }
       list.innerHTML = items.map(function (it, i) {

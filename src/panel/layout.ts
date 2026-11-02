@@ -186,6 +186,7 @@ function notificationsBell(user: UserRow): string {
       <div class="notif-head"><b>Notificaciones</b><button type="button" class="notif-readall" id="notif-readall">Marcar todas como leídas</button></div>
       <div class="notif-tabs" id="notif-tabs" role="tablist" aria-label="Filtrar notificaciones">${tabs}</div>
       <div class="notif-list" id="notif-list" role="tabpanel"><div class="notif-empty">Cargando…</div></div>
+      <div class="notif-foot"><a class="notif-history-link" href="/notifications/history"><i class="ri-history-line"></i> Ver historial completo</a></div>
     </div>
   </div>`;
 }

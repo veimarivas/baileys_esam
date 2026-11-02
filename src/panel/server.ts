@@ -64,6 +64,7 @@ import { scheduleBatch } from '../core/scheduler.js';
 import { registerAntiBanRoutes } from './anti-ban.js';
 import { registerAdminRoutes } from './admin-views.js';
 import { registerInboxRoutes } from './inbox.js';
+import { registerNotificationRoutes } from './notifications-view.js';
 import type { SessionRow } from '../types.js';
 
 function ah(fn: (req: Request, res: Response) => Promise<unknown>) {
@@ -1993,6 +1994,9 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
       );
     }),
   );
+
+  // /notifications/history: historial completo de la campana.
+  registerNotificationRoutes(app, { requireUser });
 
   // /audit, /users y /templates: admin-views.ts
   registerAdminRoutes(app, { requireUser, requireSection, sessions: () => manager.list() });

@@ -65,11 +65,21 @@ export function isNotificationCategory(value: string): value is NotificationCate
   return (NOTIFICATION_CATEGORIES as string[]).includes(value);
 }
 
-/** Totales sin leer por división y total general. */
+/** Totales por división y total general. */
 export type NotificationCounts = Record<NotificationCategory | 'all', number>;
 
 export function emptyNotificationCounts(): NotificationCounts {
   return { all: 0, notes: 0, whatsapp: 0, batches: 0, chats: 0, system: 0 };
+}
+
+/** Estado por el que se filtra el historial. */
+export type NotificationReadState = 'all' | 'unread' | 'read';
+
+export interface NotificationHistoryOptions {
+  category?: NotificationCategory | 'all';
+  state?: NotificationReadState;
+  page?: number;
+  pageSize?: number;
 }
 
 export interface NotificationRow {
@@ -104,13 +114,15 @@ export function unreadCount(userId: number): number {
 }
 
 /**
- * No leídas por división. Se calcula agrupando por `kind` para que la campana
- * pueda mostrar el contador de cada pestaña sin una consulta por categoría.
+ * Avisos por división, filtrando por estado de lectura. Se calcula agrupando
+ * por `kind` para que la campana y el historial no hagan una consulta por
+ * categoría.
  */
-export function unreadCounts(userId: number): NotificationCounts {
+export function notificationCounts(userId: number, state: NotificationReadState = 'all'): NotificationCounts {
   const counts = emptyNotificationCounts();
+  const filter = state === 'unread' ? ' AND read_at IS NULL' : state === 'read' ? ' AND read_at IS NOT NULL' : '';
   const rows = all<{ kind: NotificationKind; c: number }>(
-    'SELECT kind, COUNT(*) AS c FROM notifications WHERE user_id = ? AND read_at IS NULL GROUP BY kind',
+    `SELECT kind, COUNT(*) AS c FROM notifications WHERE user_id = ?${filter} GROUP BY kind`,
     userId,
   );
   for (const row of rows) {
@@ -118,6 +130,11 @@ export function unreadCounts(userId: number): NotificationCounts {
     counts.all += row.c;
   }
   return counts;
+}
+
+/** No leídas por división (lo que muestra la campana). */
+export function unreadCounts(userId: number): NotificationCounts {
+  return notificationCounts(userId, 'unread');
 }
 
 /**
@@ -198,9 +215,11 @@ export function listNotifications(
   userId: number,
   limit = 30,
   category: NotificationCategory | 'all' = 'all',
+  unreadOnly = false,
 ): NotificationItem[] {
   const kinds = category === 'all' ? null : CATEGORY_KINDS[category];
-  const filter = kinds ? ` AND n.kind IN (${kinds.map(() => '?').join(',')})` : '';
+  let filter = kinds ? ` AND n.kind IN (${kinds.map(() => '?').join(',')})` : '';
+  if (unreadOnly) filter += ' AND n.read_at IS NULL';
   const rows = all<NotificationRow>(
     `SELECT n.*, u.name AS actor_name FROM notifications n LEFT JOIN users u ON u.id = n.actor_id
       WHERE n.user_id = ?${filter} ORDER BY n.id DESC LIMIT ?`,
@@ -209,6 +228,49 @@ export function listNotifications(
     Math.min(Math.max(limit, 1), 100),
   );
   return rows.map((row) => ({ ...row, category: notificationCategory(row.kind) }));
+}
+
+/**
+ * Historial paginado: incluye leídas y no leídas, con filtros por división y
+ * estado. La campana usa `listNotifications` (solo pendientes); esta función es
+ * para la vista de historial.
+ */
+export function listNotificationHistory(
+  userId: number,
+  opts: NotificationHistoryOptions = {},
+): { items: NotificationItem[]; total: number; page: number; pageSize: number; pages: number } {
+  const category = opts.category ?? 'all';
+  const state = opts.state ?? 'all';
+  const pageSize = Math.min(Math.max(opts.pageSize ?? 50, 1), 100);
+  const where = ['n.user_id = ?'];
+  const params: unknown[] = [userId];
+
+  if (category !== 'all') {
+    const kinds = CATEGORY_KINDS[category];
+    where.push(`n.kind IN (${kinds.map(() => '?').join(',')})`);
+    params.push(...kinds);
+  }
+  if (state === 'unread') where.push('n.read_at IS NULL');
+  else if (state === 'read') where.push('n.read_at IS NOT NULL');
+
+  const total =
+    get<{ c: number }>(`SELECT COUNT(*) AS c FROM notifications n WHERE ${where.join(' AND ')}`, ...params)?.c ?? 0;
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(Math.max(opts.page ?? 1, 1), pages);
+  const rows = all<NotificationRow>(
+    `SELECT n.*, u.name AS actor_name FROM notifications n LEFT JOIN users u ON u.id = n.actor_id
+      WHERE ${where.join(' AND ')} ORDER BY n.id DESC LIMIT ? OFFSET ?`,
+    ...params,
+    pageSize,
+    (page - 1) * pageSize,
+  );
+  return {
+    items: rows.map((row) => ({ ...row, category: notificationCategory(row.kind) })),
+    total,
+    page,
+    pageSize,
+    pages,
+  };
 }
 
 /** Marca como leídas (todas, o las indicadas) las notificaciones del usuario. */

@@ -1346,7 +1346,7 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
         unread: counts.all,
         counts,
         category,
-        items: listNotifications(req.user!.id, 50, category),
+        items: listNotifications(req.user!.id, 50, category, true),
       });
     }),
   );

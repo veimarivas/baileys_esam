@@ -4471,6 +4471,55 @@ html[data-bs-theme="dark"] .tpl-phone { background: #0b141a; }
 .notif-title { font-size: 0.8rem; font-weight: 600; color: var(--esam-ink, #0e1a2b); line-height: 1.35; }
 .notif-text { font-size: 0.74rem; color: var(--esam-ink-soft, #3b4a5e); margin-top: 0.1rem; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .notif-time { font-size: 0.68rem; color: var(--esam-muted, #66768b); margin-top: 0.15rem; }
+.notif-foot { padding: 0.45rem 0.7rem; border-top: 1px solid var(--esam-line, #e3e8f1); }
+.notif-history-link {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  font-size: 0.74rem; font-weight: 600; color: var(--ib-brand, #045474); text-decoration: none;
+}
+.notif-history-link:hover { text-decoration: underline; }
+
+/* ══ Historial de notificaciones ════════════════════════════════════════════ */
+.nh-toolbar {
+  display: flex; flex-wrap: wrap; gap: 0.7rem 1.2rem;
+  align-items: center; justify-content: space-between; margin-bottom: 1rem;
+}
+.nh-list .nh-item { padding: 0.7rem 0; }
+.nh-dot {
+  display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  margin-left: 0.15rem; vertical-align: middle; background: var(--ib-brand, #045474);
+}
+.nh-meta {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem 0.75rem;
+  margin-top: 0.4rem; font-size: 0.72rem; color: var(--esam-muted, #66768b);
+}
+.nh-tag {
+  display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.14rem 0.45rem;
+  border-radius: 999px; background: var(--tone-soft); color: var(--tone); font-weight: 600;
+}
+.nh-tag i { font-size: 0.82rem; }
+.nh-actor { display: inline-flex; align-items: center; gap: 0.25rem; }
+.nh-state { padding: 0.1rem 0.4rem; border-radius: 999px; font-weight: 600; }
+.nh-state.is-unread { background: color-mix(in srgb, var(--ib-brand, #045474) 12%, transparent); color: var(--ib-brand, #045474); }
+.nh-state.is-read { background: var(--esam-surface-3, #edf1f7); color: var(--esam-muted, #66768b); }
+.nh-link {
+  display: inline-flex; align-items: center; gap: 0.2rem;
+  font-weight: 600; color: var(--ib-brand, #045474); text-decoration: none;
+}
+.nh-link:hover { text-decoration: underline; }
+.nh-pager {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap;
+  margin-top: 1rem; padding-top: 0.85rem; border-top: 1px solid var(--esam-line, #e3e8f1);
+  font-size: 0.78rem; color: var(--esam-muted, #66768b);
+}
+.nh-pager .disabled { pointer-events: none; opacity: 0.45; }
+.nh-count {
+  margin-top: 0.9rem; padding-top: 0.8rem; border-top: 1px solid var(--esam-line, #e3e8f1);
+  font-size: 0.75rem; color: var(--esam-muted, #66768b);
+}
+@media (max-width: 575.98px) {
+  .nh-toolbar { flex-direction: column; align-items: flex-start; }
+  .nh-pager { justify-content: center; }
+}
 
 /* ══ Derivación en la tarjeta de la nota ═════════════════════════════════════ */
 .nk-deriv {

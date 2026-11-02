@@ -217,9 +217,6 @@ export function renderLayout(
           <button type="button" class="btn btn-sm px-3 fs-16 header-item vertical-menu-btn topnav-hamburger material-shadow-none" id="topnav-hamburger-icon">
             <span class="hamburger-icon"><span></span><span></span><span></span></span>
           </button>
-          <div class="app-meta-chip d-none d-md-inline-flex ms-2" title="Sesión activa">
-            <span class="status-dot"></span> ${esc(user.name ?? user.username ?? 'Usuario')} · ${esc(role)}
-          </div>
         </div>
         <div class="d-flex align-items-center">
           ${notificationsBell(user)}

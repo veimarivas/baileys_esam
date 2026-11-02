@@ -559,27 +559,6 @@ b, strong { font-weight: 600; }
 #page-topbar .navbar-header { min-height: 64px; }
 .header-item { height: 64px; }
 
-.app-meta-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.4rem 0.8rem;
-  border-radius: 999px;
-  background: var(--esam-surface-2);
-  border: 1px solid var(--esam-line);
-  color: var(--esam-muted);
-  font-size: 0.78rem;
-  font-weight: 500;
-  white-space: nowrap;
-}
-.app-meta-chip .status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--esam-success);
-  box-shadow: 0 0 0 3px rgba(15, 122, 82, 0.16);
-}
-
 .topbar-user .btn { border-radius: var(--esam-radius-sm); padding: 0.3rem 0.5rem; }
 .topbar-user .btn:hover { background: var(--esam-surface-2); }
 .user-name-text { font-weight: 600; color: var(--esam-ink); }

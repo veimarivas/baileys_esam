@@ -5796,8 +5796,9 @@
       d_unseen: 'Sin ver por el responsable', d_nocontact: 'Vistas, sin confirmar contacto', d_contacted: 'Con contacto confirmado',
     };
     var GROUP_ORDER = ['d_unseen', 'd_nocontact', 'd_contacted', 'pinned', 'overdue', 'today', 'soon', 'later', 'none', 'done', 'trash'];
-    // Nota abierta desde una notificación (?nota=ID).
-    var focusId = Number(new URLSearchParams(location.search).get('nota')) || 0;
+    // Nota abierta desde una notificación o un enlace /notes/<id>.
+    var focusId = Number(root.getAttribute('data-focus')) || 0;
+    var initialStatus = root.getAttribute('data-status') || '';
 
     var els = {
       stats: root.querySelector('#np-stats'),
@@ -5814,7 +5815,7 @@
       tagColors: root.querySelector('#tag-colors'),
       tagSave: root.querySelector('#tag-save'),
     };
-    var st = { status: 'pending', tag: null, tags: [], colors: ['#045474'], color: '#045474', notes: [], stats: null, managing: false, view: 'list', area: 'all', advisor: 0, supervisor: false, supervisorArea: null };
+    var st = { status: STATUS.some(function (x) { return x.key === initialStatus; }) ? initialStatus : 'pending', tag: null, tags: [], colors: ['#045474'], color: '#045474', notes: [], stats: null, managing: false, view: 'list', area: 'all', advisor: 0, supervisor: false, supervisorArea: null };
     try { if (localStorage.getItem('notes-view') === 'board') st.view = 'board'; } catch (_) {}
     try { st.area = localStorage.getItem('notes-area') || 'all'; } catch (_) {}
     st.group = 'estado';

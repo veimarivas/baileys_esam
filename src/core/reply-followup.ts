@@ -83,7 +83,7 @@ export function createReplyFollowups(now = new Date()): number {
         noteId: note.id,
         title: `${who} respondió a la cobranza: ${REPLY_KIND_LABEL[r.kind].toLowerCase()}`,
         body: `${said.slice(0, 200)} · Lote #${b.id}`,
-        link: `/notes?nota=${note.id}`,
+        link: `/notes/${note.id}`,
       });
       created++;
     }

@@ -65,7 +65,7 @@ export class SessionStore {
 export const sessionStore = new SessionStore();
 
 /** Reparte 'Set-Cookie' para el panel. */
-export function sessionCookieHeader(cookie: string, expiresAt: Date): string {
+export function sessionCookieHeader(cookie: string, expiresAt: Date, secure = false): string {
   const attrs = [
     `${config.sessionCookie}=${cookie}`,
     'Path=/',
@@ -73,6 +73,7 @@ export function sessionCookieHeader(cookie: string, expiresAt: Date): string {
     'SameSite=Lax',
     `Expires=${expiresAt.toUTCString()}`,
   ];
+  if (secure) attrs.push('Secure');
   return attrs.join('; ');
 }
 

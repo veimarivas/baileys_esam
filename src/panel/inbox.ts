@@ -220,7 +220,7 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
     const contact = n.contact_name || (n.contact_phone ? `+${n.contact_phone}` : n.chat_id.split('@')[0]);
     const phone = n.contact_phone ? `+${n.contact_phone}` : '';
     const text = (n.note_text ?? 'Nota de voz').replace(/\s+/g, ' ').slice(0, 160);
-    const link = `/notes?nota=${noteId}`;
+    const link = `/notes/${noteId}`;
     const kindLabel = extra.templateName ? `aplicó la plantilla «${extra.templateName}» (${extra.count} tareas)` : n.due_at ? 'registró una tarea' : 'registró una nota';
     const supervisors = supervisorIds();
     const send = (ids: Array<number | null>, kind: NotificationKind, title: string, body: string) =>

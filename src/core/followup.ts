@@ -846,7 +846,7 @@ export function userReportDetail(
     kind: 'note',
     label: `Nota sobre ${n.contact_name ?? n.contact_phone ?? n.chat_id.split('@')[0]}`,
     detail: (n.note_text ?? '[nota de voz]').slice(0, 110),
-    href: `/notes?nota=${n.id}`,
+    href: `/notes/${n.id}`,
   }));
   const messageActivity = recentMessages.map<UserRecentActivity>((m) => ({
     at: m.occurred_at,

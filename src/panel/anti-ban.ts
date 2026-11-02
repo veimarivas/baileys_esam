@@ -1,9 +1,11 @@
 import type express from 'express';
 import type { Request, Response, RequestHandler } from 'express';
 import { all, get, run } from '../db/index.js';
-import { esc, renderLayout } from './layout.js';
+import { esc, renderPlain } from './layout.js';
 import { emptyState, fmtDate } from './views.js';
-import type { UserRow } from '../auth/users.js';
+import { antiBanUrl, isOneOf, validSessionId, BLACKLIST_SOURCES, ANTI_BAN_LINKS, type AntiBanTabSlug, type AntiBanLinkSlug } from './urls.js';
+import { setFlash } from './flash.js';
+import { sendPage } from './page.js';
 import { audit } from '../core/webhooks.js';
 import { addOptout, listOptouts, normalizeChatId, removeOptout } from '../core/optout.js';
 import {
@@ -54,7 +56,7 @@ const RISK_INFO: Record<RiskProfile, { title: string; text: string; icon: string
   mass: { title: 'Masivo institucional', text: 'Envíos de cronogramas: 6–7 s por mensaje, con pausas y freno automático.', icon: 'ri-megaphone-line' },
 };
 
-type Tab = 'monitoreo' | 'politicas' | 'lista-negra' | 'bitacora';
+type Tab = AntiBanTabSlug;
 const TABS: Array<{ id: Tab; label: string; icon: string }> = [
   { id: 'monitoreo', label: 'Monitoreo', icon: 'ri-pulse-line' },
   { id: 'politicas', label: 'Políticas', icon: 'ri-shield-star-line' },
@@ -91,23 +93,13 @@ function profile(value: unknown, fallback: RiskProfile): RiskProfile {
   return v === 'low' || v === 'medium' || v === 'high' || v === 'mass' ? v : fallback;
 }
 
-function tabOf(value: unknown): Tab {
-  const v = s(value);
-  return TABS.some((t) => t.id === v) ? (v as Tab) : 'monitoreo';
-}
-
 /** Filtro de vinculación dentro de Monitoreo. */
-type LinkState = 'all' | 'vinculadas' | 'sin-vincular';
+type LinkState = AntiBanLinkSlug;
 const LINK_TABS: Array<{ id: LinkState; label: string; icon: string }> = [
-  { id: 'all', label: 'Todas', icon: 'ri-list-check' },
+  { id: 'todas', label: 'Todas', icon: 'ri-list-check' },
   { id: 'vinculadas', label: 'Vinculadas', icon: 'ri-link' },
   { id: 'sin-vincular', label: 'Sin vincular', icon: 'ri-link-unlink' },
 ];
-
-function linkStateOf(value: unknown): LinkState {
-  const v = s(value);
-  return v === 'vinculadas' || v === 'sin-vincular' ? v : 'all';
-}
 
 const AREA_LABELS: Record<string, string> = {
   contabilidad: 'Contabilidad',
@@ -126,10 +118,6 @@ function areaKeyOf(sess: SessionRow): string {
 function areaLabel(key: string): string {
   if (!key) return 'Sin área';
   return AREA_LABELS[key] ?? key.charAt(0).toUpperCase() + key.slice(1);
-}
-
-function areaParam(key: string): string {
-  return key || NO_AREA;
 }
 
 function areaFromParam(value: unknown): string {
@@ -342,7 +330,7 @@ function monitorTab(
   }
 
   const linkMatches = (x: SessionRow, link: LinkState) =>
-    link === 'all' || (link === 'vinculadas' ? isLinked(x) : !isLinked(x));
+    link === 'todas' || (link === 'vinculadas' ? isLinked(x) : !isLinked(x));
   const areaKeys = [...new Set(sessions.map(areaKeyOf))].sort((a, b) => (!a ? 1 : !b ? -1 : a.localeCompare(b, 'es')));
   // Una URL vieja con un área que ya no existe vuelve a «Todas» en lugar de
   // dejar la pantalla vacía sin explicación.
@@ -354,7 +342,7 @@ function monitorTab(
   // Los contadores de cada filtro respetan el otro filtro activo.
   const byArea = sessions.filter(areaMatches);
   const linkCounts: Record<LinkState, number> = {
-    all: byArea.length,
+    todas: byArea.length,
     vinculadas: byArea.filter(isLinked).length,
     'sin-vincular': byArea.filter((x) => !isLinked(x)).length,
   };
@@ -362,14 +350,12 @@ function monitorTab(
   const areaCounts = new Map(areaKeys.map((key) => [key, byLink.filter((x) => areaKeyOf(x) === key).length]));
   const shown = byArea.filter((x) => linkMatches(x, filters.link));
 
-  const hrefFor = (over: { link?: LinkState; area?: string }) => {
-    const link = over.link ?? filters.link;
-    const area = over.area === undefined ? activeArea : over.area;
-    const p = new URLSearchParams({ tab: 'monitoreo' });
-    if (link !== 'all') p.set('estado', link);
-    if (area) p.set('area', area);
-    return `/anti-ban?${p.toString()}`;
-  };
+  const hrefFor = (over: { link?: LinkState; area?: string }) =>
+    antiBanUrl({
+      tab: 'monitoreo',
+      estado: over.link ?? filters.link,
+      area: over.area === undefined ? activeArea : over.area,
+    });
 
   const linkTabs = `<nav class="ab-tabs ab-monitor-tabs" aria-label="Estado de vinculación">
     ${LINK_TABS.map(
@@ -386,7 +372,7 @@ function monitorTab(
       ${areaKeys
         .map(
           (key) =>
-            `<a class="ab-filter${activeArea === (key || NO_AREA) ? ' on' : ''}" href="${hrefFor({ area: areaParam(key) })}">${esc(areaLabel(key))} <span>${areaCounts.get(key) ?? 0}</span></a>`,
+            `<a class="ab-filter${activeArea === (key || NO_AREA) ? ' on' : ''}" href="${hrefFor({ area: key || NO_AREA })}">${esc(areaLabel(key))} <span>${areaCounts.get(key) ?? 0}</span></a>`,
         )
         .join('')}
     </div>
@@ -404,7 +390,7 @@ function monitorTab(
         `No hay ${filters.link === 'vinculadas' ? 'líneas vinculadas' : filters.link === 'sin-vincular' ? 'líneas sin vincular' : 'líneas'}${
           activeArea ? ` en ${activeArea === NO_AREA ? 'Sin área' : areaLabel(activeArea)}` : ''
         }.`,
-        `<a class="btn btn-light btn-sm" href="${hrefFor({ link: 'all', area: '' })}"><i class="ri-filter-off-line me-1"></i>Ver todas las líneas</a>`,
+        `<a class="btn btn-light btn-sm" href="${hrefFor({ link: 'todas', area: '' })}"><i class="ri-filter-off-line me-1"></i>Ver todas las líneas</a>`,
       )}</div></div>`;
 
   const byId = new Map(sessions.map((x) => [x.id, x]));
@@ -708,7 +694,7 @@ function blacklistTab(q: string, source: string, byId: Map<string, SessionRow>):
   );
   const shown = rows.slice(0, 300);
   const chip = (value: string, label: string, count: number) =>
-    `<a class="ab-filter ${source === value ? 'on' : ''}" href="/anti-ban?tab=lista-negra${value ? `&source=${value}` : ''}${q ? `&q=${encodeURIComponent(q)}` : ''}">${esc(label)} <span>${count}</span></a>`;
+    `<a class="ab-filter ${source === value ? 'on' : ''}" href="${antiBanUrl({ tab: 'lista-negra', source: value, q })}">${esc(label)} <span>${count}</span></a>`;
   const table = shown.length
     ? `<div class="table-responsive"><table class="table table-hover align-middle mb-0 ab-table">
         <thead><tr><th>Número</th><th>Motivo</th><th>Origen</th><th>Línea</th><th>Fecha</th><th></th></tr></thead>
@@ -863,8 +849,8 @@ function kpis(sessions: SessionRow[], health: HealthRow[]): string {
     )}
     ${tile('ri-send-plane-line', 'info', 'Enviados 24 h', String(sent), 'todas las líneas')}
     ${tile('ri-check-double-line', sent && delivered / sent < 0.85 ? 'warn' : 'ok', 'Entregabilidad', sent ? pct(delivered / sent) : '—', 'entregados / enviados')}
-    ${tile('ri-user-forbid-line', blocked ? 'danger' : 'mute', 'Bloqueos y bajas', String(blocked), 'últimas 24 h', '/anti-ban?tab=lista-negra')}
-    ${tile('ri-pause-circle-line', paused ? 'warn' : 'mute', 'Lotes en pausa', String(paused), paused ? 'ver motivos' : 'ninguno', paused ? '/anti-ban?tab=monitoreo#ab-paused' : undefined)}
+    ${tile('ri-user-forbid-line', blocked ? 'danger' : 'mute', 'Bloqueos y bajas', String(blocked), 'últimas 24 h', antiBanUrl({ tab: 'lista-negra' }))}
+    ${tile('ri-pause-circle-line', paused ? 'warn' : 'mute', 'Lotes en pausa', String(paused), paused ? 'ver motivos' : 'ninguno', paused ? `${antiBanUrl({ tab: 'monitoreo' })}#ab-paused` : undefined)}
   </div>`;
 }
 
@@ -879,46 +865,96 @@ export function registerAntiBanRoutes(
   },
 ): void {
   const guard: RequestHandler[] = [ctx.requireUser, ctx.requireSection('policies')];
-  const authed = (req: Request): UserRow => (req as Request & { user: UserRow }).user;
-  const flashOf = (req: Request) => (typeof req.query.ok === 'string' ? req.query.ok : undefined);
-  const back = (tab: Tab, msg: string) => `/anti-ban?tab=${tab}&ok=${encodeURIComponent(msg)}`;
+  const back = (res: Response, tab: Tab, msg: string, kind: 'ok' | 'error' = 'ok') => {
+    setFlash(res, kind, msg);
+    return antiBanUrl({ tab });
+  };
+  const notFound = (res: Response) => res.status(404).send(renderPlain('No encontrado', 'La ruta no existe o el filtro no es válido.'));
   const hasOwnPolicy = (id: string) => !!get<{ c: number }>('SELECT COUNT(*) c FROM anti_ban_policies WHERE session_id = ?', id)?.c;
 
-  app.get('/anti-ban', ...guard, (req: Request, res: Response) => {
-    const tab = tabOf(req.query.tab);
-    const link = linkStateOf(req.query.estado);
-    const area = areaFromParam(req.query.area);
+  const sendAntiBanPage = (
+    req: Request,
+    res: Response,
+    opts: { tab: Tab; link: LinkState; area: string; source: string; q: string },
+  ): void => {
     const sessions = ctx.sessions();
     const health = listHealth(true);
     const healthById = new Map(health.map((h) => [h.session_id, h]));
     const byId = new Map(sessions.map((x) => [x.id, x]));
     const custom = new Set(sessions.filter((x) => hasOwnPolicy(x.id)).map((x) => x.id));
-
-    const tabs = `<nav class="ab-tabs" aria-label="Secciones de anti-baneo">${TABS.map(
-      (t) =>
-        `<a class="ab-tab ${t.id === tab ? 'on' : ''}" href="/anti-ban?tab=${t.id}" ${t.id === tab ? 'aria-current="page"' : ''}><i class="${t.icon}"></i>${t.label}</a>`,
-    ).join('')}</nav>`;
-
-    let content = '';
-    if (tab === 'monitoreo') content = monitorTab(sessions, healthById, custom, { link, area });
-    else if (tab === 'politicas') content = policiesTab(sessions, healthById, custom);
-    else if (tab === 'lista-negra') content = blacklistTab(s(req.query.q).trim(), s(req.query.source), byId);
-    else content = logTab(byId);
-
-    // «Actualizar» conserva los filtros de Monitoreo (estado de vinculación y área).
-    const refresh = new URLSearchParams({ tab });
-    if (tab === 'monitoreo') {
-      if (link !== 'all') refresh.set('estado', link);
-      if (area) refresh.set('area', areaParam(area));
+    const knownAreas = new Set(sessions.map(areaKeyOf));
+    if (opts.area && opts.area !== NO_AREA && !knownAreas.has(opts.area)) {
+      notFound(res);
+      return;
     }
 
-    res.send(
-      renderLayout('Anti-Baneo', authed(req), 'policies', `<div class="ab-page">${kpis(sessions, health)}${tabs}${content}</div>`, {
-        subtitle: 'Cuida la reputación de cada número: límites, señales de riesgo y seguimiento de lo que hace el motor.',
-        flash: flashOf(req),
-        actions: `<a class="btn btn-soft-secondary btn-sm" href="/anti-ban?${refresh.toString()}"><i class="ri-refresh-line me-1"></i>Actualizar</a>`,
-      }),
-    );
+    const tabs = `<nav class="ab-tabs" aria-label="Secciones de anti-baneo">${TABS.map((t) => {
+      const href = antiBanUrl({
+        tab: t.id,
+        ...(t.id === 'monitoreo' ? { estado: opts.link, area: opts.area } : {}),
+        ...(t.id === 'lista-negra' ? { source: opts.source, q: opts.q } : {}),
+      });
+      return `<a class="ab-tab ${t.id === opts.tab ? 'on' : ''}" href="${href}" ${t.id === opts.tab ? 'aria-current="page"' : ''}><i class="${t.icon}"></i>${t.label}</a>`;
+    }).join('')}</nav>`;
+
+    let content = '';
+    if (opts.tab === 'monitoreo') content = monitorTab(sessions, healthById, custom, { link: opts.link, area: opts.area });
+    else if (opts.tab === 'politicas') content = policiesTab(sessions, healthById, custom);
+    else if (opts.tab === 'lista-negra') content = blacklistTab(opts.q, opts.source, byId);
+    else content = logTab(byId);
+
+    sendPage(req, res, 'Anti-Baneo', 'policies', `<div class="ab-page">${kpis(sessions, health)}${tabs}${content}</div>`, {
+      subtitle: 'Cuida la reputación de cada número: límites, señales de riesgo y seguimiento de lo que hace el motor.',
+      actions: `<a class="btn btn-soft-secondary btn-sm" href="${antiBanUrl({
+        tab: opts.tab,
+        ...(opts.tab === 'monitoreo' ? { estado: opts.link, area: opts.area } : {}),
+        ...(opts.tab === 'lista-negra' ? { source: opts.source, q: opts.q } : {}),
+      })}"><i class="ri-refresh-line me-1"></i>Actualizar</a>`,
+    });
+  };
+
+  app.get('/anti-ban', ...guard, (_req: Request, res: Response) => {
+    res.redirect(302, antiBanUrl());
+  });
+
+  app.get('/anti-ban/monitoreo', ...guard, (req: Request, res: Response) => {
+    sendAntiBanPage(req, res, { tab: 'monitoreo', link: 'todas', area: '', source: '', q: '' });
+  });
+
+  app.get('/anti-ban/monitoreo/:estado', ...guard, (req: Request, res: Response) => {
+    const estado = String(req.params.estado);
+    if (!isOneOf(estado, ANTI_BAN_LINKS)) return notFound(res);
+    sendAntiBanPage(req, res, { tab: 'monitoreo', link: estado, area: '', source: '', q: '' });
+  });
+
+  app.get('/anti-ban/monitoreo/:estado/:area', ...guard, (req: Request, res: Response) => {
+    const estado = String(req.params.estado);
+    if (!isOneOf(estado, ANTI_BAN_LINKS)) return notFound(res);
+    sendAntiBanPage(req, res, {
+      tab: 'monitoreo',
+      link: estado,
+      area: areaFromParam(req.params.area),
+      source: '',
+      q: '',
+    });
+  });
+
+  app.get('/anti-ban/politicas', ...guard, (req: Request, res: Response) => {
+    sendAntiBanPage(req, res, { tab: 'politicas', link: 'todas', area: '', source: '', q: '' });
+  });
+
+  app.get('/anti-ban/lista-negra', ...guard, (req: Request, res: Response) => {
+    sendAntiBanPage(req, res, { tab: 'lista-negra', link: 'todas', area: '', source: '', q: s(req.query.q).trim().slice(0, 200) });
+  });
+
+  app.get('/anti-ban/lista-negra/:source', ...guard, (req: Request, res: Response) => {
+    const source = String(req.params.source);
+    if (!isOneOf(source, BLACKLIST_SOURCES)) return notFound(res);
+    sendAntiBanPage(req, res, { tab: 'lista-negra', link: 'todas', area: '', source, q: s(req.query.q).trim().slice(0, 200) });
+  });
+
+  app.get('/anti-ban/bitacora', ...guard, (req: Request, res: Response) => {
+    sendAntiBanPage(req, res, { tab: 'bitacora', link: 'todas', area: '', source: '', q: '' });
   });
 
   app.post('/anti-ban/global', ...guard, (req: Request, res: Response) => {
@@ -930,15 +966,16 @@ export function registerAntiBanRoutes(
       : sanePolicy(parsePolicyForm(body, base));
     upsertPolicy(null, patch);
     audit('anti_ban.policy_updated', { scope: 'global', profile: patch.risk_profile, preset: applyPreset });
-    res.redirect(back('politicas', applyPreset ? 'Se aplicaron los valores del perfil a la política global.' : 'Política global guardada.'));
+    res.redirect(back(res, 'politicas', applyPreset ? 'Se aplicaron los valores del perfil a la política global.' : 'Política global guardada.'));
   });
 
   // Detalle de una línea: por qué tiene ese color, qué hacer y su historial.
   app.get('/anti-ban/line/:id', ...guard, (req: Request, res: Response) => {
-    const id = String(req.params.id);
+    const id = validSessionId(req.params.id);
+    if (!id) return notFound(res);
     const sess = ctx.sessions().find((x) => x.id === id);
     if (!sess) {
-      res.redirect(back('monitoreo', 'Esa línea ya no existe.'));
+      res.redirect(back(res, 'monitoreo', 'Esa línea ya no existe.', 'error'));
       return;
     }
     const health = recomputeHealth(id);
@@ -1016,7 +1053,7 @@ export function registerAntiBanRoutes(
     </div></div>`;
     const body = `<div class="ab-page ab-line-detail">
       <div class="ab-line-head">
-        <a class="btn btn-light btn-sm" href="/anti-ban?tab=monitoreo"><i class="ri-arrow-left-line me-1"></i>Monitoreo</a>
+        <a class="btn btn-light btn-sm" href="${antiBanUrl({ tab: 'monitoreo' })}"><i class="ri-arrow-left-line me-1"></i>Monitoreo</a>
         <div><h5>${esc(sessionLabel(sess, id))}</h5><span>${esc(sessionPhone(sess))}</span></div>
         <a class="btn btn-soft-primary btn-sm ms-auto" href="/anti-ban/session/${esc(id)}"><i class="ri-equalizer-line me-1"></i>Política de la línea</a>
       </div>
@@ -1026,18 +1063,18 @@ export function registerAntiBanRoutes(
         <aside class="ab-aside">${sessionCard(sess, health, hasOwnPolicy(id), { detail: false })}</aside>
       </div>
     </div>`;
-    res.send(renderLayout('Detalle de la línea', authed(req), 'policies', body, {
-      flash: flashOf(req),
+    sendPage(req, res, 'Detalle de la línea', 'policies', body, {
       subtitle: 'Por qué la línea tiene este color, cómo solucionarlo y qué hizo el anti-baneo.',
       activeHref: '/anti-ban',
-    }));
+    });
   });
 
   app.get('/anti-ban/session/:id', ...guard, (req: Request, res: Response) => {
-    const id = String(req.params.id);
+    const id = validSessionId(req.params.id);
+    if (!id) return notFound(res);
     const sess = ctx.sessions().find((x) => x.id === id);
     if (!sess) {
-      res.redirect(back('politicas', 'Esa línea ya no existe.'));
+      res.redirect(back(res, 'politicas', 'Esa línea ya no existe.', 'error'));
       return;
     }
     const policy = getPolicy(id);
@@ -1062,11 +1099,11 @@ export function registerAntiBanRoutes(
                 </div></div>`
               : ''
           }
-          <a class="btn btn-light w-100" href="/anti-ban?tab=politicas"><i class="ri-arrow-left-line me-1"></i>Volver a Anti-Baneo</a>
+          <a class="btn btn-light w-100" href="${antiBanUrl({ tab: 'politicas' })}"><i class="ri-arrow-left-line me-1"></i>Volver a Anti-Baneo</a>
         </aside>
       </div>
     </div>`;
-    res.send(renderLayout('Política de línea', authed(req), 'policies', body, { flash: flashOf(req) }));
+    sendPage(req, res, 'Política de línea', 'policies', body);
   });
 
   app.post('/anti-ban/session/:id', ...guard, (req: Request, res: Response) => {
@@ -1080,7 +1117,8 @@ export function registerAntiBanRoutes(
     upsertPolicy(id, patch);
     recalcular(id);
     audit('anti_ban.policy_updated', { scope: 'session', session_id: id, profile: patch.risk_profile, preset: applyPreset });
-    res.redirect(`/anti-ban/session/${encodeURIComponent(id)}?ok=` + encodeURIComponent('Política de la línea guardada.'));
+    setFlash(res, 'ok', 'Política de la línea guardada.');
+    res.redirect(`/anti-ban/session/${encodeURIComponent(id)}`);
   });
 
   app.post('/anti-ban/session/:id/clear', ...guard, (req: Request, res: Response) => {
@@ -1088,7 +1126,7 @@ export function registerAntiBanRoutes(
     run('DELETE FROM anti_ban_policies WHERE session_id = ?', id);
     recalcular(id);
     audit('anti_ban.policy_cleared', { session_id: id });
-    res.redirect(back('politicas', 'La línea volvió a usar la política global.'));
+    res.redirect(back(res, 'politicas', 'La línea volvió a usar la política global.'));
   });
 
   app.post('/anti-ban/session/:id/reset', ...guard, (req: Request, res: Response) => {
@@ -1096,7 +1134,7 @@ export function registerAntiBanRoutes(
     resetTrust(id);
     recalcular(id);
     audit('anti_ban.trust_reset', { session_id: id });
-    res.redirect(back('monitoreo', 'Calentamiento reiniciado: la línea vuelve al día 1.'));
+    res.redirect(back(res, 'monitoreo', 'Calentamiento reiniciado: la línea vuelve al día 1.'));
   });
 
   app.post('/anti-ban/quarantine/:id', ...guard, (req: Request, res: Response) => {
@@ -1121,12 +1159,17 @@ export function registerAntiBanRoutes(
       const msg = resumed
         ? `Línea liberada de la cuarentena y ${resumed} envío(s) reanudado(s).`
         : 'Línea liberada de la cuarentena. Si hay envíos en pausa, reanudalos desde Lotes.';
-      res.redirect(s((req.body as Record<string, unknown>).next) === 'line' ? `/anti-ban/line/${encodeURIComponent(id)}?ok=${encodeURIComponent(msg)}` : back('monitoreo', msg));
+      if (s((req.body as Record<string, unknown>).next) === 'line') {
+        setFlash(res, 'ok', msg);
+        res.redirect(`/anti-ban/line/${encodeURIComponent(id)}`);
+      } else {
+        res.redirect(back(res, 'monitoreo', msg));
+      }
       return;
     }
     const rot = quarantineAndRotate(id, (batchId) => ctx.runner.enqueue(batchId), 'Puesta en cuarentena manualmente');
     res.redirect(
-      back('monitoreo', rot.moved ? `Línea en cuarentena; ${rot.moved} lote(s) del sistema pasados a otra línea. Los de la línea quedaron en pausa.` : 'Línea en cuarentena: sus lotes en curso quedaron en pausa (no se envían desde otro número).'),
+      back(res, 'monitoreo', rot.moved ? `Línea en cuarentena; ${rot.moved} lote(s) del sistema pasados a otra línea. Los de la línea quedaron en pausa.` : 'Línea en cuarentena: sus lotes en curso quedaron en pausa (no se envían desde otro número).'),
     );
   });
 
@@ -1134,7 +1177,7 @@ export function registerAntiBanRoutes(
     const id = String(req.params.id);
     const rot = rotateBatches(id, (batchId) => ctx.runner.enqueue(batchId));
     audit('anti_ban.rotate', { session_id: id, batches: rot.moved, to: rot.to });
-    res.redirect(back('monitoreo', rot.moved ? `${rot.moved} lote(s) movidos a una línea sana.` : 'No hay lotes pendientes o no hay otra línea sana.'));
+    res.redirect(back(res, 'monitoreo', rot.moved ? `${rot.moved} lote(s) movidos a una línea sana.` : 'No hay lotes pendientes o no hay otra línea sana.'));
   });
 
   // ── Lista negra ──────────────────────────────────────────────────────────────
@@ -1143,12 +1186,12 @@ export function registerAntiBanRoutes(
     const body = req.body as Record<string, unknown>;
     const chatId = normalizeChatId(s(body.number));
     if (!chatId) {
-      res.redirect(back('lista-negra', 'El número no es válido.'));
+      res.redirect(back(res, 'lista-negra', 'El número no es válido.', 'error'));
       return;
     }
     addOptout(chatId, s(body.reason) || 'Agregado manualmente', 'manual');
     audit('blacklist.added', { chat_id: chatId });
-    res.redirect(back('lista-negra', 'Número agregado a la lista negra.'));
+    res.redirect(back(res, 'lista-negra', 'Número agregado a la lista negra.'));
   });
 
   app.post('/blacklist/import', ...guard, (req: Request, res: Response) => {
@@ -1164,7 +1207,7 @@ export function registerAntiBanRoutes(
       added++;
     }
     audit('blacklist.imported', { count: added });
-    res.redirect(back('lista-negra', `${added} número(s) importado(s).`));
+    res.redirect(back(res, 'lista-negra', `${added} número(s) importado(s).`));
   });
 
   app.get('/blacklist/export', ...guard, (_req: Request, res: Response) => {
@@ -1186,7 +1229,7 @@ export function registerAntiBanRoutes(
     const chatId = decodeURIComponent(String(req.params.chatId));
     removeOptout(chatId);
     audit('blacklist.removed', { chat_id: chatId });
-    res.redirect(back('lista-negra', 'Número quitado de la lista negra.'));
+    res.redirect(back(res, 'lista-negra', 'Número quitado de la lista negra.'));
   });
 
   function recalcular(sessionId: string): void {

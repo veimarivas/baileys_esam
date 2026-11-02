@@ -18,7 +18,27 @@ import { card, connectionCard, connectionDiagnosis, emptyState, fmtDate, insight
 import { countNewContactsToday, getPolicy, limitState } from '../core/anti-ban.js';
 import { cancelGroup, canDecide, confirmGroup, getGroup, pendingGroupsFor, type ConfirmGroup } from '../core/batch-confirm.js';
 import { nowIso } from '../util/async.js';
-import { esc, renderLayout, renderLogin, renderPlain } from './layout.js';
+import { esc, renderLogin, renderPlain } from './layout.js';
+import { setFlash } from './flash.js';
+import { pageHtml, sendPage } from './page.js';
+import { legacyRedirects } from './legacy-redirects.js';
+import {
+  MONITORING_TABS,
+  PERIOD_SLUGS,
+  REPORTS_TABS,
+  NOTE_STATUSES,
+  isOneOf,
+  monitoringUrl,
+  positiveInt,
+  reportsUrl,
+  reportsUserUrl,
+  slugToNoteStatus,
+  slugToPeriod,
+  validSessionId,
+  type MonitoringTabSlug,
+  type PeriodSlug,
+  type ReportsTabSlug,
+} from './urls.js';
 import { sessionCookieHeader, sessionStore, clearCookieHeader } from '../auth/sessions.js';
 import { verifySsoToken, safeNext } from '../auth/sso.js';
 import { unreadCount } from '../core/notifications.js';
@@ -50,7 +70,7 @@ import { attentionData, deliveryStats, notesFollowup, pendingReplies, previousPe
 import { getHealth } from '../core/health.js';
 import { systemHealth } from '../core/system-health.js';
 import { lastUseByUser } from '../core/user-activity.js';
-import { renderMonitoring, renderReportUser, renderReports, reportsCsv, type MonitoringTab, type ReportsTab } from './followup-views.js';
+import { renderMonitoring, renderReportUser, renderReports, reportsCsv, type ReportsTab } from './followup-views.js';
 import { recount } from '../core/batches.js';
 import type { BatchRunner } from '../core/batches.js';
 import { normalizePhone } from '../core/phone.js';
@@ -79,6 +99,11 @@ function cookie(req: Request, name: string): string | undefined {
     if (k === name) return v.join('=');
   }
   return undefined;
+}
+
+/** HTTPS directo o detrás de un proxy que lo informa. */
+function requestIsHttps(req: Request): boolean {
+  return req.secure || String(req.header('x-forwarded-proto') ?? '').split(',')[0].trim() === 'https';
 }
 
 /** Variantes de un chat_id para tolerar @c.us, @s.whatsapp.net y @lid. */
@@ -130,8 +155,10 @@ const INBOX_WHERE = `chat_id NOT LIKE '%@broadcast' AND chat_id NOT LIKE '%@news
  * listado agrupado por fecha y gestor de etiquetas en la columna lateral.
  * El contenido lo arma `initNotes()` en public/app.js.
  */
-export function renderNotesPage(): string {
-  return `<div class="notes-page" id="notes-page">
+export function renderNotesPage(opts: { focusId?: number; status?: string } = {}): string {
+  const focus = opts.focusId && opts.focusId > 0 ? String(opts.focusId) : '';
+  const status = opts.status && opts.status !== 'all' ? opts.status : '';
+  return `<div class="notes-page" id="notes-page" data-focus="${esc(focus)}" data-status="${esc(status)}">
     <div class="np-stats" id="np-stats" role="tablist" aria-label="Estado del seguimiento"></div>
 
     <div class="np-layout">
@@ -212,6 +239,13 @@ export function renderNotesPage(): string {
 export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
   ensureLocalAdmin();
   const app = express();
+  // Cabeceras básicas para todas las respuestas (incluidos assets y API).
+  app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Referrer-Policy', req.path === '/sso' ? 'no-referrer' : 'strict-origin-when-cross-origin');
+    next();
+  });
   app.use(express.urlencoded({ extended: true }));
   app.use(express.json());
   const uploadSticker = multer({ storage: multer.memoryStorage(), limits: { fileSize: 6 * 1024 * 1024 } });
@@ -222,6 +256,8 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
   // Estáticos: Velzon vive en public/assets; los propios (app.css/js) en public/.
   app.use('/assets', express.static(path.resolve('public', 'assets')));
   app.use(express.static(path.resolve('public'), { index: false }));
+  // URLs viejas con pestañas/filtros → rutas canónicas (solo GET de páginas).
+  app.use(legacyRedirects);
 
   // Estado del proceso para el gestor de procesos y el monitoreo. Ruta pública a
   // propósito (no expone datos de conversaciones ni rutas de archivos).
@@ -386,7 +422,7 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     ensureUserSession(user);
     const { cookie: value, expiresAt } = sessionStore.create(user.id);
     registerLogin(user.id, req.ip ?? null);
-    res.setHeader('Set-Cookie', sessionCookieHeader(value, expiresAt));
+    res.setHeader('Set-Cookie', sessionCookieHeader(value, expiresAt, requestIsHttps(req)));
     res.redirect(homeFor(user));
   });
 
@@ -422,7 +458,7 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     ensureUserSession(user);
     const { cookie: value, expiresAt } = sessionStore.create(user.id);
     registerLogin(user.id, req.ip ?? null);
-    res.setHeader('Set-Cookie', sessionCookieHeader(value, expiresAt));
+    res.setHeader('Set-Cookie', sessionCookieHeader(value, expiresAt, requestIsHttps(req)));
     res.redirect(safeNext(p.next, homeFor(user)));
   });
 
@@ -604,13 +640,10 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
       </div>
       ${connectionHelp()}
       ${admin ? `${linesCard}<div class="row g-3 mt-0"><div class="col-lg-7">${linesHealthCard(lineIssues())}</div><div class="col-lg-5">${gatewayCard}</div></div>` : ''}`;
-      res.send(
-        renderLayout('Conexión', req.user!, 'settings', body, {
-          flash: flash(req),
-          subtitle: 'Tu número de WhatsApp: si está sano para enviar, cómo está la conexión y qué hacer si algo falla.',
-          restrictToSettings: !isConnected(req.user!),
-        }),
-      );
+      sendPage(req, res, 'Conexión', 'settings', body, {
+        subtitle: 'Tu número de WhatsApp: si está sano para enviar, cómo está la conexión y qué hacer si algo falla.',
+        restrictToSettings: !isConnected(req.user!),
+      });
     }),
   );
 
@@ -621,13 +654,10 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     requireSection('settings'),
     ah(async (req: AuthedRequest, res) => {
       if (!esamEsAdmin(req.user!)) return res.status(403).send(renderPlain('Acceso denegado', 'Solo el Super Admin revisa la consistencia de las líneas.'));
-      const q = (k: string) => (typeof req.query[k] === 'string' ? String(req.query[k]) : undefined);
-      res.send(
-        renderLayout('Consistencia de líneas', req.user!, 'settings', linesHealthPage(lineIssues(), { ok: q('ok'), error: q('error') }), {
-          subtitle: 'Cada usuario envía solo desde la línea de su número: acá se detecta y repara lo que esté desordenado.',
-          activeHref: '/settings',
-        }),
-      );
+      sendPage(req, res, 'Consistencia de líneas', 'settings', linesHealthPage(lineIssues(), {}), {
+        subtitle: 'Cada usuario envía solo desde la línea de su número: acá se detecta y repara lo que esté desordenado.',
+        activeHref: '/settings',
+      });
     }),
   );
 
@@ -638,12 +668,17 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     ah(async (req: AuthedRequest, res) => {
       if (!esamEsAdmin(req.user!)) return res.status(403).send(renderPlain('Acceso denegado', 'Solo el Super Admin repara las líneas.'));
       const action = String(req.body?.action ?? '') as LineFixAction;
-      if (!['release_owner', 'assign_owner', 'align_expected'].includes(action)) return res.redirect('/settings/lines?error=' + encodeURIComponent('Acción no válida.'));
+      if (!['release_owner', 'assign_owner', 'align_expected'].includes(action)) {
+        setFlash(res, 'error', 'Acción no válida.');
+        return res.redirect('/settings/lines');
+      }
       try {
         const msg = applyLineFix(action, String(req.body?.session ?? ''), req.user!.id, req.body?.uid ? String(req.body.uid) : null);
-        res.redirect('/settings/lines?ok=' + encodeURIComponent(msg));
+        setFlash(res, 'ok', msg);
+        res.redirect('/settings/lines');
       } catch (err) {
-        res.redirect('/settings/lines?error=' + encodeURIComponent((err as Error).message));
+        setFlash(res, 'error', (err as Error).message);
+        res.redirect('/settings/lines');
       }
     }),
   );
@@ -700,12 +735,11 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
       try {
         const n = await manager.repairEncryption(session.id);
         audit('session.repair', { session_id: session.id, by: req.user!.id, removed: n });
-        res.redirect(
-          '/settings?ok=' +
-            encodeURIComponent(`Cifrado reparado (${n} claves regeneradas). Los próximos mensajes negocian claves nuevas con cada contacto: enviá uno de prueba.`),
-        );
+        setFlash(res, 'ok', `Cifrado reparado (${n} claves regeneradas). Los próximos mensajes negocian claves nuevas con cada contacto: enviá uno de prueba.`);
+        res.redirect('/settings');
       } catch (err) {
-        res.redirect('/settings?ok=' + encodeURIComponent('No se pudo reparar: ' + (err as Error).message));
+        setFlash(res, 'error', 'No se pudo reparar: ' + (err as Error).message);
+        res.redirect('/settings');
       }
     }),
   );
@@ -721,7 +755,8 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
       await manager.logout(session.id);
       run('UPDATE sessions SET disconnect_info = NULL WHERE id = ?', session.id);
       audit('session.reset', { session_id: session.id, by: req.user!.id });
-      res.redirect('/settings?ok=' + encodeURIComponent('Listo para vincular de nuevo: pulsá «Mostrar QR» y escanealo desde WhatsApp › Dispositivos vinculados.'));
+      setFlash(res, 'ok', 'Listo para vincular de nuevo: pulsá «Mostrar QR» y escanealo desde WhatsApp › Dispositivos vinculados.');
+      res.redirect('/settings');
     }),
   );
 
@@ -732,7 +767,8 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     requireSection('settings'),
     ah(async (req: AuthedRequest, res) => {
       if (!esamEsAdmin(req.user!)) {
-        return res.redirect('/settings?ok=' + encodeURIComponent('Solo un administrador puede crear sesiones.'));
+        setFlash(res, 'error', 'Solo un administrador puede crear sesiones.');
+        return res.redirect('/settings');
       }
       const name = String(req.body?.name ?? '').trim() || 'esam-principal';
       const row = manager.createSession(name, config.apiKey || null, `whsec_${Math.random().toString(36).slice(2)}`);
@@ -740,9 +776,11 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
         await manager.start(row.id);
       } catch (err) {
         logger.warn({ err: (err as Error).message }, 'No se pudo arrancar la sesión creada');
-        return res.redirect('/settings?ok=' + encodeURIComponent('Sesión creada, pero no arrancó: ' + (err as Error).message));
+        setFlash(res, 'error', 'Sesión creada, pero no arrancó: ' + (err as Error).message);
+        return res.redirect('/settings');
       }
-      res.redirect('/settings?ok=' + encodeURIComponent('Sesión creada. Pulsá “Mostrar QR” para vincular el número.'));
+      setFlash(res, 'ok', 'Sesión creada. Pulsá “Mostrar QR” para vincular el número.');
+      res.redirect('/settings');
     }),
   );
 
@@ -772,7 +810,8 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
       if (!session) return res.redirect('/settings');
       await manager.reconnect(session.id);
       audit('session.reconnect', { session_id: session.id, by: req.user!.id });
-      res.redirect('/settings?ok=' + encodeURIComponent('Reconectando con WhatsApp… en unos segundos llegan los mensajes pendientes.'));
+      setFlash(res, 'ok', 'Reconectando con WhatsApp… en unos segundos llegan los mensajes pendientes.');
+      res.redirect('/settings');
     }),
   );
 
@@ -848,8 +887,7 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     ah(async (req: AuthedRequest, res) => {
       const g = getGroup(String(req.params.group));
       if (!g) return res.status(404).send(renderPlain('Envío no encontrado', '<p>La programación no existe o ya se eliminó.</p>'));
-      const msg = typeof req.query.ok === 'string' ? req.query.ok : null;
-      res.send(renderLayout('Confirmar envío programado', req.user!, 'batches', confirmPage(req.user!, g, msg), { activeHref: '/batches' }));
+      sendPage(req, res, 'Confirmar envío programado', 'batches', confirmPage(req.user!, g, null), { activeHref: '/batches' });
     }),
   );
 
@@ -871,7 +909,8 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
         const n = cancelGroup(group, req.user!);
         msg = n ? `Cancelado: ${n} lote(s) no se enviarán.` : 'No había lotes pendientes.';
       }
-      res.redirect(`/batches/confirm/${encodeURIComponent(group)}?ok=${encodeURIComponent(msg)}`);
+      setFlash(res, 'ok', msg);
+      res.redirect(`/batches/confirm/${encodeURIComponent(group)}`);
     }),
   );
 
@@ -1074,12 +1113,10 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
       today.active = active;
       const eng = batchesEngagement(rows.filter((r: any) => r.sent > 0).map((r: any) => Number(r.id)));
       const body = pendingCard + stopAll + batchesPage(rows, today, eng);
-      res.send(
-        renderLayout('Lotes', req.user!, 'batches', body, {
-          subtitle: 'Envíos masivos por día: quién los pidió, desde qué línea y cómo avanzan, en vivo.',
-          activeHref: '/batches',
-        }),
-      );
+      sendPage(req, res, 'Lotes', 'batches', body, {
+        subtitle: 'Envíos masivos por día: quién los pidió, desde qué línea y cómo avanzan, en vivo.',
+        activeHref: '/batches',
+      });
     }),
   );
 
@@ -1088,7 +1125,9 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     requireUser,
     requireSection('batches'),
     ah(async (req: AuthedRequest, res) => {
-      const b = get<any>('SELECT * FROM batches WHERE id = ?', Number(req.params.id));
+      const id = positiveInt(req.params.id);
+      if (!id) return res.status(404).json({ message: 'No encontrado' });
+      const b = get<any>('SELECT * FROM batches WHERE id = ?', id);
       if (!b) return res.status(404).json({ message: 'No encontrado' });
       const pending = Math.max(0, b.total - b.sent - b.failed - b.skipped);
       const progress = b.total > 0 ? Math.round(((b.sent + b.failed + b.skipped) / b.total) * 100) : 0;
@@ -1101,23 +1140,23 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     requireUser,
     requireSection('batches'),
     ah(async (req: AuthedRequest, res) => {
+      const id = positiveInt(req.params.id);
+      if (!id) return res.status(404).send(renderPlain('Lote', 'No encontrado'));
       const raw = get<any>(
         `SELECT b.*, s.owner_name AS line_owner, s.name AS line_name, s.status AS line_status,
                 COALESCE(s.phone, s.expected_phone) AS line_phone, s.expected_phone AS line_expected
            FROM batches b LEFT JOIN sessions s ON s.id = b.session_id WHERE b.id = ?`,
-        Number(req.params.id),
+        id,
       );
       if (!raw) return res.status(404).send(renderPlain('Lote', 'No encontrado'));
       const b = withRequester([raw])[0];
       const ITEMS_MAX = 3000;
       const items = all<any>('SELECT * FROM batch_items WHERE batch_id = ? ORDER BY id LIMIT ?', b.id, ITEMS_MAX);
-      const body = batchDetailPage(b, items, { truncated: items.length >= ITEMS_MAX && b.total > ITEMS_MAX, engagement: batchEngagement(b.id), error: typeof req.query.error === 'string' ? req.query.error : undefined });
-      res.send(
-        renderLayout('Lote #' + b.id, req.user!, 'batches', body, {
-          subtitle: 'Detalle del envío: quién lo pidió, la línea, el mensaje, los tiempos y cada destinatario.',
-          activeHref: '/batches',
-        }),
-      );
+      const body = batchDetailPage(b, items, { truncated: items.length >= ITEMS_MAX && b.total > ITEMS_MAX, engagement: batchEngagement(b.id) });
+      sendPage(req, res, 'Lote #' + b.id, 'batches', body, {
+        subtitle: 'Detalle del envío: quién lo pidió, la línea, el mensaje, los tiempos y cada destinatario.',
+        activeHref: '/batches',
+      });
     }),
   );
 
@@ -1160,8 +1199,11 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     ah(async (req: AuthedRequest, res) => {
       const id = Number(req.params.id);
       const json = wantsJson(req);
-      const fail = (status: number, msg: string) =>
-        json ? res.status(status).json({ error: msg }) : res.redirect(`/batches/${id}?error=${encodeURIComponent(msg)}`);
+      const fail = (status: number, msg: string) => {
+        if (json) return res.status(status).json({ error: msg });
+        setFlash(res, 'error', msg);
+        return res.redirect(`/batches/${id}`);
+      };
       const b = get<{ id: number; name: string | null; session_id: string; meta: string | null }>('SELECT id, name, session_id, meta FROM batches WHERE id = ?', id);
       if (!b) return fail(404, 'Lote no encontrado.');
       const mode = (['unread', 'unreplied', 'failed'].includes(String(req.body?.mode)) ? String(req.body.mode) : 'unread') as FollowUpMode;
@@ -1193,6 +1235,7 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
         );
         audit('batch.followup', { from: id, to: result.batchId, mode, total: result.total, by: req.user!.id });
         if (json) return res.json({ ok: true, batch_id: result.batchId, total: result.total });
+        setFlash(res, 'ok', `Seguimiento creado: ${result.total} mensaje(s).`);
         res.redirect(`/batches/${result.batchId}`);
       } catch (err) {
         return fail(422, (err as Error).message);
@@ -1250,11 +1293,9 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
               <form method="post" action="/autoreplies/${r.id}/delete"><button class="btn btn-soft-danger btn-sm" type="submit">Borrar</button></form></span>`,
           ]),
         )}</div></div>`;
-      res.send(
-        renderLayout('Auto-respuestas', req.user!, 'autoreplies', body, {
-          subtitle: 'Respuestas automáticas que se disparan al recibir ciertas palabras clave.',
-        }),
-      );
+      sendPage(req, res, 'Auto-respuestas', 'autoreplies', body, {
+        subtitle: 'Respuestas automáticas que se disparan al recibir ciertas palabras clave.',
+      });
     }),
   );
 
@@ -1308,13 +1349,10 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
            </div>
          </form>`,
       );
-      res.send(
-        renderLayout('Importar CSV', req.user!, 'batches', body, {
-          flash: flash(req),
-          subtitle: 'Creá un lote a partir de un archivo con destinatarios y variables.',
-          activeHref: '/import',
-        }),
-      );
+      sendPage(req, res, 'Importar CSV', 'batches', body, {
+        subtitle: 'Creá un lote a partir de un archivo con destinatarios y variables.',
+        activeHref: '/import',
+      });
     }),
   );
 
@@ -1326,7 +1364,10 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     ah(async (req: AuthedRequest, res) => {
       const file = (req as AuthedRequest & { file?: { buffer: Buffer; originalname: string } }).file;
       const session = manager.primary();
-      if (!file || !session) return res.redirect('/import?ok=' + encodeURIComponent('No se pudo importar.'));
+      if (!file || !session) {
+        setFlash(res, 'error', 'No se pudo importar.');
+        return res.redirect('/import');
+      }
       const { saveUpload } = await import('../core/uploads.js');
       const filePath = saveUpload(file.originalname, file.buffer);
       const result = importCsvToBatch(
@@ -1345,10 +1386,12 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
             runner,
           ).batchId ?? 0,
       );
-      const msg = result.batchId
-        ? `Lote #${result.batchId} creado con ${result.total} destinatarios (${result.skipped} omitidos).`
-        : `No se creó el lote: ${result.errors.join(' ')}`;
-      res.redirect('/import?ok=' + encodeURIComponent(msg));
+      if (result.batchId) {
+        setFlash(res, 'ok', `Lote #${result.batchId} creado con ${result.total} destinatarios (${result.skipped} omitidos).`);
+      } else {
+        setFlash(res, 'error', `No se creó el lote: ${result.errors.join(' ')}`);
+      }
+      res.redirect('/import');
     }),
   );
 
@@ -1390,13 +1433,10 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
             `<form method="post" action="/quick-replies/${r.id}/delete"><button class="btn btn-soft-danger btn-sm" type="submit">Borrar</button></form>`,
           ]),
         )}</div></div>`;
-      res.send(
-        renderLayout('Plantillas rápidas', req.user!, 'templates', body, {
-          flash: flash(req),
-          subtitle: 'Atajos de respuesta que aceleran el trabajo en el inbox.',
-          activeHref: '/quick-replies',
-        }),
-      );
+      sendPage(req, res, 'Plantillas rápidas', 'templates', body, {
+        subtitle: 'Atajos de respuesta que aceleran el trabajo en el inbox.',
+        activeHref: '/quick-replies',
+      });
     }),
   );
 
@@ -1412,9 +1452,11 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
           content: String(req.body?.content ?? ''),
           shared: !!req.body?.shared && esamEsAdmin(user),
         });
-        res.redirect('/quick-replies?ok=' + encodeURIComponent('Plantilla rápida creada.'));
+        setFlash(res, 'ok', 'Plantilla rápida creada.');
+        res.redirect('/quick-replies');
       } catch (err) {
-        res.redirect('/quick-replies?ok=' + encodeURIComponent((err as Error).message));
+        setFlash(res, 'error', (err as Error).message);
+        res.redirect('/quick-replies');
       }
     }),
   );
@@ -1425,7 +1467,8 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     requireSection('templates'),
     ah(async (req: AuthedRequest, res) => {
       quickReplies.deleteQuickReply(Number(req.params.id));
-      res.redirect('/quick-replies?ok=' + encodeURIComponent('Plantilla rápida eliminada.'));
+      setFlash(res, 'ok', 'Plantilla rápida eliminada.');
+      res.redirect('/quick-replies');
     }),
   );
 
@@ -1453,11 +1496,9 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
             `<form method="post" action="/optouts/${esc(o.chat_id)}/delete"><button class="btn btn-soft-danger btn-sm" type="submit">Quitar</button></form>`,
           ]),
         )}</div></div>`;
-      res.send(
-        renderLayout('Lista de no enviar', req.user!, 'optouts', body, {
-          subtitle: 'Números que nunca deben recibir mensajes. Se respetan en todos los envíos.',
-        }),
-      );
+      sendPage(req, res, 'Lista de no enviar', 'optouts', body, {
+        subtitle: 'Números que nunca deben recibir mensajes. Se respetan en todos los envíos.',
+      });
     }),
   );
 
@@ -1566,13 +1607,11 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     requireSection('conversations'),
     ah(async (req: AuthedRequest, res) => {
       const body = renderInboxShell(req.user!, '');
-      res.send(
-        renderLayout('Conversaciones', req.user!, 'conversations', body, {
-          subtitle: 'Bandeja unificada: leé y respondé los chats de WhatsApp en tiempo real.',
-          badges: inboxUnreadBadges(req.user!),
-          activeHref: '/conversations',
-        }),
-      );
+      sendPage(req, res, 'Conversaciones', 'conversations', body, {
+        subtitle: 'Bandeja unificada: leé y respondé los chats de WhatsApp en tiempo real.',
+        badges: inboxUnreadBadges(req.user!),
+        activeHref: '/conversations',
+      });
     }),
   );
 
@@ -1597,34 +1636,47 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     requireSection('conversations'),
     ah(async (req: AuthedRequest, res) => {
       const body = renderInboxShell(req.user!, String(req.params.chat));
-      res.send(
-        renderLayout('Conversaciones', req.user!, 'conversations', body, {
-          subtitle: 'Bandeja unificada: leé y respondé los chats de WhatsApp en tiempo real.',
-          badges: inboxUnreadBadges(req.user!),
-          activeHref: '/conversations',
-        }),
-      );
+      sendPage(req, res, 'Conversaciones', 'conversations', body, {
+        subtitle: 'Bandeja unificada: leé y respondé los chats de WhatsApp en tiempo real.',
+        badges: inboxUnreadBadges(req.user!),
+        activeHref: '/conversations',
+      });
     }),
   );
 
   // ── Notas internas (todas las notas + etiquetas) ────────────────────────────
-  app.get(
-    '/notes',
-    requireUser,
-    requireSection('conversations'),
-    (_req: AuthedRequest, res) => {
-      res.send(
-        renderLayout('Notas y tareas', _req.user!, 'conversations', renderNotesPage(), {
-          subtitle: esamEsAdmin(_req.user!)
-            ? 'Notas, tareas y derivaciones de todo el equipo, en lista o en pipeline por etapas.'
-            : esamSupervisaArea(_req.user!) === 'marketing'
-              ? 'Tus notas y el seguimiento de todo Marketing (prospectos de cada asesor), en lista o en pipeline.'
-              : 'Tus notas, tareas y lo que te derivaron, en lista o en pipeline por etapas.',
-          activeHref: '/notes',
-        }),
-      );
-    },
-  );
+  const sendNotesPage = (req: AuthedRequest, res: Response, opts: { focusId?: number; status?: string } = {}): void => {
+    sendPage(req, res, 'Notas y tareas', 'conversations', renderNotesPage(opts), {
+      subtitle: esamEsAdmin(req.user!)
+        ? 'Notas, tareas y derivaciones de todo el equipo, en lista o en pipeline por etapas.'
+        : esamSupervisaArea(req.user!) === 'marketing'
+          ? 'Tus notas y el seguimiento de todo Marketing (prospectos de cada asesor), en lista o en pipeline.'
+          : 'Tus notas, tareas y lo que te derivaron, en lista o en pipeline por etapas.',
+      activeHref: '/notes',
+    });
+  };
+
+  app.get('/notes', requireUser, requireSection('conversations'), (req: AuthedRequest, res: Response) => {
+    sendNotesPage(req, res);
+  });
+
+  app.get('/notes/estado/:status', requireUser, requireSection('conversations'), (req: AuthedRequest, res: Response) => {
+    const status = String(req.params.status);
+    if (!isOneOf(status, NOTE_STATUSES)) {
+      res.status(404).send(pageHtml(req, res, 'Estado no encontrado', 'conversations', emptyState('ri-question-line', 'Estado no encontrado', 'El filtro de notas no existe.')));
+      return;
+    }
+    sendNotesPage(req, res, { status: slugToNoteStatus(status) });
+  });
+
+  app.get('/notes/:id', requireUser, requireSection('conversations'), (req: AuthedRequest, res: Response) => {
+    const id = positiveInt(req.params.id);
+    if (!id) {
+      res.status(404).send(pageHtml(req, res, 'Nota no encontrada', 'conversations', emptyState('ri-sticky-note-line', 'Nota no encontrada', 'El identificador de la nota no es válido.')));
+      return;
+    }
+    sendNotesPage(req, res, { focusId: id });
+  });
 
   // Sirve un adjunto (imagen/audio/video/documento) de un mensaje.
   app.get(
@@ -1632,9 +1684,11 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     requireUser,
     requireSection('conversations'),
     ah(async (req: AuthedRequest, res) => {
+      const id = positiveInt(req.params.id);
+      if (!id) return res.status(404).end();
       const msg = get<{ id: number; session_id: string | null; media_mime: string | null; media_filename: string | null }>(
         'SELECT id, session_id, media_mime, media_filename FROM messages WHERE id = ?',
-        Number(req.params.id),
+        id,
       );
       if (!msg) return res.status(404).end();
       // Solo media de las sesiones/números del usuario.
@@ -1694,11 +1748,9 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
               <form method="post" action="/stickers/${s.id}/delete"><button class="btn btn-soft-danger btn-sm" type="submit">Borrar</button></form></span>`,
           ]),
         )}</div></div>`;
-      res.send(
-        renderLayout('Stickers', req.user!, 'stickers', body, {
-          subtitle: 'Convertí imágenes en stickers listos para enviar desde el chat.',
-        }),
-      );
+      sendPage(req, res, 'Stickers', 'stickers', body, {
+        subtitle: 'Convertí imágenes en stickers listos para enviar desde el chat.',
+      });
     }),
   );
 
@@ -1707,7 +1759,9 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     requireUser,
     requireSection('stickers'),
     (req: AuthedRequest, res) => {
-      const row = getSticker(Number(req.params.id));
+      const id = positiveInt(req.params.id);
+      if (!id) return res.status(404).end();
+      const row = getSticker(id);
       if (!row || !fs.existsSync(row.media_path)) return res.status(404).end();
       res.type(row.media_mime).send(fs.readFileSync(row.media_path));
     },
@@ -1761,63 +1815,104 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
    * En Reportes (`allAdminLines`) el Super Admin ve todas las líneas; Monitoreo
    * mantiene el alcance personal de `sessionScopeFor`.
    */
-  const followupScope = (req: AuthedRequest, allAdminLines = false) => {
+  const followupScope = (req: AuthedRequest, allAdminLines = false, requestedSession = '') => {
     const sessionIds = allAdminLines ? reportsScopeFor(req.user!) : sessionScopeFor(req.user!);
     const visible = manager.list().filter((s) => sessionIds === null || sessionIds.includes(s.id));
-    const requested = typeof req.query.session === 'string' ? req.query.session : '';
+    const requested = requestedSession || (typeof req.query.session === 'string' ? req.query.session : '');
     const selected = visible.some((s) => s.id === requested) ? requested : '';
-    return { scope: { sessionIds, sessionId: selected || null }, visible, selected };
+    return { scope: { sessionIds, sessionId: selected || null }, visible, selected, requested };
   };
   const qstr = (req: AuthedRequest, k: string) => (typeof req.query[k] === 'string' ? String(req.query[k]) : '');
 
-  app.get(
-    '/monitoring',
-    requireUser,
-    requireSection('monitoring'),
-    ah(async (req: AuthedRequest, res) => {
-      const { scope, visible, selected } = followupScope(req);
-      const period = resolvePeriod({ period: qstr(req, 'period'), from: qstr(req, 'from'), to: qstr(req, 'to') }, 'today');
-      const activity = sessionActivity(scope);
-      const shown = selected ? visible.filter((s) => s.id === selected) : visible;
-      const tab = (['pendientes', 'actividad', 'numeros'] as MonitoringTab[]).includes(qstr(req, 'tab') as MonitoringTab)
-        ? (qstr(req, 'tab') as MonitoringTab)
-        : 'pendientes';
-      const body = renderMonitoring({
-        tab,
-        period,
-        selectedSession: selected,
-        sessions: shown.map((row) => ({
-          row,
-          health: getHealth(row.id),
-          activity: activity.get(row.id),
-          decrypt: manager.decryptStats(row.id),
-        })),
-        attention: attentionData(scope, period),
-        pending: pendingReplies(scope, { maxAgeDays: 7, limit: 60 }),
-        notes: notesFollowup(scope, period),
-        activity: activityData(
-          { from: period.from, to: period.to },
-          scope.sessionId ? [scope.sessionId] : scope.sessionIds,
-        ),
-      });
-      res.send(
-        renderLayout('Seguimiento', req.user!, 'monitoring', body, {
-          subtitle: 'Conversaciones pendientes, tiempos de respuesta y seguimientos del día.',
-          actions: `<a class="btn btn-soft-primary btn-sm" href="/reports"><i class="ri-bar-chart-box-line me-1"></i>Reportes</a>`,
-        }),
-      );
-    }),
-  );
+  const renderMonitoringPage = (
+    req: AuthedRequest,
+    res: Response,
+    tab: MonitoringTabSlug,
+    periodSlug: PeriodSlug,
+    sessionParam = '',
+  ): void => {
+    const { scope, visible, selected, requested } = followupScope(req, false, sessionParam);
+    if (requested && !selected) {
+      res.status(404).send(pageHtml(req, res, 'Número no encontrado', 'monitoring', emptyState('ri-smartphone-line', 'Número no encontrado', 'La línea no existe o no tenés acceso a ella.')));
+      return;
+    }
+    const period = resolvePeriod(
+      { period: periodSlug === 'rango' ? 'custom' : slugToPeriod(periodSlug), from: qstr(req, 'from'), to: qstr(req, 'to') },
+      'today',
+    );
+    const activity = sessionActivity(scope);
+    const shown = selected ? visible.filter((s) => s.id === selected) : visible;
+    const body = renderMonitoring({
+      tab,
+      period,
+      selectedSession: selected,
+      sessions: shown.map((row) => ({
+        row,
+        health: getHealth(row.id),
+        activity: activity.get(row.id),
+        decrypt: manager.decryptStats(row.id),
+      })),
+      attention: attentionData(scope, period),
+      pending: pendingReplies(scope, { maxAgeDays: 7, limit: 60 }),
+      notes: notesFollowup(scope, period),
+      activity: activityData(
+        { from: period.from, to: period.to },
+        scope.sessionId ? [scope.sessionId] : scope.sessionIds,
+      ),
+    });
+    sendPage(req, res, 'Seguimiento', 'monitoring', body, {
+      subtitle: 'Conversaciones pendientes, tiempos de respuesta y seguimientos del día.',
+      actions: `<a class="btn btn-soft-primary btn-sm" href="${reportsUrl()}"><i class="ri-bar-chart-box-line me-1"></i>Reportes</a>`,
+    });
+  };
 
-  const buildReports = (req: AuthedRequest) => {
-    const { scope, visible, selected } = followupScope(req, true);
-    const period = resolvePeriod({ period: qstr(req, 'period'), from: qstr(req, 'from'), to: qstr(req, 'to') }, '30d');
+  app.get('/monitoring', requireUser, requireSection('monitoring'), (_req: AuthedRequest, res: Response) => {
+    res.redirect(302, monitoringUrl());
+  });
+
+  for (const path of ['/monitoring/:tab/:period', '/monitoring/:tab/:period/:session']) {
+    app.get(
+      path,
+      requireUser,
+      requireSection('monitoring'),
+      ah(async (req: AuthedRequest, res) => {
+        const tab = String(req.params.tab);
+        const period = String(req.params.period);
+        if (!isOneOf(tab, MONITORING_TABS) || !isOneOf(period, PERIOD_SLUGS)) {
+          res.status(404).send(pageHtml(req, res, 'Ruta no encontrada', 'monitoring', emptyState('ri-question-line', 'Ruta no encontrada', 'La pestaña o el período no existen.')));
+          return;
+        }
+        const sessionParam = req.params.session ? validSessionId(req.params.session) : '';
+        if (req.params.session && !sessionParam) {
+          res.status(404).send(pageHtml(req, res, 'Número no encontrado', 'monitoring', emptyState('ri-smartphone-line', 'Número no encontrado', 'El identificador de la línea no es válido.')));
+          return;
+        }
+        renderMonitoringPage(req, res, tab as MonitoringTabSlug, period as PeriodSlug, sessionParam ?? '');
+      }),
+    );
+  }
+
+  const buildReports = (
+    req: AuthedRequest,
+    opts: { tab?: ReportsTabSlug; period?: PeriodSlug; session?: string } = {},
+  ) => {
+    const { scope, visible, selected, requested } = followupScope(req, true, opts.session ?? '');
+    const period = resolvePeriod(
+      {
+        period: opts.period ? (opts.period === 'rango' ? 'custom' : slugToPeriod(opts.period)) : qstr(req, 'period'),
+        from: qstr(req, 'from'),
+        to: qstr(req, 'to'),
+      },
+      '30d',
+    );
     const filters = { programa: qstr(req, 'programa'), account: qstr(req, 'account'), area: qstr(req, 'area'), tipo: qstr(req, 'tipo') };
     const attention = attentionData(scope, period);
     const previous = previousPeriod(period);
-    const tab = (['atencion', 'equipo', 'seguimiento', 'envios', 'masivos'] as ReportsTab[]).includes(qstr(req, 'tab') as ReportsTab)
-      ? (qstr(req, 'tab') as ReportsTab)
-      : 'atencion';
+    const tab =
+      opts.tab ??
+      ((['atencion', 'equipo', 'seguimiento', 'envios', 'masivos'] as ReportsTab[]).includes(qstr(req, 'tab') as ReportsTab)
+        ? (qstr(req, 'tab') as ReportsTab)
+        : 'atencion');
     const sends = monitoringData(
       {
         from: period.from,
@@ -1841,6 +1936,7 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
       previous,
       sessions: visible,
       selectedSession: selected,
+      requestedSession: requested,
       attention,
       prevAttention: attentionData(scope, previous),
       delivery: deliveryStats(scope, period),
@@ -1869,20 +1965,49 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     };
   };
 
-  app.get(
-    '/reports',
-    requireUser,
-    requireSection('reports'),
-    ah(async (req: AuthedRequest, res) => {
-      const view = buildReports(req);
-      res.send(
-        renderLayout('Reportes', req.user!, 'reports', renderReports(view), {
-          subtitle: `Atención, seguimiento y envíos · ${view.period.label}`,
-          actions: `<a class="btn btn-soft-primary btn-sm" href="/monitoring"><i class="ri-pulse-line me-1"></i>Seguimiento</a>`,
-        }),
-      );
-    }),
-  );
+  const renderReportsPage = (
+    req: AuthedRequest,
+    res: Response,
+    tab: ReportsTabSlug,
+    period: PeriodSlug,
+    sessionParam = '',
+  ): void => {
+    const view = buildReports(req, { tab, period, session: sessionParam });
+    if (sessionParam && !view.selectedSession) {
+      res.status(404).send(pageHtml(req, res, 'Número no encontrado', 'reports', emptyState('ri-smartphone-line', 'Número no encontrado', 'La línea no existe o no tenés acceso a ella.')));
+      return;
+    }
+    sendPage(req, res, 'Reportes', 'reports', renderReports(view), {
+      subtitle: `Atención, seguimiento y envíos · ${view.period.label}`,
+      actions: `<a class="btn btn-soft-primary btn-sm" href="${monitoringUrl()}"><i class="ri-pulse-line me-1"></i>Seguimiento</a>`,
+    });
+  };
+
+  app.get('/reports', requireUser, requireSection('reports'), (_req: AuthedRequest, res: Response) => {
+    res.redirect(302, reportsUrl());
+  });
+
+  for (const path of ['/reports/:tab/:period', '/reports/:tab/:period/:session']) {
+    app.get(
+      path,
+      requireUser,
+      requireSection('reports'),
+      ah(async (req: AuthedRequest, res) => {
+        const tab = String(req.params.tab);
+        const period = String(req.params.period);
+        if (!isOneOf(tab, REPORTS_TABS) || !isOneOf(period, PERIOD_SLUGS)) {
+          res.status(404).send(pageHtml(req, res, 'Ruta no encontrada', 'reports', emptyState('ri-question-line', 'Ruta no encontrada', 'La pestaña o el período no existen.')));
+          return;
+        }
+        const sessionParam = req.params.session ? validSessionId(req.params.session) : '';
+        if (req.params.session && !sessionParam) {
+          res.status(404).send(pageHtml(req, res, 'Número no encontrado', 'reports', emptyState('ri-smartphone-line', 'Número no encontrado', 'El identificador de la línea no es válido.')));
+          return;
+        }
+        renderReportsPage(req, res, tab as ReportsTabSlug, period as PeriodSlug, sessionParam ?? '');
+      }),
+    );
+  }
 
   app.get(
     '/reports/export.csv',
@@ -1908,65 +2033,104 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     }),
   );
 
-  app.get(
-    '/reports/users/:id',
-    requireUser,
-    requireSection('reports'),
-    ah(async (req: AuthedRequest, res) => {
-      const id = Number(req.params.id);
-      const target = Number.isInteger(id) ? listUsers().find((u) => u.id === id) : undefined;
-      if (!target) {
-        return res.status(404).send(
-          renderLayout('Usuario no encontrado', req.user!, 'reports', emptyState('ri-user-search-line', 'Usuario no encontrado', 'La cuenta pudo haberse eliminado o el enlace no es válido.'), {
+  const renderReportUserPage = (
+    req: AuthedRequest,
+    res: Response,
+    id: number,
+    periodSlug: PeriodSlug,
+    sessionParam = '',
+  ): void => {
+    const target = listUsers().find((u) => u.id === id);
+    if (!target) {
+      res
+        .status(404)
+        .send(
+          pageHtml(req, res, 'Usuario no encontrado', 'reports', emptyState('ri-user-search-line', 'Usuario no encontrado', 'La cuenta pudo haberse eliminado o el enlace no es válido.'), {
             subtitle: 'Ficha de seguimiento',
-            actions: '<a class="btn btn-soft-secondary btn-sm" href="/reports?tab=equipo"><i class="ri-arrow-left-line me-1"></i>Volver a Equipo</a>',
+            actions: `<a class="btn btn-soft-secondary btn-sm" href="${reportsUrl({ tab: 'equipo' })}"><i class="ri-arrow-left-line me-1"></i>Volver a Equipo</a>`,
           }),
         );
-      }
-      const { scope, visible, selected } = followupScope(req, true);
-      const period = resolvePeriod({ period: qstr(req, 'period'), from: qstr(req, 'from'), to: qstr(req, 'to') }, '30d');
-      const filters = {
-        programa: qstr(req, 'programa'),
-        account: qstr(req, 'account'),
-        area: qstr(req, 'area'),
-        tipo: qstr(req, 'tipo'),
-      };
-      const attention = attentionData(scope, period);
-      const performance = userPerformance(scope, period, attention).find((u) => u.id === id);
-      const lastUse = lastUseByUser([target]).get(target.id) ?? null;
-      const detail = userReportDetail(
-        scope,
-        period,
-        { id: target.id, name: target.name, username: target.username, source_uid: target.source_uid },
-        attention,
-        performance,
-      );
-      const back = new URLSearchParams({ tab: 'equipo' });
-      if (period.preset) back.set('period', period.preset);
-      if (period.preset === 'custom') {
-        back.set('from', period.from);
-        back.set('to', period.to);
-      }
-      if (selected) back.set('session', selected);
-      for (const [key, value] of Object.entries(filters)) if (value) back.set(key, value);
-      const body = renderReportUser({
-        user: target,
-        detail,
-        period,
-        sessions: visible,
-        selectedSession: selected,
-        lastUse,
-        filters,
-      });
-      const name = target.name ?? target.username ?? `Usuario ${target.id}`;
-      return res.send(
-        renderLayout(`Ficha de ${name}`, req.user!, 'reports', body, {
-          subtitle: `Seguimiento individual · ${period.label}`,
-          actions: `<a class="btn btn-soft-secondary btn-sm" href="${esc(`/reports?${back.toString()}`)}"><i class="ri-arrow-left-line me-1"></i>Volver a Equipo</a>`,
-        }),
-      );
-    }),
-  );
+      return;
+    }
+    const { scope, visible, selected, requested } = followupScope(req, true, sessionParam);
+    if (requested && !selected) {
+      res.status(404).send(pageHtml(req, res, 'Número no encontrado', 'reports', emptyState('ri-smartphone-line', 'Número no encontrado', 'La línea no existe o no tenés acceso a ella.')));
+      return;
+    }
+    const period = resolvePeriod(
+      { period: periodSlug === 'rango' ? 'custom' : slugToPeriod(periodSlug), from: qstr(req, 'from'), to: qstr(req, 'to') },
+      '30d',
+    );
+    const filters = {
+      programa: qstr(req, 'programa'),
+      account: qstr(req, 'account'),
+      area: qstr(req, 'area'),
+      tipo: qstr(req, 'tipo'),
+    };
+    const attention = attentionData(scope, period);
+    const performance = userPerformance(scope, period, attention).find((u) => u.id === id);
+    const lastUse = lastUseByUser([target]).get(target.id) ?? null;
+    const detail = userReportDetail(
+      scope,
+      period,
+      { id: target.id, name: target.name, username: target.username, source_uid: target.source_uid },
+      attention,
+      performance,
+    );
+    const back = reportsUrl({
+      tab: 'equipo',
+      period: periodSlug,
+      session: selected,
+      from: periodSlug === 'rango' ? period.from : undefined,
+      to: periodSlug === 'rango' ? period.to : undefined,
+      ...filters,
+    });
+    const body = renderReportUser({
+      user: target,
+      detail,
+      period,
+      sessions: visible,
+      selectedSession: selected,
+      lastUse,
+      filters,
+    });
+    const name = target.name ?? target.username ?? `Usuario ${target.id}`;
+    sendPage(req, res, `Ficha de ${name}`, 'reports', body, {
+      subtitle: `Seguimiento individual · ${period.label}`,
+      actions: `<a class="btn btn-soft-secondary btn-sm" href="${back}"><i class="ri-arrow-left-line me-1"></i>Volver a Equipo</a>`,
+    });
+  };
+
+  app.get('/reports/users/:id', requireUser, requireSection('reports'), (req: AuthedRequest, res: Response) => {
+    const id = positiveInt(req.params.id);
+    if (!id) {
+      res.status(404).send(pageHtml(req, res, 'Usuario no encontrado', 'reports', emptyState('ri-user-search-line', 'Usuario no encontrado', 'El identificador no es válido.')));
+      return;
+    }
+    res.redirect(302, reportsUserUrl({ id, period: '30d' }));
+  });
+
+  for (const path of ['/reports/users/:id/:period', '/reports/users/:id/:period/:session']) {
+    app.get(
+      path,
+      requireUser,
+      requireSection('reports'),
+      ah(async (req: AuthedRequest, res) => {
+        const id = positiveInt(req.params.id);
+        const period = String(req.params.period);
+        if (!id || !isOneOf(period, PERIOD_SLUGS)) {
+          res.status(404).send(pageHtml(req, res, 'Ruta no encontrada', 'reports', emptyState('ri-question-line', 'Ruta no encontrada', 'El usuario o el período no existen.')));
+          return;
+        }
+        const sessionParam = req.params.session ? validSessionId(req.params.session) : '';
+        if (req.params.session && !sessionParam) {
+          res.status(404).send(pageHtml(req, res, 'Número no encontrado', 'reports', emptyState('ri-smartphone-line', 'Número no encontrado', 'El identificador de la línea no es válido.')));
+          return;
+        }
+        renderReportUserPage(req, res, id, period as PeriodSlug, sessionParam ?? '');
+      }),
+    );
+  }
 
   // ── Políticas (anti-baneo) ───────────────────────────────────────────────────
 
@@ -1987,11 +2151,9 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
          ${row('Enfriamiento entre programas', `${p.programCooldownMinutes} min`)}
          <p class="text-muted mb-0 mt-3">Se configura con variables de entorno (PACING_*) en <span class="ff-monospace">.env</span>.</p>`,
       );
-      res.send(
-        renderLayout('Políticas', req.user!, 'policies', body, {
-          subtitle: 'Reglas anti-baneo que regulan el ritmo y las ventanas de envío.',
-        }),
-      );
+      sendPage(req, res, 'Políticas', 'policies', body, {
+        subtitle: 'Reglas anti-baneo que regulan el ritmo y las ventanas de envío.',
+      });
     }),
   );
 
@@ -2025,13 +2187,6 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
   });
 
   return app;
-}
-
-function flash(req: Request): string | undefined {
-  const url = req.originalUrl;
-  const q = url.includes('?') ? url.slice(url.indexOf('?') + 1) : '';
-  const params = new URLSearchParams(q);
-  return params.get('ok') ?? undefined;
 }
 
 export { esamEsAdmin, esamRoles, fs };

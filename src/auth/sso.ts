@@ -67,9 +67,23 @@ function safeEqualHex(a: string, b: string): boolean {
   return crypto.timingSafeEqual(bufA, bufB);
 }
 
-/** Genera un `next` seguro (solo rutas internas). */
+/**
+ * Devuelve un destino interno seguro. Rechaza URLs absolutas, protocol-relative
+ * (`//sitio`), barras invertidas y caracteres de control que el navegador podría
+ * normalizar a un host externo.
+ */
 export function safeNext(next: unknown, fallback: string): string {
-  return typeof next === 'string' && next.startsWith('/') ? next : fallback;
+  if (typeof next !== 'string') return fallback;
+  const value = next.trim();
+  if (!value || !value.startsWith('/') || value.startsWith('//') || value.startsWith('/\\')) return fallback;
+  if (/[\u0000-\u001f\u007f\\]/.test(value)) return fallback;
+  try {
+    const url = new URL(value, 'http://local.invalid');
+    if (url.origin !== 'http://local.invalid') return fallback;
+    return `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return fallback;
+  }
 }
 
 export { config };

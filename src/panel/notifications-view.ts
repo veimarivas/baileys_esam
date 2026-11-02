@@ -1,9 +1,8 @@
 import type express from 'express';
 import type { Request, RequestHandler, Response } from 'express';
-import { esc, renderLayout } from './layout.js';
+import { esc } from './layout.js';
 import { emptyState, fmtDate } from './views.js';
 import {
-  isNotificationCategory,
   listNotificationHistory,
   notificationCounts,
   unreadCounts,
@@ -12,6 +11,20 @@ import {
   type NotificationItem,
   type NotificationReadState,
 } from '../core/notifications.js';
+import {
+  NOTIFICATION_CATEGORY_SLUGS,
+  NOTIFICATION_STATE_SLUGS,
+  isOneOf,
+  notificationCategorySlug,
+  notificationStateSlug,
+  notificationsHistoryUrl,
+  positiveInt,
+  slugToNotificationCategory,
+  slugToNotificationState,
+  type NotificationCategorySlug,
+  type NotificationStateSlug,
+} from './urls.js';
+import { sendPage } from './page.js';
 import type { UserRow } from '../auth/users.js';
 
 /**
@@ -36,29 +49,21 @@ interface HistoryFilters {
   page: number;
 }
 
-function q(req: Request, key: string): string {
-  const v = req.query[key];
-  return typeof v === 'string' ? v.trim() : '';
-}
-
-function readFilters(req: Request): HistoryFilters {
-  const rawCat = q(req, 'cat');
-  const rawState = q(req, 'estado');
+function readFilters(params: { category?: string; state?: string; page?: string }): HistoryFilters {
   return {
-    category: isNotificationCategory(rawCat) ? rawCat : 'all',
-    state: rawState === 'unread' || rawState === 'read' ? rawState : 'all',
-    page: Math.max(1, Math.floor(Number(q(req, 'p')) || 1)),
+    category: params.category ? slugToNotificationCategory(params.category as NotificationCategorySlug) : 'all',
+    state: params.state ? slugToNotificationState(params.state as NotificationStateSlug) : 'all',
+    page: positiveInt(params.page) ?? 1,
   };
 }
 
 function href(f: HistoryFilters, overrides: Partial<HistoryFilters> = {}): string {
   const merged = { ...f, ...overrides };
-  const p = new URLSearchParams();
-  if (merged.category !== 'all') p.set('cat', merged.category);
-  if (merged.state !== 'all') p.set('estado', merged.state);
-  if (merged.page > 1) p.set('p', String(merged.page));
-  const query = p.toString();
-  return `/notifications/history${query ? `?${query}` : ''}`;
+  return notificationsHistoryUrl({
+    category: notificationCategorySlug(merged.category),
+    state: notificationStateSlug(merged.state),
+    page: merged.page,
+  });
 }
 
 function stateLabel(state: NotificationReadState): string {
@@ -142,13 +147,26 @@ type Ctx = {
 type AuthedRequest = Request & { user: UserRow };
 
 export function registerNotificationRoutes(app: express.Express, ctx: Ctx): void {
-  app.get('/notifications/history', ctx.requireUser, (req: Request, res: Response) => {
+  const notFound = (req: Request, res: Response) =>
+    res.status(404).type('text').send('La ruta del historial no existe o el filtro no es válido.');
+
+  const handler = (req: Request, res: Response) => {
+    const one = (value: unknown) => (typeof value === 'string' ? value : undefined);
+    const category = one(req.params.category);
+    const state = one(req.params.state);
+    const page = one(req.params.page);
+    if (category && !isOneOf(category, NOTIFICATION_CATEGORY_SLUGS)) return notFound(req, res);
+    if (state && !isOneOf(state, NOTIFICATION_STATE_SLUGS)) return notFound(req, res);
+    if (page && !positiveInt(page)) return notFound(req, res);
     const user = (req as AuthedRequest).user;
-    const f = readFilters(req);
-    res.send(
-      renderLayout('Historial de notificaciones', user, '', renderHistory(user, f), {
-        subtitle: 'Todos tus avisos, leídos y pendientes, con el detalle completo y filtros por división.',
-      }),
-    );
-  });
+    const f = readFilters({ category, state, page });
+    sendPage(req, res, 'Historial de notificaciones', '', renderHistory(user, f), {
+      subtitle: 'Todos tus avisos, leídos y pendientes, con el detalle completo y filtros por división.',
+    });
+  };
+
+  app.get('/notifications/history', ctx.requireUser, handler);
+  app.get('/notifications/history/:category', ctx.requireUser, handler);
+  app.get('/notifications/history/:category/:state', ctx.requireUser, handler);
+  app.get('/notifications/history/:category/:state/:page', ctx.requireUser, handler);
 }

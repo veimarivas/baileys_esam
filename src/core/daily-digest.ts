@@ -111,7 +111,7 @@ export function sendDailyDigests(users: UserRow[]): number {
       kind: 'daily_digest',
       title: admin ? 'Resumen de ayer · todas las líneas' : 'Resumen de ayer',
       body: text,
-      link: admin ? '/reports?period=yesterday' : '/notes',
+      link: admin ? '/reports/atencion/ayer' : '/notes',
     });
     sent++;
   }

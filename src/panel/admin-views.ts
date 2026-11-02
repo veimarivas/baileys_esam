@@ -1,8 +1,11 @@
 import type express from 'express';
 import type { Request, Response, RequestHandler } from 'express';
 import { all, get } from '../db/index.js';
-import { esc, renderLayout } from './layout.js';
+import { esc } from './layout.js';
 import { emptyState, fmtDate, initials } from './views.js';
+import { auditUrl, positiveInt, templatesUrl, type AuditCatSlug } from './urls.js';
+import { setFlash } from './flash.js';
+import { pageHtml, sendPage } from './page.js';
 import { esamEsAdmin, esamRoles, listUsers, type UserRow } from '../auth/users.js';
 import { lastUseByUser } from '../core/user-activity.js';
 import { audit } from '../core/webhooks.js';
@@ -173,15 +176,16 @@ function ctxValue(key: string, value: unknown, maps: { sessions: Map<string, Ses
   }
   if (key === 'batch_id') return `<a href="/batches/${encodeURIComponent(String(value))}">#${esc(value)}</a>`;
   if (key === 'template_id' || key === 'from') {
-    if (key === 'template_id' || Number.isFinite(Number(value))) return `<a href="/templates?edit=${encodeURIComponent(String(value))}#tpl-editor">#${esc(value)}</a>`;
+    if (key === 'template_id' || Number.isFinite(Number(value))) return `<a href="${templatesUrl({ id: Number(value) })}#tpl-editor">#${esc(value)}</a>`;
   }
   if (key === 'chat_id' || key === 'phone') return esc(String(value).replace(/@.*$/, ''));
   if (typeof value === 'object') return esc(JSON.stringify(value));
   return esc(String(value));
 }
 
-function auditFilters(req: Request) {
-  const cat = AUDIT_CATS.some((c) => c.id === q(req, 'cat')) ? q(req, 'cat') : '';
+function auditFilters(req: Request, catOverride?: string) {
+  const rawCat = catOverride ?? q(req, 'cat');
+  const cat = AUDIT_CATS.some((c) => c.id === rawCat) ? rawCat : '';
   const from = /^\d{4}-\d{2}-\d{2}$/.test(q(req, 'from')) ? q(req, 'from') : '';
   const to = /^\d{4}-\d{2}-\d{2}$/.test(q(req, 'to')) ? q(req, 'to') : '';
   return { cat, text: q(req, 'q').slice(0, 100), from, to, auto: q(req, 'auto') === '1', before: Number(q(req, 'before')) || 0 };
@@ -257,7 +261,7 @@ function renderAudit(f: AuditFilters, maps: { sessions: Map<string, SessionRow>;
   )?.c ?? 0;
 
   const chip = (id: string, label: string, n: number, icon = '') =>
-    `<a class="ab-filter ${f.cat === id ? 'on' : ''}" href="/audit${auditQuery({ ...f, cat: id, before: 0 })}">${icon ? `<i class="${icon}"></i>` : ''}${esc(label)} <span>${n}</span></a>`;
+    `<a class="ab-filter ${f.cat === id ? 'on' : ''}" href="${auditUrl({ cat: (id || undefined) as AuditCatSlug | undefined, q: f.text, from: f.from, to: f.to, auto: f.auto })}">${icon ? `<i class="${icon}"></i>` : ''}${esc(label)} <span>${n}</span></a>`;
 
   // Agrupa repeticiones seguidas (misma acción y contexto) y separa por día.
   type Group = { row: AuditRow; count: number; firstAt: string };
@@ -305,14 +309,14 @@ function renderAudit(f: AuditFilters, maps: { sessions: Map<string, SessionRow>;
 
   const list = page.length
     ? `<ol class="ab-log adm-log">${items}</ol>
-       ${hasMore ? `<div class="adm-more"><a class="btn btn-light btn-sm" href="/audit${auditQuery(f, `before=${page[page.length - 1].id}`)}"><i class="ri-arrow-down-line me-1"></i>Ver más antiguos</a></div>` : ''}`
+       ${hasMore ? `<div class="adm-more"><a class="btn btn-light btn-sm" href="${auditUrl({ cat: (f.cat || undefined) as AuditCatSlug | undefined, q: f.text, from: f.from, to: f.to, auto: f.auto, before: page[page.length - 1].id })}"><i class="ri-arrow-down-line me-1"></i>Ver más antiguos</a></div>` : ''}`
     : emptyState('ri-history-line', 'Sin registros', 'No hay acciones con los filtros elegidos.');
 
   return `<div class="ab-page adm-page">
     <div class="ab-kpis adm-kpis-3">
       ${kpi('ri-history-line', 'info', 'Acciones registradas', total, f.auto ? 'con reconexiones automáticas' : 'sin reconexiones automáticas')}
       ${kpi('ri-time-line', 'mute', 'Últimas 24 h', last24, 'acciones del equipo y del sistema')}
-      ${kpi('ri-alarm-warning-line', pauses7 ? 'warn' : 'ok', 'Frenos anti-baneo', pauses7, 'pausas y cuarentenas en 7 días', '/audit?cat=anti-baneo')}
+      ${kpi('ri-alarm-warning-line', pauses7 ? 'warn' : 'ok', 'Frenos anti-baneo', pauses7, 'pausas y cuarentenas en 7 días', auditUrl({ cat: 'anti-baneo' }))}
     </div>
     <div class="card ab-card"><div class="card-body">
       <form method="get" action="/audit" class="adm-toolbar">
@@ -500,7 +504,7 @@ function templateCard(t: TemplateRow, editingId: number): string {
       <span><i class="ri-text"></i>${t.body.length} caracteres</span>
     </div>
     <footer class="tpl-card-actions">
-      <a class="btn btn-sm btn-soft-primary" href="/templates?edit=${t.id}#tpl-editor"><i class="ri-pencil-line me-1"></i>Editar</a>
+      <a class="btn btn-sm btn-soft-primary" href="${templatesUrl({ id: t.id })}#tpl-editor"><i class="ri-pencil-line me-1"></i>Editar</a>
       <form method="post" action="/templates/${t.id}/duplicate"><button class="btn btn-sm btn-light" type="submit"><i class="ri-file-copy-line me-1"></i>Duplicar</button></form>
       <form method="post" action="/templates/${t.id}/toggle" ${t.active ? `data-confirm="¿Desactivar «${esc(t.name)}»? Los envíos dejarán de usarla."` : ''}>
         <button class="btn btn-sm btn-light" type="submit">${t.active ? '<i class="ri-pause-line me-1"></i>Desactivar' : '<i class="ri-play-line me-1"></i>Activar'}</button></form>
@@ -510,18 +514,18 @@ function templateCard(t: TemplateRow, editingId: number): string {
   </article>`;
 }
 
-function renderTemplates(req: Request): string {
+function renderTemplates(req: Request, editIdOverride = 0): string {
   const all = listTemplates();
   const cat = q(req, 'cat');
   const text = q(req, 'q').toLowerCase();
-  const editId = Number(q(req, 'edit')) || 0;
+  const editId = editIdOverride || Number(q(req, 'edit')) || 0;
   const editing = editId ? getTemplate(editId) : undefined;
   const cats = [...new Set(all.map((t) => t.category))].sort();
   const rows = all.filter(
     (t) => (!cat || t.category === cat) && (!text || t.name.toLowerCase().includes(text) || t.body.toLowerCase().includes(text)),
   );
   const chip = (value: string, label: string, n: number) =>
-    `<a class="ab-filter ${cat === value ? 'on' : ''}" href="/templates${value ? `?cat=${encodeURIComponent(value)}` : ''}">${esc(label)} <span>${n}</span></a>`;
+    `<a class="ab-filter ${cat === value ? 'on' : ''}" href="${templatesUrl({ cat: value })}">${esc(label)} <span>${n}</span></a>`;
   const noSpin = all.filter((t) => t.active && !/\{[^{}]*\|[^{}]*\}/.test(t.body)).length;
 
   const t = editing;
@@ -551,7 +555,7 @@ function renderTemplates(req: Request): string {
         <div class="ab-note ab-warn tpl-spin-hint" data-tpl-spinhint ${body && !/\{[^{}]*\|[^{}]*\}/.test(body) ? '' : 'hidden'}><i class="ri-shuffle-line"></i>Sin variantes: si se envía a muchos números, sumá al menos una <code>{opción|otra}</code> para que no todos reciban el mismo texto.</div>
       </div>
       <div class="d-flex gap-2 justify-content-end">
-        ${t ? '<a class="btn btn-light" href="/templates">Cancelar</a>' : ''}
+        ${t ? `<a class="btn btn-light" href="${templatesUrl({ cat })}">Cancelar</a>` : ''}
         <button class="btn btn-primary" type="submit"><i class="ri-save-3-line me-1"></i>${t ? 'Guardar cambios' : 'Crear plantilla'}</button>
       </div>
     </form>
@@ -582,22 +586,21 @@ function renderTemplates(req: Request): string {
 // ══ Rutas ══════════════════════════════════════════════════════════════════════
 
 export function registerAdminRoutes(app: express.Express, ctx: Ctx): void {
-  const authed = (req: Request) => (req as Request & { user: UserRow }).user;
-  const flash = (req: Request) => (typeof req.query.ok === 'string' ? req.query.ok : undefined);
   const maps = () => ({
     sessions: new Map(ctx.sessions().map((s) => [s.id, s])),
     users: new Map(listUsers().map((u) => [u.id, u])),
   });
 
   // Auditoría
+  const renderAuditPage = (req: Request, res: Response, cat?: string) => {
+    const f = auditFilters(req, cat);
+    sendPage(req, res, 'Auditoría', 'audit', renderAudit(f, maps()), {
+      subtitle: 'Qué pasó, cuándo y quién: conexiones, lotes, anti-baneo, lista negra y cuentas.',
+      actions: `<a class="btn btn-soft-secondary btn-sm" href="/audit/export.csv${auditQuery(f)}"><i class="ri-download-2-line me-1"></i>Exportar CSV</a>`,
+    });
+  };
   app.get('/audit', ctx.requireUser, ctx.requireSection('audit'), (req: Request, res: Response) => {
-    const f = auditFilters(req);
-    res.send(
-      renderLayout('Auditoría', authed(req), 'audit', renderAudit(f, maps()), {
-        subtitle: 'Qué pasó, cuándo y quién: conexiones, lotes, anti-baneo, lista negra y cuentas.',
-        actions: `<a class="btn btn-soft-secondary btn-sm" href="/audit/export.csv${auditQuery(f)}"><i class="ri-download-2-line me-1"></i>Exportar CSV</a>`,
-      }),
-    );
+    renderAuditPage(req, res);
   });
 
   app.get('/audit/export.csv', ctx.requireUser, ctx.requireSection('audit'), (req: Request, res: Response) => {
@@ -612,18 +615,28 @@ export function registerAdminRoutes(app: express.Express, ctx: Ctx): void {
     res.type('text/csv; charset=utf-8').send('﻿' + csv);
   });
 
+  app.get('/audit/:cat', ctx.requireUser, ctx.requireSection('audit'), (req: Request, res: Response) => {
+    const cat = String(req.params.cat);
+    if (!AUDIT_CATS.some((c) => c.id === cat)) {
+      res.status(404).send(pageHtml(req, res, 'Categoría no encontrada', 'audit', emptyState('ri-question-line', 'Categoría no encontrada', 'La categoría de auditoría no existe.')));
+      return;
+    }
+    renderAuditPage(req, res, cat);
+  });
+
   // Usuarios
   app.get('/users', ctx.requireUser, ctx.requireSection('users'), (req: Request, res: Response) => {
-    res.send(
-      renderLayout('Usuarios', authed(req), 'users', renderUsers(req, ctx.sessions()), {
-        subtitle: 'Quién tiene acceso, con qué rol, si su número de WhatsApp está conectado y cuánto atendió.',
-      }),
-    );
+    sendPage(req, res, 'Usuarios', 'users', renderUsers(req, ctx.sessions()), {
+      subtitle: 'Quién tiene acceso, con qué rol, si su número de WhatsApp está conectado y cuánto atendió.',
+    });
   });
 
   // Plantillas
   const tplGuard = [ctx.requireUser, ctx.requireSection('templates')];
-  const back = (msg: string, extra = '') => `/templates?ok=${encodeURIComponent(msg)}${extra}`;
+  const back = (res: Response, msg: string, opts: { edit?: number; kind?: 'ok' | 'error' } = {}) => {
+    setFlash(res, opts.kind ?? 'ok', msg);
+    return templatesUrl({ id: opts.edit });
+  };
   const readForm = (req: Request) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
     return {
@@ -634,89 +647,106 @@ export function registerAdminRoutes(app: express.Express, ctx: Ctx): void {
   };
 
   app.get('/templates', ...tplGuard, (req: Request, res: Response) => {
-    res.send(
-      renderLayout('Plantillas', authed(req), 'templates', renderTemplates(req), {
-        subtitle: 'Textos reutilizables con variables y variantes para lotes e integraciones.',
-        flash: flash(req),
-        activeHref: '/templates',
-      }),
-    );
+    sendPage(req, res, 'Plantillas', 'templates', renderTemplates(req, 0), {
+      subtitle: 'Textos reutilizables con variables y variantes para lotes e integraciones.',
+      activeHref: '/templates',
+    });
+  });
+
+  app.get('/templates/:id', ...tplGuard, (req: Request, res: Response) => {
+    const id = positiveInt(req.params.id);
+    if (!id || !getTemplate(id)) {
+      res
+        .status(404)
+        .send(
+          pageHtml(req, res, 'Plantilla no encontrada', 'templates', emptyState('ri-file-search-line', 'Plantilla no encontrada', 'La plantilla no existe o se eliminó.'), {
+            activeHref: '/templates',
+          }),
+        );
+      return;
+    }
+    const cat = q(req, 'cat');
+    sendPage(req, res, 'Plantillas', 'templates', renderTemplates(req, id), {
+      subtitle: `Editando la plantilla #${id}.`,
+      activeHref: cat ? templatesUrl({ cat }) : '/templates',
+    });
   });
 
   app.post('/templates', ...tplGuard, (req: Request, res: Response) => {
     const f = readForm(req);
     if (!f.name || !f.body) {
-      res.redirect(back('Completá el nombre y el texto.'));
+      res.redirect(back(res, 'Completá el nombre y el texto.', { kind: 'error' }));
       return;
     }
     const id = createTemplate(f.name, f.category, f.body);
     audit('template.created', { template_id: id, name: f.name });
-    res.redirect(back(`Plantilla «${f.name}» creada (#${id}).`));
+    res.redirect(back(res, `Plantilla «${f.name}» creada (#${id}).`));
   });
 
   app.post('/templates/:id', ...tplGuard, (req: Request, res: Response) => {
-    const id = Number(req.params.id);
-    const current = getTemplate(id);
+    const id = positiveInt(req.params.id);
+    const current = id ? getTemplate(id) : undefined;
     const f = readForm(req);
-    if (!current) {
-      res.redirect(back('Esa plantilla ya no existe.'));
+    if (!current || !id) {
+      res.redirect(back(res, 'Esa plantilla ya no existe.', { kind: 'error' }));
       return;
     }
     if (!f.name || !f.body) {
-      res.redirect(back('Completá el nombre y el texto.', `&edit=${id}#tpl-editor`));
+      res.redirect(back(res, 'Completá el nombre y el texto.', { kind: 'error', edit: id }));
       return;
     }
     // Cambiar de categoría a la única activa deja a la categoría anterior sin plantilla.
     if (f.category !== current.category && isLastActiveOfCategory(id)) {
-      res.redirect(back(`Es la única plantilla activa de «${catLabel(current.category)}»: creá otra antes de cambiarle la categoría.`, `&edit=${id}#tpl-editor`));
+      res.redirect(back(res, `Es la única plantilla activa de «${catLabel(current.category)}»: creá otra antes de cambiarle la categoría.`, { kind: 'error', edit: id }));
       return;
     }
     updateTemplate(id, f.name, f.category, f.body);
     audit('template.updated', { template_id: id, name: f.name });
-    res.redirect(back(`Plantilla «${f.name}» guardada.`));
+    res.redirect(back(res, `Plantilla «${f.name}» guardada.`, { edit: id }));
   });
 
   app.post('/templates/:id/toggle', ...tplGuard, (req: Request, res: Response) => {
-    const id = Number(req.params.id);
-    const t = getTemplate(id);
+    const id = positiveInt(req.params.id);
+    const t = id ? getTemplate(id) : undefined;
     if (!t) {
-      res.redirect(back('Esa plantilla ya no existe.'));
+      res.redirect(back(res, 'Esa plantilla ya no existe.', { kind: 'error' }));
       return;
     }
-    if (t.active && isLastActiveOfCategory(id)) {
-      res.redirect(back(`«${t.name}» es la única activa de «${catLabel(t.category)}»: los envíos de esa categoría fallarían. Activá otra primero.`));
+    if (t.active && isLastActiveOfCategory(t.id)) {
+      res.redirect(back(res, `«${t.name}» es la única activa de «${catLabel(t.category)}»: los envíos de esa categoría fallarían. Activá otra primero.`, { kind: 'error' }));
       return;
     }
-    setTemplateActive(id, !t.active);
-    audit('template.toggled', { template_id: id, name: t.name, active: !t.active });
-    res.redirect(back(t.active ? `«${t.name}» desactivada.` : `«${t.name}» activada.`));
+    setTemplateActive(t.id, !t.active);
+    audit('template.toggled', { template_id: t.id, name: t.name, active: !t.active });
+    res.redirect(back(res, t.active ? `«${t.name}» desactivada.` : `«${t.name}» activada.`));
   });
 
   app.post('/templates/:id/duplicate', ...tplGuard, (req: Request, res: Response) => {
-    const t = getTemplate(Number(req.params.id));
+    const sourceId = positiveInt(req.params.id);
+    const t = sourceId ? getTemplate(sourceId) : undefined;
     if (!t) {
-      res.redirect(back('Esa plantilla ya no existe.'));
+      res.redirect(back(res, 'Esa plantilla ya no existe.', { kind: 'error' }));
       return;
     }
     // La copia nace inactiva: no compite con la original hasta revisarla.
     const id = createTemplate(`${t.name} (copia)`.slice(0, 80), t.category, t.body, false);
     audit('template.created', { template_id: id, name: `${t.name} (copia)`, from: t.id });
-    res.redirect(`/templates?ok=${encodeURIComponent('Copia creada (inactiva): revisala y activala.')}&edit=${id}#tpl-editor`);
+    res.redirect(back(res, 'Copia creada (inactiva): revisala y activala.', { edit: id }));
   });
 
   app.post('/templates/:id/delete', ...tplGuard, (req: Request, res: Response) => {
-    const id = Number(req.params.id);
-    const t = getTemplate(id);
+    const id = positiveInt(req.params.id);
+    const t = id ? getTemplate(id) : undefined;
     if (!t) {
-      res.redirect(back('Esa plantilla ya no existe.'));
+      res.redirect(back(res, 'Esa plantilla ya no existe.', { kind: 'error' }));
       return;
     }
-    if (isLastActiveOfCategory(id)) {
-      res.redirect(back(`«${t.name}» es la única activa de «${catLabel(t.category)}»: no se puede eliminar sin otra que la reemplace.`));
+    if (isLastActiveOfCategory(t.id)) {
+      res.redirect(back(res, `«${t.name}» es la única activa de «${catLabel(t.category)}»: no se puede eliminar sin otra que la reemplace.`, { kind: 'error' }));
       return;
     }
-    deleteTemplate(id);
-    audit('template.deleted', { template_id: id, name: t.name });
-    res.redirect(back(`«${t.name}» eliminada.`));
+    deleteTemplate(t.id);
+    audit('template.deleted', { template_id: t.id, name: t.name });
+    res.redirect(back(res, `«${t.name}» eliminada.`));
   });
 }

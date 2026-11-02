@@ -21,10 +21,11 @@ import type { GlobalNote } from '../core/contacts.js';
 import type { HealthRow } from '../core/health.js';
 import type { MassActivity } from '../core/mass-activity.js';
 import type { SessionRow } from '../types.js';
+import { antiBanUrl, monitoringUrl, notesUrl, periodToSlug, reportsUrl, reportsUserUrl, type MonitoringTabSlug, type PeriodSlug, type ReportsTabSlug } from './urls.js';
 
 /**
  * Vistas de /monitoring (seguimiento del día) y /reports (análisis del período).
- * Ambas se organizan en pestañas (`?tab=`); los gráficos los dibuja
+ * Ambas se organizan en pestañas por path (`/<pestaña>/<período>`); los gráficos los dibuja
  * `initFollowupCharts()` en public/app.js a partir del JSON de `#fu-data`
  * (solo existen los de la pestaña abierta).
  */
@@ -64,11 +65,68 @@ function pct(part: number, total: number): string {
   return total ? `${Math.round((part / total) * 100)}%` : '—';
 }
 
-/** Parámetros que se conservan al cambiar de pestaña o de período. */
-function keepQuery(params: Record<string, string>): string {
-  const p = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) if (v) p.set(k, v);
-  return p.toString();
+/** Filtros de Reportes que viajan en query (no son navegación). */
+function reportFilters(extra: Record<string, string> = {}) {
+  return {
+    programa: extra.programa,
+    account: extra.account,
+    area: extra.area,
+    tipo: extra.tipo,
+  };
+}
+
+/**
+ * Construye la URL canónica de Seguimiento/Reportes/ficha de usuario.
+ * `action` sigue siendo la base histórica de la vista (`/monitoring`,
+ * `/reports`, `/reports/users/<id>`), pero el resultado usa rutas por path.
+ */
+function followupUrl(
+  action: string,
+  opts: { tab: string; period: PeriodPreset; session?: string; from?: string; to?: string; extra?: Record<string, string> },
+): string {
+  const period = periodToSlug(opts.period);
+  const user = /^\/reports\/users\/(\d+)$/.exec(action);
+  if (user) {
+    return reportsUserUrl({
+      id: user[1],
+      period,
+      session: opts.session,
+      from: opts.from,
+      to: opts.to,
+      ...reportFilters(opts.extra),
+    });
+  }
+  if (action === '/reports') {
+    return reportsUrl({
+      tab: opts.tab as ReportsTabSlug,
+      period,
+      session: opts.session,
+      from: opts.from,
+      to: opts.to,
+      ...reportFilters(opts.extra),
+    });
+  }
+  return monitoringUrl({
+    tab: opts.tab as MonitoringTabSlug,
+    period,
+    session: opts.session,
+  });
+}
+
+function periodFormAction(action: string, tab: string): string {
+  const user = /^\/reports\/users\/(\d+)$/.exec(action);
+  if (user) return `/reports/users/${user[1]}/rango`;
+  return `${action}/${tab}/rango`;
+}
+
+function defaultPeriod(action: string): PeriodSlug {
+  return action === '/reports' || /^\/reports\/users\//.test(action) ? '30d' : 'hoy';
+}
+
+function presetFromKeep(keep: Record<string, string>, action: string): PeriodPreset {
+  const value = keep.period;
+  if (value === 'yesterday' || value === '7d' || value === '30d' || value === 'month' || value === 'custom' || value === 'today') return value;
+  return defaultPeriod(action) === '30d' ? '30d' : 'today';
 }
 
 /** Barra de período: atajos + rango libre + número (si hay varios) + filtros extra. */
@@ -82,8 +140,8 @@ function periodBar(
   keepExtra: Record<string, string> = {},
 ): string {
   const chips = PRESETS.map((p) => {
-    const qs = keepQuery({ period: p, session: selected, tab, ...keepExtra });
-    return `<a class="fu-chip${period.preset === p ? ' on' : ''}" href="${action}?${qs}" aria-current="${period.preset === p}">${esc(PERIOD_LABELS[p])}</a>`;
+    const href = followupUrl(action, { tab, period: p, session: selected, extra: keepExtra });
+    return `<a class="fu-chip${period.preset === p ? ' on' : ''}" href="${href}" aria-current="${period.preset === p}">${esc(PERIOD_LABELS[p])}</a>`;
   }).join('');
   const hiddenKeep = Object.entries(keepExtra)
     .filter(([k, v]) => v && !['period', 'from', 'to', 'tab', 'session'].includes(k))
@@ -97,12 +155,16 @@ function periodBar(
             ${sessions.map((s) => `<option value="${esc(s.id)}"${selected === s.id ? ' selected' : ''}>${esc(sessionLabel(s))}${s.phone ? ` · ${esc(s.phone)}` : ''}</option>`).join('')}
           </select></div>`
       : '';
-  return `<form method="get" action="${action}" class="card toolbar fu-toolbar mb-0">
+  const cleanHref = followupUrl(action, {
+    tab,
+    period: defaultPeriod(action) === '30d' ? '30d' : 'today',
+    session: selected,
+    extra: keepExtra,
+  });
+  return `<form method="get" action="${periodFormAction(action, tab)}" class="card toolbar fu-toolbar mb-0">
     <div class="card-body">
       <div class="fu-presets" role="group" aria-label="Período">${chips}</div>
       <div class="toolbar-row">
-        <input type="hidden" name="period" value="custom" />
-        <input type="hidden" name="tab" value="${esc(tab)}" />
         <div class="toolbar-field" style="flex:0 1 150px"><label>Desde</label><input type="date" name="from" value="${esc(period.from)}" class="form-control form-control-sm"></div>
         <div class="toolbar-field" style="flex:0 1 150px"><label>Hasta</label><input type="date" name="to" value="${esc(period.to)}" class="form-control form-control-sm"></div>
         ${sessionSelect}
@@ -110,7 +172,7 @@ function periodBar(
         ${hiddenKeep}
         <div class="toolbar-actions">
           <button class="btn btn-primary btn-sm" type="submit"><i class="ri-filter-3-line me-1"></i>Aplicar</button>
-          <a class="btn btn-soft-secondary btn-sm" href="${action}?${keepQuery({ tab, ...keepExtra })}">Limpiar</a>
+          <a class="btn btn-soft-secondary btn-sm" href="${cleanHref}">Limpiar</a>
         </div>
       </div>
     </div>
@@ -122,7 +184,15 @@ function tabsNav(action: string, tabs: Array<{ id: string; label: string; icon: 
   return `<nav class="ab-tabs" aria-label="Secciones">${tabs
     .map((t) => {
       const on = t.id === current;
-      return `<a class="ab-tab ${on ? 'on' : ''}" href="${action}?${keepQuery({ ...keep, tab: t.id })}" ${on ? 'aria-current="page"' : ''}>
+      const href = followupUrl(action, {
+        tab: t.id,
+        period: presetFromKeep(keep, action),
+        session: keep.session,
+        from: keep.from,
+        to: keep.to,
+        extra: keep,
+      });
+      return `<a class="ab-tab ${on ? 'on' : ''}" href="${href}" ${on ? 'aria-current="page"' : ''}>
         <i class="${t.icon}"></i>${esc(t.label)}${t.badge ? ` <span class="ab-tab-badge">${t.badge}</span>` : ''}</a>`;
     })
     .join('')}</nav>`;
@@ -434,6 +504,14 @@ export interface MonitoringView {
 export function renderMonitoring(v: MonitoringView): string {
   const a = v.attention;
   const keep = { period: v.period.preset, from: v.period.preset === 'custom' ? v.period.from : '', to: v.period.preset === 'custom' ? v.period.to : '', session: v.selectedSession };
+  const userHref = (id: number) =>
+    reportsUserUrl({
+      id,
+      period: periodToSlug(v.period.preset),
+      session: v.selectedSession,
+      from: v.period.preset === 'custom' ? v.period.from : undefined,
+      to: v.period.preset === 'custom' ? v.period.to : undefined,
+    });
 
   // Alertas: números desconectados o "sordos" (conectados sin recibir nada).
   const alerts: string[] = [];
@@ -506,7 +584,7 @@ export function renderMonitoring(v: MonitoringView): string {
           ['Quién respondió', 'Respuestas', 'Chats', 'Tiempo prom.'],
           a.responders.map((r) => [
             /^\d+$/.test(r.key)
-              ? `<a class="fu-contact" href="/reports/users/${r.key}?${keepQuery({ ...keep, tab: 'equipo' })}" title="Ver ficha y envíos de esta persona">${esc(r.name)}</a>`
+              ? `<a class="fu-contact" href="${userHref(Number(r.key))}" title="Ver ficha y envíos de esta persona">${esc(r.name)}</a>`
               : `<i class="ri-smartphone-line me-1 text-muted"></i>${esc(r.name)}`,
             `<b>${r.responses}</b>`,
             String(r.chats),
@@ -514,16 +592,7 @@ export function renderMonitoring(v: MonitoringView): string {
           ]),
         )
       : emptyState('ri-chat-off-line', 'Sin respuestas en el período', 'Todavía no se respondió ningún mensaje.');
-    const detailHref = (row: ActivityRow) =>
-      row.userId == null
-        ? null
-        : `/reports/users/${row.userId}?${keepQuery({
-            period: v.period.preset,
-            from: v.period.preset === 'custom' ? v.period.from : '',
-            to: v.period.preset === 'custom' ? v.period.to : '',
-            session: v.selectedSession,
-            tab: 'equipo',
-          })}`;
+    const detailHref = (row: ActivityRow) => (row.userId == null ? null : userHref(row.userId));
     content = `${activitySection(v.activity, { detailHref })}
     <div class="fu-split">
       <div>${chartCard('fuHours', singleDay ? 'Mensajes por hora' : 'Mensajes por hora del día', singleDay ? 'Recibidos y enviados en cada hora del día seleccionado' : 'Suma del período por hora: muestra las horas de más demanda')}</div>
@@ -549,7 +618,7 @@ export function renderMonitoring(v: MonitoringView): string {
                 <div><dt>Enviados hoy</dt><dd>${s.activity?.sentToday ?? 0}</dd></div>
                 <div><dt>Sin descifrar 24 h</dt><dd class="${s.decrypt.count ? 'ab-t-warn' : ''}">${s.decrypt.count}</dd></div>
               </dl>
-              <footer><a class="btn btn-sm btn-light" href="/anti-ban?tab=monitoreo"><i class="ri-shield-star-line me-1"></i>Anti-baneo</a>
+              <footer><a class="btn btn-sm btn-light" href="${antiBanUrl({ tab: 'monitoreo' })}"><i class="ri-shield-star-line me-1"></i>Anti-baneo</a>
                 <a class="btn btn-sm btn-light" href="/settings"><i class="ri-link me-1"></i>Conexión</a></footer>
             </article>`;
           })
@@ -628,6 +697,15 @@ export function renderReports(v: ReportsView): string {
     session: v.selectedSession,
     ...v.filters,
   };
+  const userHref = (id: number) =>
+    reportsUserUrl({
+      id,
+      period: periodToSlug(v.period.preset),
+      session: v.selectedSession,
+      from: v.period.preset === 'custom' ? v.period.from : undefined,
+      to: v.period.preset === 'custom' ? v.period.to : undefined,
+      ...v.filters,
+    });
 
   // Lectura rápida del período (siempre visible).
   const notes: string[] = [];
@@ -665,7 +743,7 @@ export function renderReports(v: ReportsView): string {
     </div>
     ${dataScript({ kind: 'reports', daily: a.byDay, tipos: [], programas: [] })}${APEX}`;
   } else if (v.tab === 'equipo') {
-    const detailHref = (id: number) => `/reports/users/${id}?${keepQuery({ ...keep, tab: 'equipo' })}`;
+    const detailHref = (id: number) => userHref(id);
     const activityByUid = new Map(v.activity.rows.map((r) => [r.uid, r]));
     const activityByUser = new Map<number, ActivityRow>();
     const usedUids = new Set<string>();
@@ -870,7 +948,7 @@ export function renderReports(v: ReportsView): string {
       ${panel(
         'Vencidas',
         v.notes.overdue.length ? `<ul class="fu-notes">${v.notes.overdue.map((n) => noteItem(n, 'overdue')).join('')}</ul>` : emptyState('ri-checkbox-circle-line', 'Nada vencido', 'Todas las tareas con fecha están al día.'),
-        '<a class="btn btn-soft-primary btn-sm" href="/notes?status=overdue">Ver en Notas</a>',
+        `<a class="btn btn-soft-primary btn-sm" href="${notesUrl({ status: 'vencidas' })}">Ver en Notas</a>`,
       )}
       ${panel(
         'Para hoy',
@@ -939,7 +1017,7 @@ export function renderReports(v: ReportsView): string {
             : '<p class="fu-sub mb-0">Ningún destinatario omitido: los lotes del período no tocaron ningún límite de protección.</p>'
         }
       </div>`,
-      '<a class="btn btn-soft-primary btn-sm" href="/anti-ban?tab=politicas">Políticas</a>',
+      `<a class="btn btn-soft-primary btn-sm" href="${antiBanUrl({ tab: 'politicas' })}">Políticas</a>`,
     )}
     <div class="fu-split fu-split-even">
       <div>${sendTable('Envíos por programa', s.byPrograma.map((p) => ({ name: p.programa, total: p.total, byTipo: p.byTipo, batches: p.batches, avgPerBatch: p.avgPerBatch, maxBatch: p.maxBatch })), 'Programas con más envíos del período. Los lotes agrupan todos los destinatarios de un mismo pedido.')}</div>
@@ -950,7 +1028,7 @@ export function renderReports(v: ReportsView): string {
         batches: u.batches,
         avgPerBatch: u.avgPerBatch,
         maxBatch: u.maxBatch,
-        href: /^\d+$/.test(u.id) ? `/reports/users/${u.id}?${keepQuery({ ...keep, tab: 'equipo' })}` : undefined,
+        href: /^\d+$/.test(u.id) ? userHref(Number(u.id)) : undefined,
       })), 'Quién envió cada mensaje y cuántos destinatarios tuvo por lote. Abrí una persona para ver su ficha.')}</div>
     </div>
     ${dataScript({
@@ -1236,7 +1314,7 @@ export function renderReportUser(v: ReportUserView): string {
           return `<li class="ur-task is-${tone}">
             <span class="ur-task-dot" aria-hidden="true"></span>
             <div class="ur-task-main">
-              <a class="ur-task-text" href="/notes?nota=${n.id}">${esc((n.note_text ?? '[nota de voz]').slice(0, 120))}</a>
+              <a class="ur-task-text" href="${notesUrl({ id: n.id })}">${esc((n.note_text ?? '[nota de voz]').slice(0, 120))}</a>
               <div class="ur-task-meta">
                 <a href="/conversations/${encodeURIComponent(n.chat_id)}">${esc(n.contact_name ?? n.contact_phone ?? n.chat_id.split('@')[0])}</a>
                 <span>${esc(due)}</span>
@@ -1357,7 +1435,14 @@ export function renderReportUser(v: ReportUserView): string {
     </div>
     <div class="fu-split fu-split-even">
       ${panel('Origen de los envíos', originBody)}
-      ${panel('Lotes enviados', `${lotsBody}${moreLots}`, `<a class="btn btn-soft-secondary btn-sm" href="/reports?tab=masivos">Ver masivos</a>`)}
+      ${panel('Lotes enviados', `${lotsBody}${moreLots}`, `<a class="btn btn-soft-secondary btn-sm" href="${followupUrl('/reports', {
+        tab: 'masivos',
+        period: v.period.preset,
+        session: v.selectedSession,
+        from: v.period.preset === 'custom' ? v.period.from : undefined,
+        to: v.period.preset === 'custom' ? v.period.to : undefined,
+        extra: v.filters,
+      })}">Ver masivos</a>`)}
     </div>
     <div class="fu-split fu-split-even">
       ${panel('Contactos atendidos', chats)}

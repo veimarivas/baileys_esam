@@ -3978,6 +3978,18 @@ html[data-bs-theme="dark"] .ab-tab.on { color: #06203f; }
 .ab-session-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; padding-top: 0.75rem; border-top: 1px solid var(--esam-line); }
 .ab-session-actions form { margin: 0; }
 
+/* Línea todavía sin vincular: sin métricas ni acciones de envío. */
+.ab-session.is-unlinked { border-top-color: var(--ab-mute); }
+.ab-session.is-unlinked .ab-session-ic { color: var(--esam-muted); background: var(--esam-surface-3); }
+.ab-unlinked-note {
+  display: flex; align-items: flex-start; gap: 0.55rem;
+  padding: 0.75rem 0.85rem; border-radius: 10px;
+  background: var(--esam-surface-2); color: var(--esam-ink-soft); font-size: 0.8rem;
+}
+.ab-unlinked-note i { color: var(--esam-muted); font-size: 1rem; margin-top: 1px; }
+.ab-unlinked-note p { margin: 0; }
+.ab-session.is-unlinked .ab-session-actions { justify-content: space-between; }
+
 /* Lotes en pausa */
 .ab-panel { background: var(--esam-surface); border: 1px solid var(--esam-line); border-radius: var(--esam-radius, 14px); padding: 0.9rem 1rem; }
 .ab-panel-head { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.6rem; }

@@ -215,6 +215,30 @@ function trendBars(trend: TrendDay[]): string {
 // ── Monitoreo ──────────────────────────────────────────────────────────────────
 
 function sessionCard(sess: SessionRow, health: HealthRow | undefined, custom: boolean, opts: { detail?: boolean } = {}): string {
+  // Sin número vinculado no hay salud, límites ni lotes que rotar: se muestra
+  // una tarjeta simple con el camino para vincularla.
+  if (!isLinked(sess)) {
+    const expected = String(sess.expected_phone ?? '').trim().replace(/^\+/, '');
+    return `<article class="ab-session is-unlinked ab-h-off">
+      <header class="ab-session-head">
+        <span class="ab-session-ic"><i class="ri-link-unlink"></i></span>
+        <div class="ab-session-id">
+          <div class="ab-session-name">${esc(sessionLabel(sess, sess.id))}</div>
+          <div class="ab-session-phone">${expected ? `Número esperado: +${esc(expected)}` : 'Sin número de WhatsApp vinculado'}</div>
+        </div>
+        <div class="ab-session-badges"><span class="ab-pill ab-mute"><i class="ri-link-unlink"></i>Sin vincular</span></div>
+      </header>
+      <div class="ab-unlinked-note">
+        <i class="ri-information-line"></i>
+        <p>Esta línea todavía no tiene WhatsApp vinculado. Al vincularla vas a ver acá su salud, límites, calentamiento y controles anti-baneo.</p>
+      </div>
+      <footer class="ab-session-actions">
+        ${sess.area ? `<span class="ab-chip"><i class="ri-map-pin-line"></i>${esc(areaLabel(areaKeyOf(sess)))}</span>` : ''}
+        <a class="btn btn-sm btn-primary ms-auto" href="/settings"><i class="ri-qr-scan-2-line me-1"></i>Vincular en Conexión</a>
+      </footer>
+    </article>`;
+  }
+
   const policy = getPolicy(sess.id);
   const verdict = lineVerdict(sess);
   const showDetail = opts.detail !== false;

@@ -5964,7 +5964,9 @@
         renderAdvisors();
         if (st.view === 'board') renderBoard(); else renderNotes();
         markSeen();
-      }).catch(function (e) { toast(e.message, true); })
+      }).catch(function (e) {
+        els.list.innerHTML = notesErrorHtml(e && e.message);
+      })
         .then(function () { els.list.classList.remove('loading'); });
     }
 
@@ -6086,24 +6088,49 @@
       return NoteKit.isPinned(n) ? 'pinned' : NoteKit.dueState(n);
     }
 
+    function notesEmptyHtml(filtered) {
+      var msg = {
+        overdue: '¡Al día! No hay seguimientos vencidos.',
+        today: 'No hay seguimientos para hoy.',
+        week: 'No hay seguimientos en los próximos 7 días.',
+        pinned: 'No hay notas marcadas como importantes.',
+        trash: 'La papelera está vacía.',
+        derived: 'No hay derivaciones abiertas.',
+        pending: 'Todavía no tenés notas pendientes de seguimiento.',
+        done: 'Todavía no se marcó ninguna nota como resuelta.',
+        all: 'Todavía no hay notas en este tablero.',
+      }[st.status] || 'Todavía no hay notas para mostrar.';
+      var icon = st.status === 'overdue' ? 'ri-checkbox-circle-line'
+        : st.status === 'done' ? 'ri-check-double-line'
+          : filtered ? 'ri-search-eye-line' : 'ri-sticky-note-add-line';
+      var title = filtered ? 'Ninguna nota coincide con la búsqueda' : msg;
+      var sub = filtered
+        ? 'Probá con otras palabras o quitá los filtros para ver todo.'
+        : 'Las notas se crean desde la ficha del contacto, dentro de una conversación.';
+      return '<div class="np-empty">' +
+        '<span class="np-empty-ico" aria-hidden="true"><i class="' + icon + '"></i></span>' +
+        '<p class="np-empty-title">' + title + '</p>' +
+        '<p class="np-empty-sub">' + sub + '</p>' +
+        '<div class="np-empty-actions">' +
+        (filtered ? '<button type="button" class="btn btn-soft-secondary btn-sm" data-notes-clear>Limpiar filtros</button>' : '') +
+        '<a class="btn btn-primary btn-sm" href="/conversations"><span class="ri-chat-3-line" aria-hidden="true"></span> Ir a conversaciones</a>' +
+        '</div></div>';
+    }
+
+    function notesErrorHtml(message) {
+      return '<div class="np-empty is-error" role="alert">' +
+        '<span class="np-empty-ico" aria-hidden="true"><i class="ri-wifi-off-line"></i></span>' +
+        '<p class="np-empty-title">No pudimos cargar tus notas</p>' +
+        '<p class="np-empty-sub">' + (message || 'Revisá la conexión y volvé a intentar.') + '</p>' +
+        '<div class="np-empty-actions"><button type="button" class="btn btn-primary btn-sm" data-notes-retry>Reintentar</button></div>' +
+        '</div>';
+    }
+
     function renderNotes() {
       var notes = visibleNotes();
       if (!notes.length) {
-        var msg = {
-          overdue: '¡Al día! No hay seguimientos vencidos.',
-          today: 'No hay seguimientos para hoy.',
-          week: 'No hay seguimientos en los próximos 7 días.',
-          pinned: 'No hay notas marcadas como importantes.',
-          trash: 'La papelera está vacía.',
-          derived: 'No hay derivaciones abiertas.',
-          pending: 'No hay notas pendientes de seguimiento.',
-          done: 'Todavía no se marcó ninguna nota como resuelta.',
-          all: 'Todavía no hay notas.',
-        }[st.status];
         var filtered = els.search.value.trim() || st.tag || st.area !== 'all' || els.mine.checked || (els.assigned && els.assigned.checked);
-        els.list.innerHTML = '<div class="np-empty"><span class="' + (st.status === 'overdue' ? 'ri-checkbox-circle-line' : 'ri-sticky-note-line') + '" aria-hidden="true"></span>' +
-          '<p>' + (filtered ? 'No hay notas para los filtros elegidos.' : msg) + '</p>' +
-          '<span class="np-empty-sub">Las notas se registran desde la ficha del contacto, dentro de cada conversación.</span></div>';
+        els.list.innerHTML = notesEmptyHtml(filtered);
         return;
       }
       var custom = st.group !== 'estado' && st.status !== 'trash';
@@ -6586,6 +6613,21 @@
       if (location.hash === '#asignadas') els.assigned.checked = true;
       els.assigned.addEventListener('change', loadNotes);
     }
+
+    // Acciones del estado vacío: limpiar filtros y reintentar la carga.
+    els.list.addEventListener('click', function (e) {
+      if (e.target.closest('[data-notes-clear]')) {
+        els.search.value = '';
+        st.tag = null;
+        st.area = 'all';
+        els.mine.checked = false;
+        if (els.assigned) els.assigned.checked = false;
+        try { localStorage.removeItem('notes-area'); } catch (_) {}
+        loadNotes();
+        return;
+      }
+      if (e.target.closest('[data-notes-retry]')) loadNotes();
+    });
 
     // Desde el compositor de la ficha se llega con #tags para crear etiquetas.
     loadTags().then(function () { if (location.hash === '#tags') setManaging(true); });

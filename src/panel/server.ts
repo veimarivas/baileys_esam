@@ -199,7 +199,9 @@ export function renderNotesPage(opts: { focusId?: number; status?: string } = {}
           <span class="np-legend-t">El borde de color de cada tarjeta indica su área.</span>
         </div>
         <div id="np-active" class="np-active"></div>
-        <div id="notes-list" class="np-list" aria-live="polite"></div>
+        <div id="notes-list" class="np-list" aria-live="polite">
+          <div class="np-loading" role="status"><span class="np-loading-dot" aria-hidden="true"></span> Cargando tus notas…</div>
+        </div>
         <div id="np-board" class="np-board" hidden aria-live="polite"></div>
       </section>
 
@@ -1669,12 +1671,12 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     sendNotesPage(req, res, { status: slugToNoteStatus(status) });
   });
 
-  app.get('/notes/:id', requireUser, requireSection('conversations'), (req: AuthedRequest, res: Response) => {
+  app.get('/notes/:id', requireUser, requireSection('conversations'), (req: AuthedRequest, res: Response, next: NextFunction) => {
     const id = positiveInt(req.params.id);
-    if (!id) {
-      res.status(404).send(pageHtml(req, res, 'Nota no encontrada', 'conversations', emptyState('ri-sticky-note-line', 'Nota no encontrada', 'El identificador de la nota no es válido.')));
-      return;
-    }
+    // `/notes/all`, `/notes/tags`, `/notes/templates` y `/notes/my-day` son rutas
+    // JSON que se registran más abajo: si el segmento no es un id numérico hay que
+    // dejarlo pasar; si no, esta ruta las intercepta y responde 404.
+    if (!id) return next();
     sendNotesPage(req, res, { focusId: id });
   });
 
@@ -2168,6 +2170,21 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     requireSection,
     sessions: () => manager.list(),
     runner,
+  });
+
+  // ── 404 amigable ────────────────────────────────────────────────────────────
+  // Sin esto, una ruta desconocida caía en el 404 crudo de Express («Cannot GET …»).
+  app.use((req: AuthedRequest, res: Response) => {
+    if (wantsJson(req)) return res.status(404).json({ error: 'No encontramos esta página.', code: 'not_found' });
+    const user = currentUser(req);
+    if (!user) return res.status(404).send(renderPlain('Página no encontrada', 'El enlace no existe o cambió de lugar.'));
+    req.user = user;
+    res.status(404).send(pageHtml(req, res, 'Página no encontrada', 'conversations', emptyState(
+      'ri-compass-3-line',
+      'No encontramos esta página',
+      'El enlace puede estar vencido o haber cambiado de lugar. Probá desde el menú o volvé al inicio.',
+      '<a class="btn btn-primary btn-sm" href="/">Volver al inicio</a> <a class="btn btn-soft-secondary btn-sm" href="/conversations">Ir a conversaciones</a>',
+    )));
   });
 
   app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {

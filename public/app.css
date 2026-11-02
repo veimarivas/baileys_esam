@@ -2999,7 +2999,9 @@ html[data-bs-theme="dark"] .nk-tag { color: color-mix(in srgb, var(--tag) 55%, #
   flex: 0 0 auto; width: 22px; height: 22px; margin-top: 0.08rem; padding: 0;
   border: 1.5px solid var(--nk-line); border-radius: 50%; background: var(--nk-surface);
   color: transparent; display: inline-flex; align-items: center; justify-content: center;
-  font-size: 0.85rem; cursor: pointer; transition: all 0.15s var(--esam-ease, ease);
+  font-size: 0.85rem; cursor: pointer;
+  transition: border-color 150ms var(--esam-ease-out), color 150ms var(--esam-ease-out),
+    background-color 150ms var(--esam-ease-out);
 }
 .nk-check:hover { border-color: var(--nk-ok); color: var(--nk-ok); background: var(--nk-ok-soft); }
 .nk-check.on { border-color: var(--nk-ok); background: var(--nk-ok); color: #fff; }
@@ -3192,18 +3194,52 @@ html[data-bs-theme="dark"] .nk-tag { color: color-mix(in srgb, var(--tag) 55%, #
 .nk-contact-name:hover { color: var(--nk-brand); text-decoration: underline; }
 .nk-contact-phone { font-size: 0.72rem; color: var(--nk-mute); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
-.np-empty {
-  text-align: center; padding: 3.2rem 1.2rem; color: var(--nk-mute);
-  border: 1px dashed var(--nk-line); border-radius: 16px;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--nk-brand) 4%, var(--nk-surface)), var(--nk-surface));
+/* Placeholder mientras carga la lista: evita el salto de altura y el hueco blanco. */
+.np-loading {
+  display: flex; align-items: center; justify-content: center; gap: 0.55rem;
+  min-height: 180px; font-size: 0.82rem; color: var(--nk-mute);
 }
-.np-empty > span:first-child {
+.np-loading-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--nk-brand);
+  animation: np-pulse 1.1s var(--esam-ease-out) infinite alternate;
+}
+@keyframes np-pulse { from { opacity: 0.35; transform: scale(0.85); } to { opacity: 1; transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) { .np-loading-dot { animation: none; opacity: 0.7; } }
+
+/* Estado vacío de notas: enseña el siguiente paso en vez de dejar un hueco. */
+.np-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center; padding: 3.1rem 1.25rem; color: var(--nk-mute);
+  border: 1px dashed var(--nk-line); border-radius: var(--esam-radius-lg);
+  background:
+    radial-gradient(120% 90% at 50% 0%, color-mix(in srgb, var(--nk-brand) 6%, transparent), transparent 70%),
+    var(--nk-surface);
+  transition: opacity 220ms var(--esam-ease-out), transform 220ms var(--esam-ease-out);
+}
+@starting-style {
+  .np-empty { opacity: 0; transform: translateY(6px); }
+}
+.np-empty-ico {
   display: inline-flex; align-items: center; justify-content: center;
   width: 64px; height: 64px; border-radius: 50%; font-size: 1.9rem;
   color: var(--nk-brand); background: var(--nk-brand-soft);
+  box-shadow: 0 0 0 8px color-mix(in srgb, var(--nk-brand) 5%, transparent);
 }
-.np-empty p { margin: 0.7rem 0 0.25rem; font-weight: 700; color: var(--nk-ink); font-size: 0.95rem; }
-.np-empty-sub { font-size: 0.76rem; color: var(--nk-mute); }
+.np-empty-title {
+  margin: 0.9rem 0 0.3rem; font-weight: 700; color: var(--nk-ink);
+  font-size: 0.98rem; letter-spacing: -0.01em; text-wrap: balance;
+}
+.np-empty-sub { max-width: 46ch; margin: 0; font-size: 0.8rem; line-height: 1.55; text-wrap: pretty; }
+.np-empty-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: center; margin-top: 1.15rem; }
+.np-empty-actions .btn { display: inline-flex; align-items: center; gap: 0.35rem; }
+.np-empty.is-error { border-style: solid; border-color: color-mix(in srgb, var(--nk-danger) 35%, var(--nk-line)); }
+.np-empty.is-error .np-empty-ico {
+  color: var(--nk-danger); background: var(--nk-danger-soft);
+  box-shadow: 0 0 0 8px color-mix(in srgb, var(--nk-danger) 5%, transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .np-empty { transition: none; }
+}
 
 .np-side { display: flex; flex-direction: column; gap: 0.8rem; position: sticky; top: 90px; }
 .np-side-card { border: 1px solid var(--nk-line); border-radius: 14px; background: var(--nk-surface); padding: 0.85rem 0.9rem; box-shadow: var(--esam-shadow-xs); }
@@ -4048,7 +4084,9 @@ html[data-bs-theme="dark"] .ab-tab.on { color: #06203f; }
 .ab-day span {
   display: inline-flex; align-items: center; justify-content: center; min-width: 48px; padding: 0.35rem 0.6rem;
   border-radius: 9px; border: 1px solid var(--esam-line); background: var(--esam-surface);
-  font-size: 0.8rem; font-weight: 600; color: var(--esam-ink-soft); transition: all 0.15s ease;
+  font-size: 0.8rem; font-weight: 600; color: var(--esam-ink-soft);
+  transition: border-color 150ms var(--esam-ease-out), background-color 150ms var(--esam-ease-out),
+    color 150ms var(--esam-ease-out);
 }
 .ab-day input:checked + span { background: var(--ab-brand); border-color: var(--ab-brand); color: #fff; }
 html[data-bs-theme="dark"] .ab-day input:checked + span { color: #06203f; }
@@ -4058,7 +4096,8 @@ html[data-bs-theme="dark"] .ab-day input:checked + span { color: #06203f; }
 .ab-preset input { position: absolute; opacity: 0; pointer-events: none; }
 .ab-preset-body {
   display: flex; flex-direction: column; gap: 0.2rem; height: 100%; padding: 0.7rem 0.8rem; border-radius: 12px;
-  border: 1px solid var(--esam-line); background: var(--esam-surface); transition: all 0.15s ease;
+  border: 1px solid var(--esam-line); background: var(--esam-surface);
+  transition: border-color 150ms var(--esam-ease-out), background-color 150ms var(--esam-ease-out);
 }
 .ab-preset:hover .ab-preset-body { border-color: var(--esam-line-strong); }
 .ab-preset input:checked + .ab-preset-body { border-color: var(--ab-brand); background: var(--ab-brand-soft); box-shadow: 0 0 0 1px var(--ab-brand) inset; }
@@ -4883,7 +4922,8 @@ html[data-bs-theme="dark"] .pl-dialog textarea:focus { border-color: var(--brand
 .np-area {
   flex-shrink: 0; display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.38rem 0.75rem;
   border: 1px solid var(--nk-line, #e6ebf1); border-radius: 999px; background: var(--nk-surface, #fff);
-  color: var(--esam-ink, #1f2937); font-size: 0.8rem; font-weight: 600; transition: all 0.15s ease;
+  color: var(--esam-ink, #1f2937); font-size: 0.8rem; font-weight: 600;
+  transition: border-color 150ms var(--esam-ease-out), color 150ms var(--esam-ease-out);
 }
 .np-area:hover { border-color: var(--area); color: var(--area); }
 .np-area .np-area-ic { color: var(--area); font-size: 0.95rem; }
@@ -5225,7 +5265,8 @@ html[data-bs-theme="dark"] .poll-dialog .form-control:focus { border-color: var(
 .np-advisor {
   flex-shrink: 0; display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.22rem 0.7rem 0.22rem 0.25rem;
   border: 1px solid var(--nk-line, #e6ebf1); border-radius: 999px; background: var(--nk-surface, #fff);
-  color: var(--esam-ink, #1f2937); font-size: 0.78rem; font-weight: 600; transition: all 0.15s ease; max-width: 17rem;
+  color: var(--esam-ink, #1f2937); font-size: 0.78rem; font-weight: 600;
+  transition: border-color 150ms var(--esam-ease-out); max-width: 17rem;
 }
 .np-advisor:hover { border-color: var(--area); }
 .np-advisor .avatar-xs { width: 24px; height: 24px; font-size: 0.6rem; flex-shrink: 0; }
@@ -5344,7 +5385,8 @@ html[data-bs-theme="dark"] .batches-page, html[data-bs-theme="dark"] .batch-deta
 .bt-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.6rem; margin-bottom: 0.7rem; }
 .bt-chips { display: flex; flex-wrap: wrap; gap: 0.35rem; }
 .bt-chip { display: inline-flex; align-items: center; gap: 0.35rem; border: 1px solid var(--bt-line); background: var(--bt-surface); color: var(--bt-ink);
-  border-radius: 999px; padding: 0.3rem 0.7rem; font-size: 0.78rem; font-weight: 600; cursor: pointer; transition: all 0.15s ease; }
+  border-radius: 999px; padding: 0.3rem 0.7rem; font-size: 0.78rem; font-weight: 600; cursor: pointer;
+  transition: border-color 150ms var(--esam-ease-out), background-color 150ms var(--esam-ease-out); }
 .bt-chip b { font-size: 0.7rem; padding: 0 0.4rem; border-radius: 999px; background: var(--bt-soft); color: var(--bt-mute); font-variant-numeric: tabular-nums; }
 .bt-chip:hover:not(:disabled) { border-color: var(--bt-brand); }
 .bt-chip.on { background: var(--bt-brand); border-color: var(--bt-brand); color: #fff; }

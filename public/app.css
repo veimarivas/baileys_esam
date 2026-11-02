@@ -4283,6 +4283,75 @@ html:has(.ab-page), body:has(.ab-page) { overflow-x: clip; }
 .adm-sub { font-size: 0.7rem; color: var(--esam-muted); margin-top: 0.15rem; }
 .adm-line { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; }
 .adm-users td { vertical-align: middle; }
+
+/* Usuarios: tabla sin scroll horizontal que se adapta al ancho disponible. */
+.adm-table-wrap { width: 100%; }
+.adm-users { table-layout: fixed; width: 100%; }
+.adm-users thead th { white-space: normal; overflow-wrap: normal; }
+.adm-users td { overflow-wrap: anywhere; padding-left: 0.75rem; padding-right: 0.75rem; }
+.adm-users .ab-pill { white-space: normal; overflow-wrap: normal; }
+.adm-users th:nth-child(1) { width: 22%; }
+.adm-users th:nth-child(2) { width: 12%; }
+.adm-users th:nth-child(3) { width: 17%; }
+.adm-users th:nth-child(4) { width: 11%; }
+.adm-users th:nth-child(5) { width: 13%; }
+.adm-users th:nth-child(6) { width: 13%; }
+.adm-users th:nth-child(7) { width: 12%; }
+
+/* 1200–1399 px: se omite «Última actividad» y el resto respira. */
+@media (min-width: 1200px) and (max-width: 1399.98px) {
+  .adm-users th:nth-child(5), .adm-users td:nth-child(5) { display: none; }
+  .adm-users th:nth-child(1) { width: 26%; }
+  .adm-users th:nth-child(2) { width: 13%; }
+  .adm-users th:nth-child(3) { width: 18%; }
+  .adm-users th:nth-child(4) { width: 13%; }
+  .adm-users th:nth-child(6) { width: 17%; }
+  .adm-users th:nth-child(7) { width: 13%; }
+}
+
+/* Menos de 1200 px: cada fila pasa a ser una tarjeta con todas las etiquetas. */
+@media (max-width: 1199.98px) {
+  .adm-users { table-layout: auto; }
+  .adm-users thead { display: none; }
+  .adm-users,
+  .adm-users tbody { display: block; width: 100%; }
+  .adm-users tr {
+    display: block; margin-bottom: 0.6rem; padding: 0.7rem 0.85rem;
+    border: 1px solid var(--esam-line); border-radius: var(--esam-radius-sm);
+    background: var(--esam-surface);
+  }
+  .adm-users tr:last-child { margin-bottom: 0; }
+  .adm-users td,
+  .adm-users td:nth-child(5),
+  .adm-users td:nth-child(6) {
+    --adm-label: 11rem;
+    display: flex; flex-wrap: wrap; gap: 0 0.7rem; align-items: flex-start;
+    padding: 0.3rem 0; border: 0; overflow-wrap: break-word;
+  }
+  .adm-users td::before {
+    content: attr(data-label); flex: 0 0 var(--adm-label);
+    font-size: 0.68rem; font-weight: 700; line-height: 1.6;
+    text-transform: uppercase; letter-spacing: 0.05em; color: var(--esam-muted);
+  }
+  .adm-users td > .adm-sub {
+    flex: 0 0 calc(100% - var(--adm-label));
+    margin: 0.05rem 0 0 var(--adm-label);
+  }
+  .adm-users td:nth-child(1) { padding: 0 0 0.45rem; }
+  .adm-users td:nth-child(1)::before { display: none; }
+  .adm-users td > * { min-width: 0; }
+  .table-hover > tbody > tr:hover > * { background: transparent; }
+  .adm-users tr:hover { border-color: var(--esam-line-strong); }
+}
+
+/* Teléfono: la etiqueta va arriba del valor y el valor usa todo el ancho. */
+@media (max-width: 575.98px) {
+  .adm-users td,
+  .adm-users td:nth-child(5),
+  .adm-users td:nth-child(6) { display: block; }
+  .adm-users td::before { display: block; margin-bottom: 0.1rem; }
+  .adm-users td > .adm-sub { margin: 0.1rem 0 0; }
+}
 .adm-foot { display: flex; gap: 0.4rem; align-items: flex-start; margin: 0.9rem 0 0; font-size: 0.74rem; color: var(--esam-muted); }
 .adm-foot i { margin-top: 0.1rem; }
 .adm-grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; }

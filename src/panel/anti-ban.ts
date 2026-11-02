@@ -96,6 +96,57 @@ function tabOf(value: unknown): Tab {
   return TABS.some((t) => t.id === v) ? (v as Tab) : 'monitoreo';
 }
 
+/** Filtro de vinculación dentro de Monitoreo. */
+type LinkState = 'all' | 'vinculadas' | 'sin-vincular';
+const LINK_TABS: Array<{ id: LinkState; label: string; icon: string }> = [
+  { id: 'all', label: 'Todas', icon: 'ri-list-check' },
+  { id: 'vinculadas', label: 'Vinculadas', icon: 'ri-link' },
+  { id: 'sin-vincular', label: 'Sin vincular', icon: 'ri-link-unlink' },
+];
+
+function linkStateOf(value: unknown): LinkState {
+  const v = s(value);
+  return v === 'vinculadas' || v === 'sin-vincular' ? v : 'all';
+}
+
+const AREA_LABELS: Record<string, string> = {
+  contabilidad: 'Contabilidad',
+  academico: 'Académico',
+  marketing: 'Marketing',
+  consulta: 'Consulta',
+  admin: 'Administrador',
+};
+/** Clave interna para las líneas que todavía no tienen área asignada. */
+const NO_AREA = 'sin-area';
+
+function areaKeyOf(sess: SessionRow): string {
+  return (sess.area ?? '').trim().toLowerCase();
+}
+
+function areaLabel(key: string): string {
+  if (!key) return 'Sin área';
+  return AREA_LABELS[key] ?? key.charAt(0).toUpperCase() + key.slice(1);
+}
+
+function areaParam(key: string): string {
+  return key || NO_AREA;
+}
+
+function areaFromParam(value: unknown): string {
+  const v = s(value).trim().toLowerCase();
+  return v === NO_AREA ? NO_AREA : v.slice(0, 60);
+}
+
+/** Vinculada = tiene un número de WhatsApp asociado, aunque esté desconectada. */
+function isLinked(sess: SessionRow): boolean {
+  return !!String(sess.phone ?? '').trim();
+}
+
+interface MonitorFilters {
+  link: LinkState;
+  area: string;
+}
+
 function pct(value: number, digits = 0): string {
   return `${(value * 100).toFixed(digits)}%`;
 }
@@ -252,7 +303,12 @@ function sessionCard(sess: SessionRow, health: HealthRow | undefined, custom: bo
   </article>`;
 }
 
-function monitorTab(sessions: SessionRow[], healthById: Map<string, HealthRow>, customIds: Set<string>): string {
+function monitorTab(
+  sessions: SessionRow[],
+  healthById: Map<string, HealthRow>,
+  customIds: Set<string>,
+  filters: MonitorFilters,
+): string {
   if (!sessions.length) {
     return `<div class="card"><div class="card-body">${emptyState(
       'ri-heart-pulse-line',
@@ -260,10 +316,73 @@ function monitorTab(sessions: SessionRow[], healthById: Map<string, HealthRow>, 
       'Cuando vincules un número en Conexión, acá verás su uso del día, su entregabilidad y su calentamiento.',
     )}</div></div>`;
   }
+
+  const linkMatches = (x: SessionRow, link: LinkState) =>
+    link === 'all' || (link === 'vinculadas' ? isLinked(x) : !isLinked(x));
+  const areaKeys = [...new Set(sessions.map(areaKeyOf))].sort((a, b) => (!a ? 1 : !b ? -1 : a.localeCompare(b, 'es')));
+  // Una URL vieja con un área que ya no existe vuelve a «Todas» en lugar de
+  // dejar la pantalla vacía sin explicación.
+  const activeArea =
+    !filters.area || filters.area === NO_AREA || areaKeys.includes(filters.area) ? filters.area : '';
+  const areaMatches = (x: SessionRow) =>
+    !activeArea || (activeArea === NO_AREA ? !areaKeyOf(x) : areaKeyOf(x) === activeArea);
+
+  // Los contadores de cada filtro respetan el otro filtro activo.
+  const byArea = sessions.filter(areaMatches);
+  const linkCounts: Record<LinkState, number> = {
+    all: byArea.length,
+    vinculadas: byArea.filter(isLinked).length,
+    'sin-vincular': byArea.filter((x) => !isLinked(x)).length,
+  };
+  const byLink = sessions.filter((x) => linkMatches(x, filters.link));
+  const areaCounts = new Map(areaKeys.map((key) => [key, byLink.filter((x) => areaKeyOf(x) === key).length]));
+  const shown = byArea.filter((x) => linkMatches(x, filters.link));
+
+  const hrefFor = (over: { link?: LinkState; area?: string }) => {
+    const link = over.link ?? filters.link;
+    const area = over.area === undefined ? activeArea : over.area;
+    const p = new URLSearchParams({ tab: 'monitoreo' });
+    if (link !== 'all') p.set('estado', link);
+    if (area) p.set('area', area);
+    return `/anti-ban?${p.toString()}`;
+  };
+
+  const linkTabs = `<nav class="ab-tabs ab-monitor-tabs" aria-label="Estado de vinculación">
+    ${LINK_TABS.map(
+      (t) =>
+        `<a class="ab-tab ${filters.link === t.id ? 'on' : ''}" href="${hrefFor({ link: t.id })}"${
+          filters.link === t.id ? ' aria-current="page"' : ''
+        }><i class="${t.icon}"></i>${t.label}<span class="ab-tab-badge">${linkCounts[t.id]}</span></a>`,
+    ).join('')}
+  </nav>`;
+  const areaChips = `<div class="ab-monitor-areas">
+    <span class="ab-monitor-areas-label"><i class="ri-map-pin-line"></i>Área</span>
+    <div class="ab-filters">
+      <a class="ab-filter${activeArea ? '' : ' on'}" href="${hrefFor({ area: '' })}">Todas <span>${byLink.length}</span></a>
+      ${areaKeys
+        .map(
+          (key) =>
+            `<a class="ab-filter${activeArea === (key || NO_AREA) ? ' on' : ''}" href="${hrefFor({ area: areaParam(key) })}">${esc(areaLabel(key))} <span>${areaCounts.get(key) ?? 0}</span></a>`,
+        )
+        .join('')}
+    </div>
+  </div>`;
+
   const order: Record<string, number> = { red: 0, yellow: 1, green: 2 };
-  const sorted = sessions
+  const sorted = shown
     .slice()
     .sort((a, b) => (order[healthById.get(a.id)?.health ?? 'green'] ?? 2) - (order[healthById.get(b.id)?.health ?? 'green'] ?? 2));
+  const cards = sorted.length
+    ? `<div class="ab-sessions">${sorted.map((x) => sessionCard(x, healthById.get(x.id), customIds.has(x.id))).join('')}</div>`
+    : `<div class="card"><div class="card-body">${emptyState(
+        'ri-user-search-line',
+        'Sin líneas con esos filtros',
+        `No hay ${filters.link === 'vinculadas' ? 'líneas vinculadas' : filters.link === 'sin-vincular' ? 'líneas sin vincular' : 'líneas'}${
+          activeArea ? ` en ${activeArea === NO_AREA ? 'Sin área' : areaLabel(activeArea)}` : ''
+        }.`,
+        `<a class="btn btn-light btn-sm" href="${hrefFor({ link: 'all', area: '' })}"><i class="ri-filter-off-line me-1"></i>Ver todas las líneas</a>`,
+      )}</div></div>`;
+
   const byId = new Map(sessions.map((x) => [x.id, x]));
   const paused = pausedBatches();
   const pausedHtml = paused.length
@@ -283,7 +402,7 @@ function monitorTab(sessions: SessionRow[], healthById: Map<string, HealthRow>, 
           .join('')}</ul>
       </section>`
     : '';
-  return `<div class="ab-sessions">${sorted.map((x) => sessionCard(x, healthById.get(x.id), customIds.has(x.id))).join('')}</div>${pausedHtml}`;
+  return `<div class="ab-monitor-filters">${linkTabs}${areaChips}</div>${cards}${pausedHtml}`;
 }
 
 // ── Políticas ──────────────────────────────────────────────────────────────────
@@ -743,6 +862,8 @@ export function registerAntiBanRoutes(
 
   app.get('/anti-ban', ...guard, (req: Request, res: Response) => {
     const tab = tabOf(req.query.tab);
+    const link = linkStateOf(req.query.estado);
+    const area = areaFromParam(req.query.area);
     const sessions = ctx.sessions();
     const health = listHealth(true);
     const healthById = new Map(health.map((h) => [h.session_id, h]));
@@ -755,16 +876,23 @@ export function registerAntiBanRoutes(
     ).join('')}</nav>`;
 
     let content = '';
-    if (tab === 'monitoreo') content = monitorTab(sessions, healthById, custom);
+    if (tab === 'monitoreo') content = monitorTab(sessions, healthById, custom, { link, area });
     else if (tab === 'politicas') content = policiesTab(sessions, healthById, custom);
     else if (tab === 'lista-negra') content = blacklistTab(s(req.query.q).trim(), s(req.query.source), byId);
     else content = logTab(byId);
+
+    // «Actualizar» conserva los filtros de Monitoreo (estado de vinculación y área).
+    const refresh = new URLSearchParams({ tab });
+    if (tab === 'monitoreo') {
+      if (link !== 'all') refresh.set('estado', link);
+      if (area) refresh.set('area', areaParam(area));
+    }
 
     res.send(
       renderLayout('Anti-Baneo', authed(req), 'policies', `<div class="ab-page">${kpis(sessions, health)}${tabs}${content}</div>`, {
         subtitle: 'Cuida la reputación de cada número: límites, señales de riesgo y seguimiento de lo que hace el motor.',
         flash: flashOf(req),
-        actions: `<a class="btn btn-soft-secondary btn-sm" href="/anti-ban?tab=${tab}"><i class="ri-refresh-line me-1"></i>Actualizar</a>`,
+        actions: `<a class="btn btn-soft-secondary btn-sm" href="/anti-ban?${refresh.toString()}"><i class="ri-refresh-line me-1"></i>Actualizar</a>`,
       }),
     );
   });

@@ -3907,6 +3907,18 @@ a.ab-kpi:focus-visible { outline: 2px solid var(--ab-brand); outline-offset: 2px
 html[data-bs-theme="dark"] .ab-tab.on { color: #06203f; }
 .ab-tab:focus-visible { outline: 2px solid var(--ab-brand); outline-offset: 2px; }
 
+/* Monitoreo: pestañas de vinculación y filtros por área */
+.ab-monitor-filters { display: flex; flex-direction: column; gap: 0.65rem; }
+.ab-monitor-tabs { width: 100%; }
+.ab-monitor-tabs .ab-tab { padding: 0.38rem 0.75rem; font-size: 0.8rem; }
+.ab-monitor-areas { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.ab-monitor-areas-label {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  font-size: 0.69rem; font-weight: 700; letter-spacing: 0.05em;
+  text-transform: uppercase; color: var(--esam-muted);
+}
+.ab-monitor-areas .ab-filters { flex: 1 1 260px; }
+
 /* Píldoras y chips */
 .ab-pill {
   display: inline-flex; align-items: center; gap: 0.3rem; white-space: nowrap;

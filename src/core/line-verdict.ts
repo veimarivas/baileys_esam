@@ -1,4 +1,4 @@
-import { get } from '../db/index.js';
+import { all, get } from '../db/index.js';
 import { getPolicy, limitState } from './anti-ban.js';
 import { getConfig } from './config-store.js';
 import { sessionUsage } from './anti-ban-monitor.js';
@@ -18,7 +18,11 @@ import type { SessionRow } from '../types.js';
  * y cómo solucionarlo, para que quien envía entienda el color.
  */
 
-export type VerdictLevel = 'green' | 'yellow' | 'red';
+/**
+ * `off`: la línea no está conectada (todavía sin vincular, o se desconectó). No
+ * envía, pero no es un riesgo de bloqueo: se muestra en gris, no en rojo.
+ */
+export type VerdictLevel = 'green' | 'yellow' | 'red' | 'off';
 export type CheckStatus = 'ok' | 'warn' | 'bad' | 'info';
 
 export interface VerdictCheck {
@@ -60,6 +64,43 @@ export interface LineVerdict {
 
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 
+export interface RecentFailure {
+  batchId: number;
+  batchName: string | null;
+  chat: string;
+  error: string;
+  at: string;
+  kind: 'connection' | 'number' | 'blocked' | 'other';
+}
+
+/** Tipo de fallo de un envío, para explicar una cuarentena. */
+export function failureKind(error: string): RecentFailure['kind'] {
+  const e = error.toLowerCase();
+  if (/bloque|block|reported|spam|forbidden|not-authorized|401|403/.test(e)) return 'blocked';
+  if (/no tiene whatsapp|not on whatsapp|no existe|invalid|inv[aá]lido|not exist|404/.test(e)) return 'number';
+  if (/connection|conexi[oó]n|desconect|closed|timed out|timeout|socket|not connected|no est[aá] conectad|stream|econn|lost|restart/.test(e)) return 'connection';
+  return 'other';
+}
+
+/** Últimos envíos fallidos de una línea (lo que lleva a «N fallos consecutivos»). */
+export function recentFailures(sessionId: string, limit = 10): RecentFailure[] {
+  return all<{ batch_id: number; batch_name: string | null; chat_id: string; contact_name: string | null; error: string | null; updated_at: string }>(
+    `SELECT bi.batch_id, b.name AS batch_name, bi.chat_id, bi.contact_name, bi.error, bi.updated_at
+       FROM batch_items bi JOIN batches b ON b.id = bi.batch_id
+      WHERE b.session_id = ? AND bi.status = 'failed'
+      ORDER BY bi.updated_at DESC LIMIT ?`,
+    sessionId,
+    limit,
+  ).map((r) => ({
+    batchId: r.batch_id,
+    batchName: r.batch_name,
+    chat: r.contact_name || `+${r.chat_id.replace(/@.*$/, '')}`,
+    error: r.error || 'Sin detalle',
+    at: r.updated_at,
+    kind: failureKind(r.error || ''),
+  }));
+}
+
 export interface QuarantineInfo {
   reason: string;
   since: string | null;
@@ -98,11 +139,23 @@ export function quarantineInfo(session: SessionRow, health: HealthRow, deliveryT
   if (session.status !== 'ready') problems.push('vincular de nuevo el número (está desconectado)');
   if (health.blocked_24h > 0) problems.push(`esperar: hubo ${health.blocked_24h} bloqueo(s) o baja(s) en 24 h`);
   if (!deliveryOk) problems.push('revisar la lista: la entrega está baja');
+  // ¿Qué fallaba? Si los envíos cayeron por desconexión, no fue un bloqueo.
+  const fails = /fallos/i.test(label) ? recentFailures(session.id, 10) : [];
+  const count = (k: RecentFailure['kind']) => fails.filter((f) => f.kind === k).length;
+  const cause = !fails.length
+    ? ''
+    : count('blocked') >= 2
+      ? `Varios fallos fueron por bloqueo o reporte (${count('blocked')} de ${fails.length}): esperá un día y revisá la lista y el texto antes de liberarla. `
+      : count('connection') >= fails.length / 2
+        ? `Los fallos fueron por desconexión de la línea (${count('connection')} de ${fails.length}), no por bloqueos: con la línea conectada se puede liberar sin riesgo. `
+        : count('number') >= fails.length / 2
+          ? `La mayoría de los fallos fueron números sin WhatsApp o mal escritos (${count('number')} de ${fails.length}): corregí la lista en cronogramas y liberala. `
+          : '';
+  if (count('blocked') >= 2) problems.push('esperar: los fallos fueron por bloqueos');
   const canRelease = problems.length === 0;
-  const byFailures = /fallos/i.test(label);
   const advice = canRelease
-    ? `Se ve sana${hours !== null ? ` (lleva ${hours < 1 ? 'menos de 1 h' : `${Math.round(hours)} h`} en cuarentena)` : ''}: está conectada, sin bloqueos y sin entrega baja. ${byFailures ? 'Antes de liberarla, mirá en Lotes el error de los envíos que fallaron (número inválido, sin conexión…). ' : ''}El Super Admin puede liberarla en Anti-Baneo › detalle de la línea; los envíos pausados se reanudan desde Lotes.`
-    : `Antes de liberarla hay que ${problems.join('; ')}. Después, el Super Admin la libera en Anti-Baneo › detalle de la línea.`;
+    ? `${cause}Se ve sana${hours !== null ? ` (lleva ${hours < 1 ? 'menos de 1 h' : `${Math.round(hours)} h`} en cuarentena)` : ''}: está conectada, sin bloqueos y sin entrega baja. Liberala en Anti-Baneo › detalle de la línea (con «Liberar y continuar», los envíos pausados siguen solos).`
+    : `${cause}Antes de liberarla hay que ${problems.join('; ')}. Después, el Super Admin la libera en Anti-Baneo › detalle de la línea.`;
   return { reason: label, since, canRelease, advice };
 }
 
@@ -170,17 +223,20 @@ export function lineVerdict(session: SessionRow): LineVerdict {
 
   // 1. Conexión
   const connected = session.status === 'ready';
+  // Nunca se vinculó (sin número verificado) o se desconectó después.
+  const neverLinked = !connected && !session.phone_verified_at && !session.phone;
   checks.push({
     key: 'connection',
     label: 'Conexión con WhatsApp',
-    status: connected ? 'ok' : 'bad',
-    value: connected ? 'Conectada' : 'Sin conexión',
-    rule: 'Rojo si la línea no está vinculada.',
-    why: 'Sin conexión no sale ni entra ningún mensaje por este número.',
-    fix: connected ? null : 'Vinculala desde Conexión escaneando el QR con el teléfono del número.',
+    status: connected ? 'ok' : 'info',
+    value: connected ? 'Conectada' : neverLinked ? 'Todavía sin vincular' : 'Desconectada',
+    rule: 'Gris mientras no esté conectada: no envía, pero no es un riesgo de bloqueo.',
+    why: 'Sin conexión no sale ni entra ningún mensaje por este número. Los envíos que le lleguen esperan hasta que se vincule.',
+    fix: connected ? null : 'Vinculala desde Conexión escaneando el QR con el teléfono del número (WhatsApp › Dispositivos vinculados).',
   });
+  let offline: string | null = null;
   if (!connected) {
-    red.push('La línea no está conectada a WhatsApp.');
+    offline = neverLinked ? 'La línea todavía no se vinculó con WhatsApp: no envía ni recibe mensajes.' : 'La línea se desconectó de WhatsApp: no envía ni recibe mensajes.';
     action = 'Vinculala desde Conexión escaneando el QR con el teléfono del número.';
   }
 
@@ -356,7 +412,18 @@ export function lineVerdict(session: SessionRow): LineVerdict {
   }
 
   if (red.length) {
-    return { level: 'red', title: 'No conviene enviar ahora', reasons: [...red, ...yellow], action, canSend: false, checks, stats };
+    return { level: 'red', title: 'No conviene enviar ahora', reasons: [...(offline ? [offline] : []), ...red, ...yellow], action, canSend: false, checks, stats };
+  }
+  if (offline) {
+    return {
+      level: 'off',
+      title: neverLinked ? 'Todavía sin vincular' : 'Desconectada',
+      reasons: [offline, ...yellow.filter((y) => !/horario|calentamiento|cupo/i.test(y))],
+      action,
+      canSend: false,
+      checks,
+      stats,
+    };
   }
   if (yellow.length) {
     const first = checks.find((c) => c.status === 'warn');

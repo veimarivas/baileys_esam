@@ -2231,6 +2231,23 @@ Hasta ahora se sabía si un mensaje masivo **salía**, pero no si **llegaba, se 
 
 ---
 
+## 71. Anti-Baneo: líneas sin conexión en gris y cuarentena con salida guiada (2026-11-01)
+
+**Reportado:** las líneas todavía sin habilitar salían «En riesgo», y no quedaba claro cómo sacar de la cuarentena a una línea con «8 fallos consecutivos de envío».
+
+- **Nuevo nivel `off` del semáforo:**
+  - una línea sin conexión se muestra en gris: «Todavía sin vincular» si nunca se vinculó, «Desconectada» si se cayó;
+  - ya no aparece como «En riesgo», porque no envía, pero tampoco es un riesgo de bloqueo;
+  - si además está en cuarentena o tiene bloqueos, sigue en rojo;
+  - en el resumen diario, las líneas que nunca se vincularon no cuentan como alerta.
+- **Por qué fallaron los envíos** (`recentFailures`, `failureKind`):
+  - el detalle de la línea lista los últimos 10 envíos fallidos con su lote y su tipo: desconexión, número sin WhatsApp, bloqueo u otro;
+  - la recomendación de la cuarentena lo usa: si los fallos fueron por desconexión, dice que se puede liberar sin riesgo; si fueron bloqueos, pide esperar.
+- **«Liberar y continuar»:** al liberar se puede marcar «Reanudar también los envíos pausados por el anti-baneo», y siguen solos (se quita la marca de pausa y vuelven a la cola).
+- **Pruebas:** `test/anti-ban-smart.test.ts` (+2 y una ajustada). En la vista previa se probó con un caso «8 fallos consecutivos» por desconexión: muestra la causa, libera y reanuda; la línea sin vincular sale en gris.
+
+---
+
 ## Notas de operación
 
 - En producción usar `start-baileys.bat` / pm2 / systemd (no `npm run dev`).

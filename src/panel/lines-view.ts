@@ -88,7 +88,7 @@ export function linesHealthPage(issues: LineIssue[], flash: { ok?: string; error
   return `<div class="lines-health">${banner}${intro}${resumen}<div class="lh-list">${cards}</div></div>`;
 }
 
-const VERDICT_ICON: Record<LineVerdict['level'], string> = { green: 'ri-shield-check-line', yellow: 'ri-alert-line', red: 'ri-forbid-line' };
+const VERDICT_ICON: Record<LineVerdict['level'], string> = { green: 'ri-shield-check-line', yellow: 'ri-alert-line', red: 'ri-forbid-line', off: 'ri-plug-line' };
 const CHECK_VIEW: Record<VerdictCheck['status'], [string, string]> = {
   ok: ['ri-checkbox-circle-fill', 'En orden'],
   warn: ['ri-error-warning-fill', 'Atención'],
@@ -172,7 +172,7 @@ export function connectionHelp(): string {
 
 /** Líneas del gateway con su semáforo y acceso al detalle (solo administración). */
 export function linesOverview(rows: Array<{ id: string; name: string; phone: string | null; status: string; verdict: LineVerdict; principal: boolean }>): string {
-  const dot: Record<LineVerdict['level'], string> = { green: 'Sana', yellow: 'Con cuidado', red: 'No conviene enviar' };
+  const dot: Record<LineVerdict['level'], string> = { green: 'Sana', yellow: 'Con cuidado', red: 'No conviene enviar', off: 'Sin conexión' };
   return `<div class="card"><div class="card-body py-1">${rows
     .map((r, i) => `<a class="cx-line${i === rows.length - 1 ? '' : ' border-bottom'}" href="/anti-ban/line/${encodeURIComponent(r.id)}">
       <span class="cx-line-dot lv-${r.verdict.level}" aria-hidden="true"></span>

@@ -6412,3 +6412,19 @@ html[data-bs-theme="dark"] .cl-st.on, html[data-bs-theme="dark"] .cl-st b { colo
 .bd-fu-row label, .bd-fu-text { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.78rem; font-weight: 600; color: var(--bt-ink); }
 .bd-fu-row label { flex: 1 1 12rem; }
 .bd-fu-form .btn { align-self: flex-start; }
+
+/* ── Semáforo: línea sin conexión (gris, no es un riesgo de bloqueo) ── */
+.lv-card.lv-off { --lv: #64748b; }
+.lv-off .lv-light span { opacity: 0.18; box-shadow: none; }
+.cx-line-dot.lv-off { background: #94a3b8; box-shadow: 0 0 0 3px color-mix(in srgb, #94a3b8 22%, transparent); }
+.lv-t-off { color: #64748b; }
+.ab-session.ab-h-off { border-top-color: var(--ab-mute); }
+.ab-verdict.ab-v-off { --tone: var(--ab-mute); --tone-soft: var(--ab-mute-soft); }
+.ab-page .ab-mute { --tone: var(--ab-mute); --tone-soft: var(--ab-mute-soft); }
+.ab-fails { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.45rem; }
+.ab-fails li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 0.5rem; align-items: start; font-size: 0.8rem; }
+.ab-fails li > i { margin-top: 2px; }
+.ab-fails .ab-fail-err { color: var(--esam-muted); overflow-wrap: anywhere; }
+.ab-fails time { color: var(--esam-muted); font-size: 0.72rem; white-space: nowrap; }
+.ab-resume { display: flex; align-items: center; gap: 0.4rem; font-size: 0.82rem; margin: 0.6rem 0; }
+.ab-t-mute { color: var(--ab-mute); }

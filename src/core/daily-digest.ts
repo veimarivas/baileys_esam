@@ -27,7 +27,7 @@ export interface Digest {
   cobranza: { pagado: number; comprobante: number; no_puede: number };
   overdueNotes: number;
   unanswered: number;
-  lines: Array<{ name: string; level: 'yellow' | 'red'; reason: string }>;
+  lines: Array<{ name: string; level: 'yellow' | 'red' | 'off'; reason: string }>;
 }
 
 /** Arma el resumen de ayer para un alcance de líneas (null = todas). */
@@ -56,6 +56,8 @@ export function buildDigest(sessionIds: string[] | null, userId: number | null =
     if (sessionIds && !sessionIds.includes(s.id)) continue;
     try {
       const v = lineVerdict(s);
+      // Las líneas que nunca se vincularon no son una alerta del día.
+      if (v.level === 'off' && v.title === 'Todavía sin vincular') continue;
       if (v.level !== 'green') lines.push({ name: s.owner_name ?? s.name, level: v.level, reason: v.reasons[0] ?? v.title });
     } catch {
       // una línea con datos raros no frena el resumen
@@ -87,7 +89,9 @@ export function digestText(d: Digest): string | null {
   }
   if (d.overdueNotes) parts.push(`${d.overdueNotes} tarea(s) vencida(s).`);
   if (d.unanswered) parts.push(`${d.unanswered} chat(s) esperan respuesta.`);
-  for (const l of d.lines.slice(0, 3)) parts.push(`Línea ${l.name} en ${l.level === 'red' ? 'rojo' : 'amarillo'}: ${l.reason}`);
+  for (const l of d.lines.slice(0, 3)) {
+    parts.push(l.level === 'off' ? `Línea ${l.name} desconectada: hay que volver a vincularla.` : `Línea ${l.name} en ${l.level === 'red' ? 'rojo' : 'amarillo'}: ${l.reason}`);
+  }
   if (d.lines.length > 3) parts.push(`… y ${d.lines.length - 3} línea(s) más con alertas.`);
   return parts.length ? parts.join('\n') : null;
 }

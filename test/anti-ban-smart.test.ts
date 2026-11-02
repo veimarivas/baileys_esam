@@ -2,7 +2,7 @@ import './helpers/temp-env.js';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { quarantineAndRotate, rotateBatches } from '../src/core/session-pool.js';
-import { lineVerdict, sendBlockedReason } from '../src/core/line-verdict.js';
+import { failureKind, lineVerdict, recentFailures, sendBlockedReason } from '../src/core/line-verdict.js';
 import { getHealth, recomputeHealth, setQuarantine } from '../src/core/health.js';
 import { upsertUser } from '../src/auth/users.js';
 import { get, run } from '../src/db/index.js';
@@ -77,10 +77,12 @@ describe('semáforo del número', () => {
     assert.equal(sendBlockedReason(session('ab-sana')), null);
   });
 
-  it('línea desconectada: rojo con la acción de vincular', () => {
+  it('línea sin vincular: gris (no es riesgo) con la acción de vincular', () => {
     line('ab-caida', 'ab-caida', 'disconnected');
     const v = lineVerdict(session('ab-caida'));
-    assert.equal(v.level, 'red');
+    assert.equal(v.level, 'off');
+    assert.equal(v.title, 'Todavía sin vincular');
+    assert.equal(v.canSend, false);
     assert.match(v.action ?? '', /QR/);
     // La desconexión la explica la API aparte (notReadyMessage).
     assert.equal(sendBlockedReason(session('ab-caida')), null);
@@ -141,5 +143,27 @@ describe('cuarentena explicada', () => {
     const q = lineVerdict(session('ab-q2')).checks.find((c) => c.key === 'quarantine')!;
     assert.match(q.value, /manualmente/);
     assert.match(q.fix ?? '', /vincular de nuevo/); // desconectada: todavía no conviene liberarla
+  });
+});
+
+describe('cuarentena por fallos: qué los causó', () => {
+  it('clasifica los errores de envío', () => {
+    assert.equal(failureKind('Connection Closed'), 'connection');
+    assert.equal(failureKind('El número no tiene WhatsApp'), 'number');
+    assert.equal(failureKind('Bloqueado: forbidden'), 'blocked');
+    assert.equal(failureKind('algo raro'), 'other');
+  });
+
+  it('si los fallos fueron por desconexión, recomienda liberar sin riesgo', () => {
+    line('ab-q3', 'ab-q3');
+    const b = batch('ab-q3', { account: 'ab-q3' }, 'paused');
+    for (let i = 0; i < 8; i++) {
+      run("INSERT INTO batch_items (batch_id, chat_id, status, error, created_at, updated_at) VALUES (?, ?, 'failed', 'Connection Closed', ?, ?)", b, `5917100000${i}@c.us`, nowIso(), nowIso());
+    }
+    setQuarantine('ab-q3', true, '8 fallos consecutivos de envío');
+    const q = lineVerdict(session('ab-q3')).checks.find((c) => c.key === 'quarantine')!;
+    assert.match(q.fix ?? '', /desconexión de la línea \(8 de 8\), no por bloqueos/);
+    assert.match(q.fix ?? '', /Se ve sana/);
+    assert.equal(recentFailures('ab-q3').length, 8);
   });
 });

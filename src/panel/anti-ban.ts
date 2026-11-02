@@ -1,6 +1,6 @@
 import type express from 'express';
 import type { Request, Response, RequestHandler } from 'express';
-import { get, run } from '../db/index.js';
+import { all, get, run } from '../db/index.js';
 import { esc, renderLayout } from './layout.js';
 import { emptyState, fmtDate } from './views.js';
 import type { UserRow } from '../auth/users.js';
@@ -28,7 +28,7 @@ import {
 } from '../core/anti-ban-monitor.js';
 import type { BatchRunner } from '../core/batches.js';
 import type { SessionRow } from '../types.js';
-import { lineVerdict, quarantineInfo, type LineVerdict } from '../core/line-verdict.js';
+import { lineVerdict, quarantineInfo, recentFailures, type LineVerdict } from '../core/line-verdict.js';
 import { lineVerdictCard } from './lines-view.js';
 
 /**
@@ -104,9 +104,11 @@ const HEALTH_INFO: Record<string, { tone: string; label: string }> = {
   green: { tone: 'ok', label: 'Saludable' },
   yellow: { tone: 'warn', label: 'Atención' },
   red: { tone: 'danger', label: 'En riesgo' },
+  // Sin conexión: no envía, pero no es un riesgo de bloqueo.
+  off: { tone: 'mute', label: 'Sin conexión' },
 };
 
-const VERDICT_PILL: Record<LineVerdict['level'], string> = { green: 'green', yellow: 'yellow', red: 'red' };
+const VERDICT_PILL: Record<LineVerdict['level'], string> = { green: 'green', yellow: 'yellow', red: 'red', off: 'off' };
 
 function healthPill(health: string): string {
   const h = HEALTH_INFO[health] ?? HEALTH_INFO.green;
@@ -792,14 +794,43 @@ export function registerAntiBanRoutes(
     const policy = getPolicy(id);
     const byId = new Map(ctx.sessions().map((x) => [x.id, x]));
     const q = health.quarantine ? quarantineInfo(sess, health, policy.health_delivery_threshold, verdict.stats.measured) : null;
+    const pausedCount = get<{ c: number }>(
+      "SELECT COUNT(*) AS c FROM batches WHERE session_id = ? AND status = 'paused' AND json_extract(meta, '$.anti_ban_pause') IS NOT NULL",
+      id,
+    )?.c ?? 0;
+    // Últimos fallos de envío: explican el «N fallos consecutivos» de la cuarentena.
+    const fails = recentFailures(id, 10);
+    const KIND: Record<string, [string, string, string]> = {
+      connection: ['ri-wifi-off-line', 'mute', 'Desconexión de la línea'],
+      number: ['ri-user-unfollow-line', 'warn', 'Número sin WhatsApp o mal escrito'],
+      blocked: ['ri-forbid-line', 'danger', 'Bloqueo o reporte'],
+      other: ['ri-error-warning-line', 'warn', 'Otro error'],
+    };
+    const failsCard = fails.length
+      ? `<div class="card ab-card"><div class="card-body">
+          <div class="ab-card-title"><h5><i class="ri-error-warning-line"></i> Últimos envíos que fallaron</h5>
+            <span>Lo que llevó a los fallos seguidos. Si fueron por desconexión, no es un problema del número.</span></div>
+          <ul class="ab-fails">${fails
+            .map((f) => {
+              const [icon, tone, label] = KIND[f.kind];
+              return `<li><i class="${icon} ab-t-${tone === 'danger' ? 'danger' : tone === 'warn' ? 'warn' : 'mute'}" title="${esc(label)}"></i>
+                <div><b>${esc(f.chat)}</b> · <a href="/batches/${f.batchId}">#${f.batchId}</a> <span class="ab-fail-err">${esc(label)}: ${esc(f.error.slice(0, 160))}</span></div>
+                <time datetime="${esc(f.at)}">${esc(fmtDate(f.at))}</time></li>`;
+            })
+            .join('')}</ul>
+        </div></div>`
+      : '';
     const quarantineCard = q
       ? `<div class="card ab-card ab-q-card ${q.canRelease ? 'is-ready' : ''}"><div class="card-body">
           <div class="ab-card-title"><h5><i class="ri-lock-line"></i> Cuarentena</h5>
             <span>${q.since ? `Desde ${esc(fmtDate(q.since))} · ` : ''}Motivo: ${esc(q.reason)}</span></div>
           <p class="ab-q-advice ${q.canRelease ? 'ab-ok' : 'ab-warn'}"><i class="${q.canRelease ? 'ri-checkbox-circle-line' : 'ri-error-warning-line'}"></i> ${esc(q.advice)}</p>
-          <form method="post" action="/anti-ban/quarantine/${esc(id)}" data-confirm="${esc(q.canRelease ? '¿Liberar la línea? Vuelve a poder enviar masivos; los lotes pausados se reanudan desde Lotes.' : 'La línea todavía muestra problemas. ¿Liberarla igual?')}">
+          <form method="post" action="/anti-ban/quarantine/${esc(id)}" data-confirm="${esc(q.canRelease ? '¿Liberar la línea? Vuelve a poder enviar masivos.' : 'La línea todavía muestra problemas. ¿Liberarla igual?')}">
             <input type="hidden" name="action" value="release"/><input type="hidden" name="next" value="line"/>
-            <button class="btn ${q.canRelease ? 'btn-success' : 'btn-soft-secondary'}" type="submit"><i class="ri-lock-unlock-line me-1"></i>Liberar de la cuarentena</button>
+            ${pausedCount > 0
+              ? `<label class="ab-resume"><input type="checkbox" name="resume" value="1" ${q.canRelease ? 'checked' : ''}/> Reanudar también ${pausedCount} envío(s) pausado(s) por el anti-baneo</label>`
+              : ''}
+            <button class="btn ${q.canRelease ? 'btn-success' : 'btn-soft-secondary'}" type="submit"><i class="ri-lock-unlock-line me-1"></i>${pausedCount > 0 ? 'Liberar y continuar' : 'Liberar de la cuarentena'}</button>
           </form>
         </div></div>`
       : '';
@@ -839,7 +870,7 @@ export function registerAntiBanRoutes(
       </div>
       ${lineVerdictCard(verdict)}
       <div class="ab-policy-layout">
-        <div class="ab-line-col">${quarantineCard}${tips}${history}</div>
+        <div class="ab-line-col">${quarantineCard}${failsCard}${tips}${history}</div>
         <aside class="ab-aside">${sessionCard(sess, health, hasOwnPolicy(id), { detail: false })}</aside>
       </div>
     </div>`;
@@ -921,8 +952,23 @@ export function registerAntiBanRoutes(
     const release = s((req.body as Record<string, unknown>).action) === 'release';
     if (release) {
       setQuarantine(id, false, 'Cuarentena liberada manualmente');
-      audit('anti_ban.quarantine', { session_id: id, quarantine: false });
-      const msg = 'Línea liberada de la cuarentena. Reanudá desde Lotes los envíos que quedaron en pausa.';
+      // «Liberar y continuar»: los envíos que pausó el anti-baneo siguen solos.
+      let resumed = 0;
+      if (s((req.body as Record<string, unknown>).resume) === '1') {
+        const paused = all<{ id: number }>(
+          "SELECT id FROM batches WHERE session_id = ? AND status = 'paused' AND json_extract(meta, '$.anti_ban_pause') IS NOT NULL",
+          id,
+        );
+        for (const b of paused) {
+          run("UPDATE batches SET status = 'running', meta = json_remove(meta, '$.anti_ban_pause'), updated_at = ? WHERE id = ?", new Date().toISOString(), b.id);
+          ctx.runner.enqueue(b.id);
+          resumed++;
+        }
+      }
+      audit('anti_ban.quarantine', { session_id: id, quarantine: false, resumed });
+      const msg = resumed
+        ? `Línea liberada de la cuarentena y ${resumed} envío(s) reanudado(s).`
+        : 'Línea liberada de la cuarentena. Si hay envíos en pausa, reanudalos desde Lotes.';
       res.redirect(s((req.body as Record<string, unknown>).next) === 'line' ? `/anti-ban/line/${encodeURIComponent(id)}?ok=${encodeURIComponent(msg)}` : back('monitoreo', msg));
       return;
     }

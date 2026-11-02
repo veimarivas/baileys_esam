@@ -1,7 +1,7 @@
 import './helpers/temp-env.js';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { alertSessionDown, notify, unreadCount } from '../src/core/notifications.js';
+import { alertSessionDown, listNotifications, markRead, notificationCategory, notify, unreadCount, unreadCounts } from '../src/core/notifications.js';
 import { upsertUser } from '../src/auth/users.js';
 import { get, run } from '../src/db/index.js';
 import { nowIso } from '../src/util/async.js';
@@ -114,5 +114,49 @@ describe('notify', () => {
     );
     assert.equal(ultimo?.title.length, 200);
     assert.equal(ultimo?.body.length, 500);
+  });
+});
+
+describe('divisiones de la campana', () => {
+  const user = upsertUser({
+    sourceUid: 'owner-cats',
+    name: 'Usuario Categorías',
+    email: 'categorias@esam.local',
+    autorizado: true,
+  });
+
+  it('clasifica cada tipo en una sola división', () => {
+    assert.equal(notificationCategory('note_created'), 'notes');
+    assert.equal(notificationCategory('resolved'), 'notes');
+    assert.equal(notificationCategory('session_down'), 'whatsapp');
+    assert.equal(notificationCategory('line_issue'), 'whatsapp');
+    assert.equal(notificationCategory('batch_paused'), 'batches');
+    assert.equal(notificationCategory('chat_assigned'), 'chats');
+    assert.equal(notificationCategory('daily_digest'), 'system');
+  });
+
+  it('cuenta las no leídas por división y filtra la lista', () => {
+    notify([user.id], { kind: 'note_created', title: 'Nota nueva' });
+    notify([user.id], { kind: 'resolved', title: 'Tarea resuelta' });
+    notify([user.id], { kind: 'session_down', title: 'Línea caída' });
+    notify([user.id], { kind: 'batch_paused', title: 'Lote pausado' });
+    notify([user.id], { kind: 'chat_assigned', title: 'Chat asignado' });
+    notify([user.id], { kind: 'daily_digest', title: 'Resumen diario' });
+
+    assert.deepEqual(unreadCounts(user.id), { all: 6, notes: 2, whatsapp: 1, batches: 1, chats: 1, system: 1 });
+
+    const notas = listNotifications(user.id, 50, 'notes');
+    assert.equal(notas.length, 2);
+    assert.ok(notas.every((n) => n.category === 'notes'));
+    assert.equal(listNotifications(user.id, 50, 'whatsapp').length, 1);
+    assert.equal(listNotifications(user.id, 50, 'all').length, 6);
+  });
+
+  it('marcar una como leída baja el total y el contador de su división', () => {
+    const notas = listNotifications(user.id, 10, 'notes');
+    assert.equal(markRead(user.id, [notas[0].id]), 1);
+
+    assert.deepEqual(unreadCounts(user.id), { all: 5, notes: 1, whatsapp: 1, batches: 1, chats: 1, system: 1 });
+    assert.equal(unreadCount(user.id), 5);
   });
 });

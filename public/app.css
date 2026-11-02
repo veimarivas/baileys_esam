@@ -4422,7 +4422,28 @@ html[data-bs-theme="dark"] .tpl-phone { background: #0b141a; }
 .notif-head b { font-size: 0.88rem; color: var(--esam-ink, #0e1a2b); }
 .notif-readall { border: 0; background: transparent; padding: 0; font-size: 0.72rem; font-weight: 600; color: var(--ib-brand, #045474); cursor: pointer; }
 .notif-readall:hover { text-decoration: underline; }
-.notif-list { max-height: min(70vh, 460px); overflow-y: auto; }
+.notif-tabs {
+  display: flex; gap: 0.3rem; padding: 0.5rem 0.7rem; overflow-x: auto; scrollbar-width: none;
+  border-bottom: 1px solid var(--esam-line, #e3e8f1);
+}
+.notif-tabs::-webkit-scrollbar { display: none; }
+.notif-tab {
+  flex: 0 0 auto; display: inline-flex; align-items: center; gap: 0.3rem;
+  border: 0; border-radius: 999px; padding: 0.28rem 0.55rem;
+  background: var(--esam-surface-2, #f2f5fa); color: var(--esam-muted, #66768b);
+  font-size: 0.71rem; font-weight: 600; line-height: 1.2; cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.notif-tab:hover, .notif-tab:focus-visible { color: var(--esam-ink, #0e1a2b); outline: none; }
+.notif-tab.active { background: var(--ib-brand, #045474); color: #fff; }
+.notif-tab-count {
+  min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px;
+  background: color-mix(in srgb, var(--ib-brand, #045474) 14%, transparent);
+  color: inherit; font-size: 0.62rem; font-weight: 700; line-height: 16px; text-align: center;
+}
+.notif-tab.active .notif-tab-count { background: rgba(255, 255, 255, 0.24); }
+.notif-tab-count[hidden] { display: none; }
+.notif-list { max-height: min(70vh, 420px); overflow-y: auto; }
 .notif-empty { display: flex; flex-direction: column; align-items: center; gap: 0.3rem; padding: 1.4rem 1rem; font-size: 0.8rem; color: var(--esam-muted, #66768b); }
 .notif-empty span { font-size: 1.5rem; opacity: 0.5; }
 .notif-item {

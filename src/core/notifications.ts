@@ -35,6 +35,43 @@ export type NotificationKind =
   /** Resumen diario de la mañana (envíos de ayer, cobranzas, tareas, chats, líneas). */
   | 'daily_digest';
 
+/**
+ * Divisiones de la campana. Se derivan del `kind` para no migrar la tabla que
+ * ya está en producción; cada aviso pertenece a una sola división.
+ */
+export type NotificationCategory = 'notes' | 'whatsapp' | 'batches' | 'chats' | 'system';
+
+export const NOTIFICATION_CATEGORIES: NotificationCategory[] = ['notes', 'whatsapp', 'batches', 'chats', 'system'];
+
+/** Tipos que caen en cada división (el orden no importa). */
+const CATEGORY_KINDS: Record<NotificationCategory, NotificationKind[]> = {
+  notes: ['note_created', 'derived_to_you', 'derived', 'contacted', 'resolved'],
+  whatsapp: ['session_down', 'line_issue'],
+  batches: ['batch_confirm', 'batch_paused', 'batch_reply'],
+  chats: ['chat_assigned'],
+  system: ['daily_digest'],
+};
+
+const KIND_CATEGORY = new Map<NotificationKind, NotificationCategory>(
+  NOTIFICATION_CATEGORIES.flatMap((category) => CATEGORY_KINDS[category].map((kind) => [kind, category] as const)),
+);
+
+/** División a la que pertenece un aviso (los tipos desconocidos caen en Sistema). */
+export function notificationCategory(kind: NotificationKind): NotificationCategory {
+  return KIND_CATEGORY.get(kind) ?? 'system';
+}
+
+export function isNotificationCategory(value: string): value is NotificationCategory {
+  return (NOTIFICATION_CATEGORIES as string[]).includes(value);
+}
+
+/** Totales sin leer por división y total general. */
+export type NotificationCounts = Record<NotificationCategory | 'all', number>;
+
+export function emptyNotificationCounts(): NotificationCounts {
+  return { all: 0, notes: 0, whatsapp: 0, batches: 0, chats: 0, system: 0 };
+}
+
 export interface NotificationRow {
   id: number;
   user_id: number;
@@ -51,6 +88,10 @@ export interface NotificationRow {
   read_at: string | null;
 }
 
+export interface NotificationItem extends NotificationRow {
+  category: NotificationCategory;
+}
+
 /** Quienes supervisan: el Super Admin de cronogramas y la cuenta local. */
 export function supervisorIds(): number[] {
   return listUsers()
@@ -60,6 +101,23 @@ export function supervisorIds(): number[] {
 
 export function unreadCount(userId: number): number {
   return get<{ c: number }>('SELECT COUNT(*) AS c FROM notifications WHERE user_id = ? AND read_at IS NULL', userId)?.c ?? 0;
+}
+
+/**
+ * No leídas por división. Se calcula agrupando por `kind` para que la campana
+ * pueda mostrar el contador de cada pestaña sin una consulta por categoría.
+ */
+export function unreadCounts(userId: number): NotificationCounts {
+  const counts = emptyNotificationCounts();
+  const rows = all<{ kind: NotificationKind; c: number }>(
+    'SELECT kind, COUNT(*) AS c FROM notifications WHERE user_id = ? AND read_at IS NULL GROUP BY kind',
+    userId,
+  );
+  for (const row of rows) {
+    counts[notificationCategory(row.kind)] += row.c;
+    counts.all += row.c;
+  }
+  return counts;
 }
 
 /**
@@ -87,16 +145,19 @@ export function notify(
       n.link ?? null,
       now,
     );
+    const counts = unreadCounts(userId);
     panelBus.publish('notification', {
       private: true,
       userIds: [userId],
       id: created.lastInsertRowid,
       kind: n.kind,
+      category: notificationCategory(n.kind),
       noteId: n.noteId ?? null,
       title: n.title.slice(0, 200),
       body: n.body ? n.body.slice(0, 300) : null,
       link: n.link ?? null,
-      unread: unreadCount(userId),
+      unread: counts.all,
+      counts,
     });
   }
 }
@@ -133,13 +194,21 @@ export function alertSessionDown(sessionId: string, label: string, reason: strin
   return true;
 }
 
-export function listNotifications(userId: number, limit = 30): NotificationRow[] {
-  return all<NotificationRow>(
+export function listNotifications(
+  userId: number,
+  limit = 30,
+  category: NotificationCategory | 'all' = 'all',
+): NotificationItem[] {
+  const kinds = category === 'all' ? null : CATEGORY_KINDS[category];
+  const filter = kinds ? ` AND n.kind IN (${kinds.map(() => '?').join(',')})` : '';
+  const rows = all<NotificationRow>(
     `SELECT n.*, u.name AS actor_name FROM notifications n LEFT JOIN users u ON u.id = n.actor_id
-      WHERE n.user_id = ? ORDER BY n.id DESC LIMIT ?`,
+      WHERE n.user_id = ?${filter} ORDER BY n.id DESC LIMIT ?`,
     userId,
+    ...(kinds ?? []),
     Math.min(Math.max(limit, 1), 100),
   );
+  return rows.map((row) => ({ ...row, category: notificationCategory(row.kind) }));
 }
 
 /** Marca como leídas (todas, o las indicadas) las notificaciones del usuario. */

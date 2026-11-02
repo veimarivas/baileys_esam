@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { UserRow } from '../auth/users.js';
 import { esamAreaLabel, esamEsAdmin, esamPuede } from '../auth/users.js';
-import { unreadCount } from '../core/notifications.js';
+import { emptyNotificationCounts, unreadCounts, type NotificationCategory, type NotificationCounts } from '../core/notifications.js';
 import { runtimeInfo } from '../core/runtime.js';
 import { lastBackup } from '../core/backup.js';
 
@@ -150,14 +150,31 @@ function navList(user: UserRow, active: string, restrictToSettings = false, badg
     .join('');
 }
 
+const NOTIF_TABS: Array<{ id: NotificationCategory | 'all'; label: string }> = [
+  { id: 'all', label: 'Todas' },
+  { id: 'notes', label: 'Notas' },
+  { id: 'whatsapp', label: 'WhatsApp' },
+  { id: 'batches', label: 'Envíos' },
+  { id: 'chats', label: 'Chats' },
+  { id: 'system', label: 'Sistema' },
+];
+
 /** Campana de notificaciones (la lista la carga `initNotifications` en app.js). */
 function notificationsBell(user: UserRow): string {
-  let unread = 0;
+  let counts: NotificationCounts = emptyNotificationCounts();
   try {
-    unread = unreadCount(user.id);
+    counts = unreadCounts(user.id);
   } catch {
     // tabla aún no migrada (primer arranque): sin contador
   }
+  const unread = counts.all;
+  const tabs = NOTIF_TABS.map((tab) => {
+    const n = counts[tab.id];
+    return `<button type="button" class="notif-tab${tab.id === 'all' ? ' active' : ''}" role="tab"
+              aria-selected="${tab.id === 'all' ? 'true' : 'false'}" aria-controls="notif-list"
+              data-notif-cat="${tab.id}">${tab.label}<span class="notif-tab-count"
+              data-notif-count="${tab.id}"${n > 0 ? '' : ' hidden'}>${n > 99 ? '99+' : n}</span></button>`;
+  }).join('');
   return `<div class="dropdown header-item notif-wrap">
     <button type="button" class="btn btn-icon btn-topbar material-shadow-none btn-ghost-secondary rounded-circle" id="notif-btn"
             data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-haspopup="true" aria-expanded="false"
@@ -167,7 +184,8 @@ function notificationsBell(user: UserRow): string {
     </button>
     <div class="dropdown-menu dropdown-menu-end notif-menu p-0" aria-labelledby="notif-btn">
       <div class="notif-head"><b>Notificaciones</b><button type="button" class="notif-readall" id="notif-readall">Marcar todas como leídas</button></div>
-      <div class="notif-list" id="notif-list"><div class="notif-empty">Cargando…</div></div>
+      <div class="notif-tabs" id="notif-tabs" role="tablist" aria-label="Filtrar notificaciones">${tabs}</div>
+      <div class="notif-list" id="notif-list" role="tabpanel"><div class="notif-empty">Cargando…</div></div>
     </div>
   </div>`;
 }

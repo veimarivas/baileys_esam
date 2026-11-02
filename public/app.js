@@ -2287,6 +2287,9 @@
     if (!btn) return;
     var badge = document.getElementById('notif-badge');
     var list = document.getElementById('notif-list');
+    var tabs = document.getElementById('notif-tabs');
+    var currentCat = 'all';
+    var lastCounts = null;
     var ICONS = {
       note_created: 'ri-sticky-note-line', derived_to_you: 'ri-share-forward-line', derived: 'ri-share-forward-line',
       contacted: 'ri-phone-line', resolved: 'ri-check-double-line',
@@ -2298,6 +2301,14 @@
       chat_assigned: 'ri-user-follow-line',
       daily_digest: 'ri-sun-line',
     };
+    var EMPTY = {
+      all: 'No tenés notificaciones.',
+      notes: 'No tenés avisos de notas ni tareas.',
+      whatsapp: 'No tenés avisos de WhatsApp.',
+      batches: 'No tenés avisos de envíos.',
+      chats: 'No tenés avisos de conversaciones.',
+      system: 'No tenés avisos del sistema.',
+    };
     function setBadge(n) {
       n = Number(n) || 0;
       badge.hidden = !n;
@@ -2305,13 +2316,49 @@
       btn.setAttribute('aria-label', n ? 'Notificaciones: ' + n + ' sin leer' : 'Notificaciones');
     }
     window.__setNotifBadge = setBadge;
-    function go(item) {
+    function setCounts(counts) {
+      if (!counts) return;
+      lastCounts = counts;
+      if (counts.all !== undefined) setBadge(counts.all);
+      Array.prototype.forEach.call(document.querySelectorAll('[data-notif-count]'), function (el) {
+        var n = Number(counts[el.getAttribute('data-notif-count')]) || 0;
+        el.hidden = !n;
+        el.textContent = n > 99 ? '99+' : String(n);
+      });
+    }
+    function setTab(cat) {
+      currentCat = cat || 'all';
+      if (!tabs) return;
+      Array.prototype.forEach.call(tabs.querySelectorAll('.notif-tab'), function (el) {
+        var on = el.getAttribute('data-notif-cat') === currentCat;
+        el.classList.toggle('active', on);
+        el.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+    }
+    // Baja el globo y la pestaña en el acto; la respuesta del servidor confirma.
+    function decrementLocal(cat) {
+      if (!lastCounts) return;
+      var next = {};
+      Object.keys(lastCounts).forEach(function (k) { next[k] = lastCounts[k]; });
+      next.all = Math.max(0, (Number(next.all) || 0) - 1);
+      if (next[cat] !== undefined) next[cat] = Math.max(0, (Number(next[cat]) || 0) - 1);
+      setCounts(next);
+    }
+    function go(item, el) {
       var done = function () { if (item.link) location.href = item.link; };
       if (item.read_at) { done(); return; }
-      jsonApi('/notifications/read', 'POST', { ids: [item.id] }).then(function (r) { setBadge(r.unread); done(); }).catch(done);
+      item.read_at = new Date().toISOString();
+      if (el) el.classList.remove('unread');
+      decrementLocal(item.category || 'all');
+      jsonApi('/notifications/read', 'POST', { ids: [item.id] })
+        .then(function (r) { setCounts(r.counts); if (!r.counts) setBadge(r.unread); done(); })
+        .catch(function () { if (!item.link) load(); done(); });
     }
     function render(items) {
-      if (!items.length) { list.innerHTML = '<div class="notif-empty"><span class="ri-notification-off-line"></span>No tenés notificaciones.</div>'; return; }
+      if (!items.length) {
+        list.innerHTML = '<div class="notif-empty"><span class="ri-notification-off-line"></span>' + (EMPTY[currentCat] || EMPTY.all) + '</div>';
+        return;
+      }
       list.innerHTML = items.map(function (it, i) {
         return '<button type="button" class="notif-item' + (it.read_at ? '' : ' unread') + ' k-' + it.kind + '" data-i="' + i + '">' +
           '<span class="notif-ic ' + (ICONS[it.kind] || 'ri-notification-3-line') + '" aria-hidden="true"></span>' +
@@ -2321,22 +2368,35 @@
         '</button>';
       }).join('');
       Array.prototype.forEach.call(list.querySelectorAll('.notif-item'), function (el) {
-        el.addEventListener('click', function () { go(items[Number(el.getAttribute('data-i'))]); });
+        el.addEventListener('click', function () { go(items[Number(el.getAttribute('data-i'))], el); });
       });
     }
     function load() {
-      return api('/notifications').then(function (d) { setBadge(d.unread); render(d.items || []); }).catch(function () {});
+      var url = '/notifications' + (currentCat === 'all' ? '' : '?category=' + encodeURIComponent(currentCat));
+      return api(url).then(function (d) {
+        if (d.counts) setCounts(d.counts); else setBadge(d.unread);
+        render(d.items || []);
+      }).catch(function () {});
     }
-    btn.parentElement.addEventListener('show.bs.dropdown', load);
+    if (tabs) Array.prototype.forEach.call(tabs.querySelectorAll('.notif-tab'), function (el) {
+      el.addEventListener('click', function () {
+        setTab(el.getAttribute('data-notif-cat'));
+        load();
+      });
+    });
+    btn.parentElement.addEventListener('show.bs.dropdown', function () { setTab(currentCat); load(); });
     var readAll = document.getElementById('notif-readall');
     if (readAll) readAll.addEventListener('click', function () {
-      jsonApi('/notifications/read', 'POST', { all: true }).then(function (r) { setBadge(r.unread); load(); }).catch(function () {});
+      jsonApi('/notifications/read', 'POST', { all: true }).then(function (r) {
+        if (r.counts) setCounts(r.counts); else setBadge(r.unread);
+        load();
+      }).catch(function () {});
     });
     var es = liveSource();
     if (es) es.addEventListener('notification', function (e) {
       var d; try { d = JSON.parse(e.data); } catch (_) { return; }
-      setBadge(d.unread);
-      toast(d.title, false, d.link ? { label: 'Ver', run: function () { go({ id: d.id, link: d.link }); } } : null);
+      if (d.counts) setCounts(d.counts); else setBadge(d.unread);
+      toast(d.title, false, d.link ? { label: 'Ver', run: function () { go({ id: d.id, link: d.link, category: d.category }); } } : null);
       if (btn.getAttribute('aria-expanded') === 'true') load();
       if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
         try { new Notification(d.title, { body: d.body || '', tag: 'notif-' + d.id }); } catch (_) {}

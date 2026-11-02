@@ -42,7 +42,17 @@ import { personSends } from '../core/person-sends.js';
 import { setConversationState, type ConversationStatus, type StateChange } from '../core/conversation-state.js';
 import * as directory from '../core/directory.js';
 import { teamMembers, teamTagFor } from '../core/team.js';
-import { listNotifications, markNoteRead, markRead, notify, supervisorIds, unreadCount, type NotificationKind } from '../core/notifications.js';
+import {
+  isNotificationCategory,
+  listNotifications,
+  markNoteRead,
+  markRead,
+  notify,
+  supervisorIds,
+  unreadCount,
+  unreadCounts,
+  type NotificationKind,
+} from '../core/notifications.js';
 import * as noteTemplates from '../core/note-templates.js';
 import * as quickReplies from '../core/quick-replies.js';
 import { getSticker } from '../core/stickers.js';
@@ -1324,12 +1334,20 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
     }),
   );
 
-  // Campana: últimas notificaciones y no leídas.
+  // Campana: últimas notificaciones, filtrables por división, y no leídas.
   app.get(
     '/notifications',
     ...auth,
     ah((req, res) => {
-      res.json({ unread: unreadCount(req.user!.id), items: listNotifications(req.user!.id, 30) });
+      const raw = typeof req.query.category === 'string' ? req.query.category : 'all';
+      const category = isNotificationCategory(raw) ? raw : 'all';
+      const counts = unreadCounts(req.user!.id);
+      res.json({
+        unread: counts.all,
+        counts,
+        category,
+        items: listNotifications(req.user!.id, 50, category),
+      });
     }),
   );
 
@@ -1340,7 +1358,8 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       const all = req.body?.all === true || req.body?.all === '1';
       const ids = Array.isArray(req.body?.ids) ? (req.body.ids as unknown[]).map((x) => Number(x)) : [];
       markRead(req.user!.id, all ? 'all' : ids);
-      res.json({ unread: unreadCount(req.user!.id) });
+      const counts = unreadCounts(req.user!.id);
+      res.json({ unread: counts.all, counts });
     }),
   );
 

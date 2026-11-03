@@ -5287,6 +5287,29 @@ html[data-bs-theme="dark"] .batch-who { background: rgba(255, 255, 255, 0.05); }
 }
 .np-module-meta span { display: inline-flex; align-items: center; gap: 0.25rem; }
 .np-module-detail { margin: 0.05rem 0 0; font-size: 0.78rem; line-height: 1.45; color: var(--ib-ink-soft); white-space: pre-wrap; overflow-wrap: anywhere; }
+.np-module-sessions { display: flex; flex-direction: column; gap: 0.25rem; margin-top: 0.2rem; }
+.np-module-session {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.38rem 0.5rem;
+  border: 1px solid var(--ib-line);
+  border-radius: 8px;
+  background: var(--ib-surface-2, #f7f9fc);
+  font-size: 0.74rem;
+}
+.np-module-session-time {
+  flex-shrink: 0;
+  min-width: 4.2rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--ib-brand);
+}
+.np-module-session-info { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 0.05rem; }
+.np-module-session-info b { font-weight: 650; color: var(--ib-ink); overflow-wrap: anywhere; }
+.np-module-session-info span { font-size: 0.68rem; color: var(--ib-ink-mute); overflow-wrap: anywhere; }
+.np-module-session-open { flex-shrink: 0; font-size: 0.68rem; font-weight: 700; color: var(--ib-brand); text-decoration: none; }
+.np-module-session-open:hover { text-decoration: underline; }
 .np-module-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.15rem; }
 .np-modules-empty {
   display: flex;

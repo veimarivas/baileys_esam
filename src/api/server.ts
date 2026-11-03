@@ -513,6 +513,15 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
           details: body.details ?? null,
           link: body.link ?? null,
           status: body.status ?? null,
+          sessions: Array.isArray(body.sessions)
+            ? body.sessions.map((s: Record<string, unknown>) => ({
+                horarioId: s.horario_id ? Number(s.horario_id) : null,
+                program: s.program ?? null,
+                module: s.module ?? null,
+                time: s.time ?? null,
+                link: s.link ?? null,
+              }))
+            : [],
         });
         panelBus.publish('module_followup', {
           id: result.id,

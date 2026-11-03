@@ -6126,15 +6126,16 @@
         els.modulesList.innerHTML = '<div class="np-modules-empty">' +
           '<span class="ri-check-double-line" aria-hidden="true"></span>' +
           '<b>No tenés seguimientos pendientes</b>' +
-          '<span>Cuando una sesión pasada quede marcada como Desarrollada sin asistencia, aparecerá aquí.</span>' +
+          '<span>Cuando haya sesiones pasadas marcadas como Desarrolladas sin asistencia, aparecerán aquí agrupadas por día.</span>' +
           '</div>';
         return;
       }
       els.modulesList.innerHTML = items.map(function (item) {
         var done = item.status === 'done';
         var assigned = item.assigned_name || 'Responsable';
+        var sessions = item.sessions || [];
         var actions = '';
-        if (item.link) {
+        if (!sessions.length && item.link) {
           actions += '<a class="btn btn-sm btn-soft-primary" href="' + escapeHtml(item.link) + '" target="_blank" rel="noopener">' +
             '<span class="ri-external-link-line" aria-hidden="true"></span> Abrir en cronogramas</a>';
         }
@@ -6142,20 +6143,37 @@
           actions += '<button type="button" class="btn btn-sm btn-soft-success" data-module-done="' + item.id + '">' +
             '<span class="ri-check-line" aria-hidden="true"></span> Marcar como atendido</button>';
         }
+        var sessionsHtml = '';
+        if (sessions.length) {
+          sessionsHtml = '<div class="np-module-sessions">' + sessions.map(function (s) {
+            return '<div class="np-module-session">' +
+                '<span class="np-module-session-time">' + escapeHtml(s.time || '—') + '</span>' +
+                '<div class="np-module-session-info">' +
+                  '<b>' + escapeHtml(s.module || 'Módulo') + '</b>' +
+                  (s.program ? '<span>' + escapeHtml(s.program) + '</span>' : '') +
+                '</div>' +
+                (s.link ? '<a class="np-module-session-open" href="' + escapeHtml(s.link) + '" target="_blank" rel="noopener">Abrir</a>' : '') +
+              '</div>';
+          }).join('') + '</div>';
+        }
+        var subtitle = sessions.length
+          ? sessions.length + ' sesión' + (sessions.length === 1 ? '' : 'es') + ' sin asistencia'
+          : [item.program, item.module].filter(Boolean).join(' · ');
         return '<article class="np-module-card' + (done ? ' is-done' : '') + '">' +
             '<div class="np-module-top">' +
               '<span class="np-module-ico" aria-hidden="true"><span class="' + (done ? 'ri-check-double-line' : 'ri-error-warning-line') + '"></span></span>' +
               '<div class="np-module-title">' +
                 '<h6>' + escapeHtml(item.title || 'Seguimiento de módulo') + '</h6>' +
-                '<p>' + escapeHtml([item.program, item.module].filter(Boolean).join(' · ')) + '</p>' +
+                '<p>' + escapeHtml(subtitle) + '</p>' +
               '</div>' +
               '<span class="np-module-status">' + (done ? 'Atendido' : 'Pendiente') + '</span>' +
             '</div>' +
             '<div class="np-module-meta">' +
-              (item.session_label ? '<span><span class="ri-calendar-line" aria-hidden="true"></span>Sesión: ' + escapeHtml(item.session_label) + '</span>' : '') +
+              (item.session_label ? '<span><span class="ri-calendar-line" aria-hidden="true"></span>Fecha: ' + escapeHtml(item.session_label) + '</span>' : '') +
               '<span><span class="ri-user-settings-line" aria-hidden="true"></span>Responsable: ' + escapeHtml(assigned) + '</span>' +
             '</div>' +
             (item.details ? '<p class="np-module-detail">' + escapeHtml(item.details) + '</p>' : '') +
+            sessionsHtml +
             (actions ? '<div class="np-module-actions">' + actions + '</div>' : '') +
           '</article>';
       }).join('');

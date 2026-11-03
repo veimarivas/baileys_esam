@@ -32,8 +32,18 @@ export interface ModuleFollowupRow {
   updated_at: string;
 }
 
+export interface ModuleFollowupSession {
+  horario_id: number | null;
+  program: string | null;
+  module: string | null;
+  time: string | null;
+  link: string | null;
+}
+
 export interface ModuleFollowupDTO extends ModuleFollowupRow {
   assigned_name: string | null;
+  /** Sesiones del día incluidas en la nota (pueden ser varias). */
+  sessions: ModuleFollowupSession[];
 }
 
 export interface ModuleFollowupInput {
@@ -54,6 +64,14 @@ export interface ModuleFollowupInput {
   details?: string | null;
   link?: string | null;
   status?: string | null;
+  /** Sesiones que agrupa la nota diaria. */
+  sessions?: Array<{
+    horarioId?: number | null;
+    program?: string | null;
+    module?: string | null;
+    time?: string | null;
+    link?: string | null;
+  }>;
 }
 
 export class ModuleFollowupError extends Error {
@@ -74,6 +92,34 @@ function clean(value: unknown, max = 500): string | null {
 function cleanText(value: unknown, max = 4000): string | null {
   const text = String(value ?? '').replace(/\r\n/g, '\n').trim().slice(0, max);
   return text || null;
+}
+
+function parseSession(value: unknown): ModuleFollowupSession | null {
+  if (!value || typeof value !== 'object') return null;
+  const s = value as Record<string, unknown>;
+  const session: ModuleFollowupSession = {
+    horario_id: Number.isFinite(Number(s.horario_id ?? s.horarioId)) ? Number(s.horario_id ?? s.horarioId) : null,
+    program: clean(s.program, 300),
+    module: clean(s.module, 300),
+    time: clean(s.time, 80),
+    link: clean(s.link, 1000),
+  };
+  return session.program || session.module || session.link ? session : null;
+}
+
+function mapFollowup(row: ModuleFollowupRow & { assigned_name?: string | null }): ModuleFollowupDTO {
+  let sessions: ModuleFollowupSession[] = [];
+  if (row.meta) {
+    try {
+      const meta = JSON.parse(row.meta) as { sessions?: unknown };
+      if (Array.isArray(meta.sessions)) {
+        sessions = meta.sessions.map(parseSession).filter((s): s is ModuleFollowupSession => !!s);
+      }
+    } catch {
+      sessions = [];
+    }
+  }
+  return { ...row, assigned_name: row.assigned_name ?? null, sessions };
 }
 
 /**
@@ -111,10 +157,14 @@ export function upsertModuleFollowup(input: ModuleFollowupInput): { id: number; 
   const link = clean(input.link, 1000);
   const status = input.status === 'done' ? 'done' : 'pending';
   const now = nowIso();
+  const sessions = (input.sessions ?? [])
+    .map(parseSession)
+    .filter((s): s is ModuleFollowupSession => !!s);
   const meta = JSON.stringify({
     program_id: input.programId ?? null,
     module_id: input.moduleId ?? null,
     horario_id: input.horarioId ?? null,
+    sessions,
   });
 
   const existing = get<ModuleFollowupRow>('SELECT * FROM module_followups WHERE ref = ?', ref);
@@ -179,14 +229,14 @@ function whereFor(user: UserRow, status: string): { sql: string; params: unknown
 export function listModuleFollowups(user: UserRow, opts: { status?: string | null } = {}): ModuleFollowupDTO[] {
   const status = opts.status === 'done' || opts.status === 'all' ? opts.status : 'pending';
   const where = whereFor(user, status);
-  return all<ModuleFollowupDTO>(
+  return all<ModuleFollowupRow & { assigned_name: string | null }>(
     `SELECT f.*, COALESCE(NULLIF(u.name, ''), u.username, u.email) AS assigned_name
        FROM module_followups f
        LEFT JOIN users u ON u.id = f.assigned_to
       WHERE ${where.sql}
       ORDER BY (f.status = 'done'), COALESCE(f.session_at, f.created_at) DESC, f.id DESC`,
     ...where.params,
-  );
+  ).map(mapFollowup);
 }
 
 /** Cantidad de seguimientos pendientes para el contador de /notes. */

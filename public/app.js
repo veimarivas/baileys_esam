@@ -6151,6 +6151,7 @@
                 '<div class="np-module-session-info">' +
                   '<b>' + escapeHtml(s.module || 'Módulo') + '</b>' +
                   (s.program ? '<span>' + escapeHtml(s.program) + '</span>' : '') +
+                  (s.state ? '<span class="np-module-session-state is-' + (s.state === 'Confirmado' ? 'confirmado' : 'desarrollado') + '">' + escapeHtml(s.state) + '</span>' : '') +
                 '</div>' +
                 (s.link ? '<a class="np-module-session-open" href="' + escapeHtml(s.link) + '" target="_blank" rel="noopener">Abrir</a>' : '') +
               '</div>';

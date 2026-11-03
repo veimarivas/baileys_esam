@@ -5308,6 +5308,18 @@ html[data-bs-theme="dark"] .batch-who { background: rgba(255, 255, 255, 0.05); }
 .np-module-session-info { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 0.05rem; }
 .np-module-session-info b { font-weight: 650; color: var(--ib-ink); overflow-wrap: anywhere; }
 .np-module-session-info span { font-size: 0.68rem; color: var(--ib-ink-mute); overflow-wrap: anywhere; }
+.np-module-session-info .np-module-session-state {
+  width: fit-content;
+  margin-top: 0.1rem;
+  padding: 0.04rem 0.4rem;
+  border-radius: 999px;
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.np-module-session-state.is-confirmado { background: #e8f1ff; color: #1c3e9e; }
+.np-module-session-state.is-desarrollado { background: #d4f6ee; color: #0a7059; }
 .np-module-session-open { flex-shrink: 0; font-size: 0.68rem; font-weight: 700; color: var(--ib-brand); text-decoration: none; }
 .np-module-session-open:hover { text-decoration: underline; }
 .np-module-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.15rem; }

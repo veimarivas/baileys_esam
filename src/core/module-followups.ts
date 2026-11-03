@@ -37,6 +37,8 @@ export interface ModuleFollowupSession {
   program: string | null;
   module: string | null;
   time: string | null;
+  /** Confirmado | Desarrollado | … */
+  state: string | null;
   link: string | null;
 }
 
@@ -70,6 +72,7 @@ export interface ModuleFollowupInput {
     program?: string | null;
     module?: string | null;
     time?: string | null;
+    state?: string | null;
     link?: string | null;
   }>;
 }
@@ -102,6 +105,7 @@ function parseSession(value: unknown): ModuleFollowupSession | null {
     program: clean(s.program, 300),
     module: clean(s.module, 300),
     time: clean(s.time, 80),
+    state: clean(s.state, 40),
     link: clean(s.link, 1000),
   };
   return session.program || session.module || session.link ? session : null;

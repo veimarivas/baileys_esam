@@ -90,13 +90,14 @@ describe('seguimiento de desarrollo de módulos', () => {
       title: 'Asistencia pendiente · 30/10/2026',
       sessionLabel: '30/10/2026',
       sessions: [
-        { horarioId: 101, program: 'Programa Demo', module: 'Álgebra', time: '19:00 - 21:00', link: 'http://cronogramas/modulo/10' },
-        { horarioId: 102, program: 'Programa Demo', module: 'Física', time: '21:00 - 23:00', link: 'http://cronogramas/modulo/11' },
+        { horarioId: 101, program: 'Programa Demo', module: 'Álgebra', time: '19:00 - 21:00', state: 'Confirmado', link: 'http://cronogramas/modulo/10' },
+        { horarioId: 102, program: 'Programa Demo', module: 'Física', time: '21:00 - 23:00', state: 'Desarrollado', link: 'http://cronogramas/modulo/11' },
       ],
     });
     const item = listModuleFollowups(user(RESP), { status: 'pending' }).find((x) => x.id === result.id)!;
     assert.equal(item.sessions.length, 2);
     assert.equal(item.sessions[0].module, 'Álgebra');
+    assert.equal(item.sessions[0].state, 'Confirmado');
     assert.equal(item.sessions[1].time, '21:00 - 23:00');
   });
 

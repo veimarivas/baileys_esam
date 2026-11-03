@@ -519,6 +519,7 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
                 program: s.program ?? null,
                 module: s.module ?? null,
                 time: s.time ?? null,
+                state: s.state ?? null,
                 link: s.link ?? null,
               }))
             : [],

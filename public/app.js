@@ -5974,8 +5974,12 @@
       modulesSection: root.querySelector('#np-modules-section'),
       modulesList: root.querySelector('#np-modules-list'),
       modulesCount: root.querySelector('#np-modules-count'),
+      moduleStats: root.querySelector('#np-module-stats'),
+      moduleSearch: root.querySelector('#np-modules-search'),
+      moduleFilters: root.querySelectorAll('[data-module-filter]'),
+      moduleSummary: root.querySelector('#np-module-summary'),
     };
-    var st = { status: STATUS.some(function (x) { return x.key === initialStatus; }) ? initialStatus : 'pending', tag: null, tags: [], colors: ['#045474'], color: '#045474', notes: [], stats: null, managing: false, view: 'list', area: 'all', advisor: 0, supervisor: false, supervisorArea: null, section: 'notes', modules: [], modulesPending: 0, modulesLoaded: false, modulesAdmin: false };
+    var st = { status: STATUS.some(function (x) { return x.key === initialStatus; }) ? initialStatus : 'pending', tag: null, tags: [], colors: ['#045474'], color: '#045474', notes: [], stats: null, managing: false, view: 'list', area: 'all', advisor: 0, supervisor: false, supervisorArea: null, section: 'notes', modules: [], modulesPending: 0, modulesLoaded: false, modulesAdmin: false, moduleFilter: 'pending', moduleSearch: '' };
     try { if (localStorage.getItem('notes-view') === 'board') st.view = 'board'; } catch (_) {}
     try { if (localStorage.getItem('notes-section') === 'modules') st.section = 'modules'; } catch (_) {}
     try { st.area = localStorage.getItem('notes-area') || 'all'; } catch (_) {}
@@ -6111,6 +6115,10 @@
       if (st.section === 'modules') loadModuleFollowups();
     }
 
+    function modulePendingItems() {
+      return (st.modules || []).filter(function (item) { return item.status !== 'done'; });
+    }
+
     function renderModuleCount() {
       if (!els.modulesCount) return;
       var n = Math.max(0, Number(st.modulesPending) || 0);
@@ -6118,18 +6126,80 @@
       els.modulesCount.hidden = n === 0;
     }
 
+    function renderModuleStats() {
+      if (!els.moduleStats) return;
+      var all = st.modules || [];
+      var pending = modulePendingItems();
+      var done = all.filter(function (item) { return item.status === 'done'; });
+      var sessions = pending.reduce(function (sum, item) { return sum + ((item.sessions || []).length); }, 0);
+      var people = {};
+      pending.forEach(function (item) {
+        var name = item.assigned_name || item.assigned_to;
+        if (name) people[String(name)] = true;
+      });
+      var cards = [
+        { label: 'Notas pendientes', num: pending.length, icon: 'ri-time-line', tone: 'np-warn' },
+        { label: 'Sesiones por atender', num: sessions, icon: 'ri-calendar-event-line', tone: 'np-danger' },
+        { label: 'Responsables', num: Object.keys(people).length, icon: 'ri-user-settings-line', tone: 'np-info' },
+        { label: 'Notas atendidas', num: done.length, icon: 'ri-check-double-line', tone: 'np-ok' },
+      ];
+      els.moduleStats.innerHTML = cards.map(function (c) {
+        return '<div class="np-stat np-module-stat ' + c.tone + (c.num ? '' : ' zero') + '">' +
+            '<span class="np-stat-ic ' + c.icon + '" aria-hidden="true"></span>' +
+            '<span class="np-stat-num">' + c.num + '</span>' +
+            '<span class="np-stat-label">' + escapeHtml(c.label) + '</span>' +
+          '</div>';
+      }).join('');
+    }
+
+    function renderModuleSummary() {
+      if (!els.moduleSummary) return;
+      var pending = modulePendingItems();
+      var done = (st.modules || []).filter(function (item) { return item.status === 'done'; });
+      var sessions = pending.reduce(function (sum, item) { return sum + ((item.sessions || []).length); }, 0);
+      var rows = [
+        ['Notas pendientes', pending.length],
+        ['Sesiones por atender', sessions],
+        ['Notas atendidas', done.length],
+      ];
+      els.moduleSummary.innerHTML = rows.map(function (r) {
+        return '<div class="np-module-summary-row"><span>' + escapeHtml(r[0]) + '</span><b>' + r[1] + '</b></div>';
+      }).join('');
+    }
+
+    function moduleMatches(item, q) {
+      if (!q) return true;
+      var hay = [item.title, item.program, item.module, item.assigned_name, item.details]
+        .concat((item.sessions || []).map(function (s) { return [s.program, s.module, s.state, s.time].join(' '); }))
+        .join(' ')
+        .toLowerCase();
+      return hay.indexOf(q) !== -1;
+    }
+
     function renderModules() {
       if (!els.modulesList) return;
       if (!st.modulesLoaded) return;
-      var items = st.modules || [];
+
+      var q = (st.moduleSearch || '').trim().toLowerCase();
+      var items = (st.modules || []).filter(function (item) {
+        if (st.moduleFilter === 'pending' && item.status === 'done') return false;
+        if (st.moduleFilter === 'done' && item.status !== 'done') return false;
+        return moduleMatches(item, q);
+      });
+
       if (!items.length) {
+        var title = q ? 'Sin coincidencias' : (st.moduleFilter === 'done' ? 'No hay notas atendidas' : 'No tenés seguimientos pendientes');
+        var sub = q
+          ? 'Probá con otro programa, módulo o responsable.'
+          : (st.moduleFilter === 'done'
+            ? 'Las notas que marques como atendidas aparecerán aquí.'
+            : 'Cuando haya sesiones pasadas en Confirmado o Desarrolladas sin asistencia, aparecerán acá agrupadas por día.');
         els.modulesList.innerHTML = '<div class="np-modules-empty">' +
-          '<span class="ri-check-double-line" aria-hidden="true"></span>' +
-          '<b>No tenés seguimientos pendientes</b>' +
-          '<span>Cuando haya sesiones pasadas marcadas como Desarrolladas sin asistencia, aparecerán aquí agrupadas por día.</span>' +
-          '</div>';
+          '<span class="' + (q ? 'ri-search-eye-line' : 'ri-check-double-line') + '" aria-hidden="true"></span>' +
+          '<b>' + escapeHtml(title) + '</b><span>' + escapeHtml(sub) + '</span></div>';
         return;
       }
+
       els.modulesList.innerHTML = items.map(function (item) {
         var done = item.status === 'done';
         var assigned = item.assigned_name || 'Responsable';
@@ -6158,22 +6228,26 @@
           }).join('') + '</div>';
         }
         var subtitle = sessions.length
-          ? sessions.length + ' sesión' + (sessions.length === 1 ? '' : 'es') + ' sin asistencia'
+          ? sessions.length + ' sesión' + (sessions.length === 1 ? '' : 'es') + (done ? (sessions.length === 1 ? ' atendida' : ' atendidas') : ' sin asistencia')
           : [item.program, item.module].filter(Boolean).join(' · ');
+        var cardTitle = item.title || 'Seguimiento de módulo';
+        if (done) cardTitle = cardTitle.replace(/^Sesiones pendientes/, 'Sesiones atendidas');
         return '<article class="np-module-card' + (done ? ' is-done' : '') + '">' +
             '<div class="np-module-top">' +
               '<span class="np-module-ico" aria-hidden="true"><span class="' + (done ? 'ri-check-double-line' : 'ri-error-warning-line') + '"></span></span>' +
               '<div class="np-module-title">' +
-                '<h6>' + escapeHtml(item.title || 'Seguimiento de módulo') + '</h6>' +
+                '<h6>' + escapeHtml(cardTitle) + '</h6>' +
                 '<p>' + escapeHtml(subtitle) + '</p>' +
               '</div>' +
               '<span class="np-module-status">' + (done ? 'Atendido' : 'Pendiente') + '</span>' +
             '</div>' +
             '<div class="np-module-meta">' +
-              (item.session_label ? '<span><span class="ri-calendar-line" aria-hidden="true"></span>Fecha: ' + escapeHtml(item.session_label) + '</span>' : '') +
-              '<span><span class="ri-user-settings-line" aria-hidden="true"></span>Responsable: ' + escapeHtml(assigned) + '</span>' +
+              (item.session_label ? '<span class="np-module-chip"><span class="ri-calendar-line" aria-hidden="true"></span>' + escapeHtml(item.session_label) + '</span>' : '') +
+              '<span class="np-module-chip"><span class="ri-user-settings-line" aria-hidden="true"></span>' + escapeHtml(assigned) + '</span>' +
+              '<span class="np-module-chip"><span class="ri-list-check-2" aria-hidden="true"></span>' + sessions.length + ' sesión' + (sessions.length === 1 ? '' : 'es') + '</span>' +
+              (done && item.done_at ? '<span class="np-module-chip"><span class="ri-check-double-line" aria-hidden="true"></span>Atendida ' + escapeHtml(timeAgo(item.done_at)) + '</span>' : '') +
             '</div>' +
-            (item.details ? '<p class="np-module-detail">' + escapeHtml(item.details) + '</p>' : '') +
+            (!sessions.length && item.details ? '<p class="np-module-detail">' + escapeHtml(item.details) + '</p>' : '') +
             sessionsHtml +
             (actions ? '<div class="np-module-actions">' + actions + '</div>' : '') +
           '</article>';
@@ -6181,12 +6255,14 @@
     }
 
     function loadModuleFollowups() {
-      return api('/notes/module-followups').then(function (d) {
+      return api('/notes/module-followups?status=all').then(function (d) {
         st.modules = (d && d.items) || [];
         st.modulesPending = Number(d && d.pending) || 0;
         st.modulesAdmin = !!(d && d.is_admin);
         st.modulesLoaded = true;
         renderModuleCount();
+        renderModuleStats();
+        renderModuleSummary();
         if (st.section === 'modules') renderModules();
       }).catch(function (e) {
         st.modulesLoaded = true;
@@ -6882,8 +6958,25 @@
         if (!confirm('¿Marcar este seguimiento como atendido?')) return;
         btn.disabled = true;
         jsonApi('/notes/module-followups/' + encodeURIComponent(btn.getAttribute('data-module-done')) + '/done', 'POST')
-          .then(function () { return loadModuleFollowups(); })
+          .then(function () { toast('Seguimiento marcado como atendido'); return loadModuleFollowups(); })
           .catch(function (err) { btn.disabled = false; toast(err.message, true); });
+      });
+    }
+    Array.prototype.forEach.call(els.moduleFilters || [], function (b) {
+      b.addEventListener('click', function () {
+        st.moduleFilter = b.getAttribute('data-module-filter') || 'pending';
+        Array.prototype.forEach.call(els.moduleFilters, function (x) {
+          var on = x === b;
+          x.classList.toggle('on', on);
+          x.setAttribute('aria-pressed', on ? 'true' : 'false');
+        });
+        renderModules();
+      });
+    });
+    if (els.moduleSearch) {
+      els.moduleSearch.addEventListener('input', function () {
+        st.moduleSearch = els.moduleSearch.value;
+        renderModules();
       });
     }
     els.search.addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(loadNotes, 250); });

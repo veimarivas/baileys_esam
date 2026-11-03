@@ -253,11 +253,51 @@ export function renderNotesPage(opts: { focusId?: number; status?: string } = {}
         <span class="np-modules-ico" aria-hidden="true"><span class="ri-book-open-line"></span></span>
         <div>
           <h5>Seguimiento de desarrollo de módulos</h5>
-          <p>Sesiones pasadas marcadas como Desarrolladas que todavía no tienen la asistencia registrada.</p>
+          <p>Sesiones pasadas en estado Confirmado o Desarrolladas sin asistencia. Cada nota agrupa las sesiones de un responsable en un día.</p>
         </div>
       </div>
-      <div id="np-modules-list" class="np-modules-list">
-        <div class="np-loading" role="status"><span class="np-loading-dot" aria-hidden="true"></span> Cargando seguimientos…</div>
+
+      <div class="np-stats np-module-stats" id="np-module-stats" aria-label="Resumen de seguimientos"></div>
+
+      <div class="np-layout">
+        <div class="np-main">
+          <div class="np-toolbar">
+            <label class="notes-search">
+              <span class="ri-search-line" aria-hidden="true"></span>
+              <input type="search" id="np-modules-search" placeholder="Buscar por programa, módulo o responsable…" autocomplete="off" aria-label="Buscar seguimientos" />
+            </label>
+            <div class="np-view" role="group" aria-label="Filtrar seguimientos">
+              <button type="button" class="np-view-btn on" data-module-filter="pending" aria-pressed="true"><span class="ri-time-line" aria-hidden="true"></span> Pendientes</button>
+              <button type="button" class="np-view-btn" data-module-filter="done" aria-pressed="false"><span class="ri-check-double-line" aria-hidden="true"></span> Atendidas</button>
+              <button type="button" class="np-view-btn" data-module-filter="all" aria-pressed="false"><span class="ri-stack-line" aria-hidden="true"></span> Todas</button>
+            </div>
+          </div>
+          <div class="np-legend" aria-label="Cómo se agrupan las notas">
+            <span class="np-legend-t">Cada tarjeta es una nota diaria por responsable.</span>
+            <span class="np-legend-sep" aria-hidden="true"></span>
+            <span class="np-legend-t">Abrí cada sesión para registrar la asistencia.</span>
+          </div>
+          <div id="np-modules-list" class="np-modules-list">
+            <div class="np-loading" role="status"><span class="np-loading-dot" aria-hidden="true"></span> Cargando seguimientos…</div>
+          </div>
+        </div>
+
+        <aside class="np-side" aria-label="Resumen de seguimientos">
+          <div class="np-side-card">
+            <div class="np-side-head">
+              <h6><span class="ri-pie-chart-2-line" aria-hidden="true"></span> Resumen</h6>
+            </div>
+            <div id="np-module-summary" class="np-module-summary"></div>
+          </div>
+          <div class="np-side-card np-tips">
+            <h6><span class="ri-lightbulb-line" aria-hidden="true"></span> Cómo funciona</h6>
+            <ul>
+              <li>Las notas agrupan las sesiones pendientes de un responsable en un mismo día.</li>
+              <li>Abrí cada sesión para registrar la asistencia en cronogramas.</li>
+              <li>Marcá la nota como atendida cuando termines: deja de figurar como pendiente.</li>
+            </ul>
+          </div>
+        </aside>
       </div>
     </section>
   </div>`;

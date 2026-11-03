@@ -159,6 +159,17 @@ export function renderNotesPage(opts: { focusId?: number; status?: string } = {}
   const focus = opts.focusId && opts.focusId > 0 ? String(opts.focusId) : '';
   const status = opts.status && opts.status !== 'all' ? opts.status : '';
   return `<div class="notes-page" id="notes-page" data-focus="${esc(focus)}" data-status="${esc(status)}">
+    <div class="np-sections" role="tablist" aria-label="Sección de notas">
+      <button type="button" class="np-section is-on" data-notes-section="notes" role="tab" aria-selected="true">
+        <span class="ri-sticky-note-line" aria-hidden="true"></span> Notas y tareas
+      </button>
+      <button type="button" class="np-section" data-notes-section="modules" role="tab" aria-selected="false">
+        <span class="ri-book-open-line" aria-hidden="true"></span> Seguimiento de módulos
+        <span class="np-section-count" id="np-modules-count" hidden></span>
+      </button>
+    </div>
+
+    <div id="np-notes-section">
     <div class="np-stats" id="np-stats" role="tablist" aria-label="Estado del seguimiento"></div>
 
     <div class="np-layout">
@@ -235,6 +246,20 @@ export function renderNotesPage(opts: { focusId?: number; status?: string } = {}
         </div>
       </aside>
     </div>
+    </div>{{-- /np-notes-section --}}
+
+    <section id="np-modules-section" class="np-modules" hidden aria-live="polite">
+      <div class="np-modules-head">
+        <span class="np-modules-ico" aria-hidden="true"><span class="ri-book-open-line"></span></span>
+        <div>
+          <h5>Seguimiento de desarrollo de módulos</h5>
+          <p>Sesiones pasadas marcadas como Desarrolladas que todavía no tienen la asistencia registrada.</p>
+        </div>
+      </div>
+      <div id="np-modules-list" class="np-modules-list">
+        <div class="np-loading" role="status"><span class="np-loading-dot" aria-hidden="true"></span> Cargando seguimientos…</div>
+      </div>
+    </section>
   </div>`;
 }
 

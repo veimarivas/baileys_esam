@@ -5177,6 +5177,137 @@ html[data-bs-theme="dark"] .batch-who { background: rgba(255, 255, 255, 0.05); }
 .np-board { scroll-snap-type: x proximity; }
 .np-board .pl-col { scroll-snap-align: start; }
 
+/* Notas: secciones (notas / seguimiento de módulos) */
+.np-sections {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid var(--ib-line);
+}
+.np-section {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.55rem 0.8rem 0.6rem;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--ib-ink-soft);
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.np-section:hover { color: var(--ib-brand); }
+.np-section.is-on { color: var(--ib-brand); border-bottom-color: var(--ib-brand); }
+.np-section-count {
+  min-width: 1.35rem;
+  padding: 0 0.4rem;
+  border-radius: 999px;
+  background: #f59e0b;
+  color: #fff;
+  font-size: 0.65rem;
+  line-height: 1.45;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+#np-notes-section[hidden], #np-modules-section[hidden] { display: none; }
+
+/* Seguimiento de desarrollo de módulos */
+.np-modules-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  margin-bottom: 0.9rem;
+}
+.np-modules-ico {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 11px;
+  background: #fff7e6;
+  color: #b45309;
+  font-size: 1.15rem;
+}
+.np-modules-head h5 { margin: 0; font-size: 0.98rem; font-weight: 800; color: var(--ib-ink); }
+.np-modules-head p { margin: 0.12rem 0 0; font-size: 0.76rem; color: var(--ib-ink-mute); }
+.np-modules-list { display: grid; gap: 0.7rem; }
+.np-module-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid var(--ib-line);
+  border-left: 4px solid #f59e0b;
+  border-radius: 12px;
+  background: var(--ib-surface);
+  box-shadow: 0 1px 2px rgba(14, 26, 43, 0.04);
+}
+.np-module-card.is-done { border-left-color: #0e9f6e; opacity: 0.8; }
+.np-module-top { display: flex; align-items: flex-start; gap: 0.6rem; min-width: 0; }
+.np-module-ico {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  background: #fff7e6;
+  color: #b45309;
+  font-size: 1rem;
+}
+.np-module-card.is-done .np-module-ico { background: #e8f8f0; color: #0e9f6e; }
+.np-module-title { min-width: 0; flex: 1; }
+.np-module-title h6 { margin: 0; font-size: 0.86rem; font-weight: 700; color: var(--ib-ink); overflow-wrap: anywhere; }
+.np-module-title p { margin: 0.1rem 0 0; font-size: 0.72rem; color: var(--ib-ink-mute); }
+.np-module-status {
+  flex-shrink: 0;
+  padding: 0.14rem 0.48rem;
+  border-radius: 999px;
+  background: #fff4d6;
+  color: #8a6100;
+  font-size: 0.61rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.np-module-card.is-done .np-module-status { background: #d4f6ee; color: #0a7059; }
+.np-module-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.8rem;
+  font-size: 0.7rem;
+  color: var(--ib-ink-mute);
+}
+.np-module-meta span { display: inline-flex; align-items: center; gap: 0.25rem; }
+.np-module-detail { margin: 0.05rem 0 0; font-size: 0.78rem; line-height: 1.45; color: var(--ib-ink-soft); white-space: pre-wrap; overflow-wrap: anywhere; }
+.np-module-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.15rem; }
+.np-modules-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 2.2rem 1rem;
+  border: 1px dashed var(--ib-line);
+  border-radius: 12px;
+  color: var(--ib-ink-mute);
+  text-align: center;
+}
+.np-modules-empty [class^="ri-"] { font-size: 2rem; color: var(--ib-line-strong); }
+.np-modules-empty b { color: var(--ib-ink-soft); font-size: 0.86rem; }
+
+@media (max-width: 575.98px) {
+  .np-section { font-size: 0.72rem; padding-left: 0.55rem; padding-right: 0.55rem; }
+  .np-module-top { flex-wrap: wrap; }
+  .np-module-status { margin-left: auto; }
+}
+
 /* -- Mensajes fijados (aviso interno del equipo) -- */
 #chat-pinned { flex-shrink: 0; }
 .pinned-bar { background: var(--ib-surface); border-bottom: 1px solid var(--ib-line); }

@@ -54,6 +54,7 @@ import {
   type NotificationKind,
 } from '../core/notifications.js';
 import * as noteTemplates from '../core/note-templates.js';
+import * as moduleFollowups from '../core/module-followups.js';
 import * as quickReplies from '../core/quick-replies.js';
 import { getSticker } from '../core/stickers.js';
 import { storeNoteAudio } from '../core/media.js';
@@ -1132,6 +1133,36 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
           .map((n) => withPermissions(user, n)),
         stats: noteStats({ sessionIds: listScope, authorId, assignedTo, viewerId: user.id, ownerId, ownerArea }),
       });
+    }),
+  );
+
+  // ── Seguimiento de desarrollo de módulos (sección exclusiva de /notes) ──────
+  app.get(
+    '/notes/module-followups',
+    ...auth,
+    ah((req, res) => {
+      const user = req.user!;
+      const status = typeof req.query.status === 'string' ? req.query.status : 'pending';
+      res.json({
+        items: moduleFollowups.listModuleFollowups(user, { status }),
+        pending: moduleFollowups.pendingModuleFollowups(user),
+        is_admin: esamEsAdmin(user),
+      });
+    }),
+  );
+
+  app.post(
+    '/notes/module-followups/:id/done',
+    ...auth,
+    ah((req, res) => {
+      try {
+        const item = moduleFollowups.markModuleFollowupDone(Number(req.params.id), req.user!);
+        panelBus.publish('module_followup', { id: item.id, assignedTo: item.assigned_to, action: 'done' });
+        res.json(item);
+      } catch (err) {
+        const status = err instanceof moduleFollowups.ModuleFollowupError ? err.status : 422;
+        res.status(status).json({ error: (err as Error).message });
+      }
     }),
   );
 

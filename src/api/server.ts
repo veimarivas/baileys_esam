@@ -20,6 +20,7 @@ import { linkedToOtherNumber, resolveUserLine } from '../core/line-resolver.js';
 import { lineVerdict, sendBlockedReason } from '../core/line-verdict.js';
 import { batchEngagement, summarizeEngagement } from '../core/batch-engagement.js';
 import { ProspectError, removeProspect, upsertProspect } from '../core/prospects.js';
+import { ModuleFollowupError, upsertModuleFollowup } from '../core/module-followups.js';
 import { panelBus } from '../panel/events.js';
 import type { SessionRow } from '../types.js';
 
@@ -479,6 +480,55 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
         audit('prospect.deleted', { ref: req.params.ref, note_id: noteId });
       }
       res.json({ ok: true, note_id: noteId });
+    }),
+  );
+
+  // ── Seguimiento de desarrollo de módulos ───────────────────────────────────
+  // Cronogramas detecta sesiones pasadas marcadas como «Desarrollado» sin
+  // asistencia y las envía al responsable. Aparecen en /notes › Seguimiento de
+  // módulos. Idempotente por `ref`.
+
+  app.put(
+    '/api/v1/module-followups/:ref',
+    ah(async (req, res) => {
+      const body = req.body ?? {};
+      const account = String(body.account ?? '').trim();
+      if (!account) {
+        res.status(422).json({ message: 'Falta la cuenta (account) del responsable.' });
+        return;
+      }
+      try {
+        const result = upsertModuleFollowup({
+          ref: String(req.params.ref),
+          account,
+          responsibleName: body.responsible_name ?? null,
+          title: body.title ?? null,
+          program: body.program ?? null,
+          programId: body.program_id ? Number(body.program_id) : null,
+          module: body.module ?? null,
+          moduleId: body.module_id ? Number(body.module_id) : null,
+          horarioId: body.horario_id ? Number(body.horario_id) : null,
+          sessionAt: body.session_at ?? null,
+          sessionLabel: body.session_label ?? null,
+          details: body.details ?? null,
+          link: body.link ?? null,
+          status: body.status ?? null,
+        });
+        panelBus.publish('module_followup', {
+          id: result.id,
+          assignedTo: result.assignedTo,
+          action: result.created ? 'created' : 'updated',
+        });
+        audit(result.created ? 'module_followup.created' : 'module_followup.updated', {
+          ref: req.params.ref,
+          followup_id: result.id,
+          assigned_to: result.assignedTo,
+        });
+        res.status(result.created ? 201 : 200).json({ followup_id: result.id, created: result.created });
+      } catch (err) {
+        const status = err instanceof ModuleFollowupError ? err.status : 500;
+        res.status(status).json({ message: (err as Error).message });
+      }
     }),
   );
 

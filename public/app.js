@@ -5969,9 +5969,15 @@
       tagName: root.querySelector('#tag-name'),
       tagColors: root.querySelector('#tag-colors'),
       tagSave: root.querySelector('#tag-save'),
+      sections: root.querySelectorAll('[data-notes-section]'),
+      notesSection: root.querySelector('#np-notes-section'),
+      modulesSection: root.querySelector('#np-modules-section'),
+      modulesList: root.querySelector('#np-modules-list'),
+      modulesCount: root.querySelector('#np-modules-count'),
     };
-    var st = { status: STATUS.some(function (x) { return x.key === initialStatus; }) ? initialStatus : 'pending', tag: null, tags: [], colors: ['#045474'], color: '#045474', notes: [], stats: null, managing: false, view: 'list', area: 'all', advisor: 0, supervisor: false, supervisorArea: null };
+    var st = { status: STATUS.some(function (x) { return x.key === initialStatus; }) ? initialStatus : 'pending', tag: null, tags: [], colors: ['#045474'], color: '#045474', notes: [], stats: null, managing: false, view: 'list', area: 'all', advisor: 0, supervisor: false, supervisorArea: null, section: 'notes', modules: [], modulesPending: 0, modulesLoaded: false, modulesAdmin: false };
     try { if (localStorage.getItem('notes-view') === 'board') st.view = 'board'; } catch (_) {}
+    try { if (localStorage.getItem('notes-section') === 'modules') st.section = 'modules'; } catch (_) {}
     try { st.area = localStorage.getItem('notes-area') || 'all'; } catch (_) {}
     st.group = 'estado';
     try { st.group = localStorage.getItem('notes-group') || 'estado'; } catch (_) {}
@@ -6085,6 +6091,94 @@
     function areaBadge(n) {
       var i = areaInfo(areaOf(n));
       return '<span class="np-area-badge" style="--area:' + i.color + '" title="Área"><span class="' + i.icon + '" aria-hidden="true"></span>' + escapeHtml(i.label) + '</span>';
+    }
+
+    /* ── Seguimiento de desarrollo de módulos ──────────────────────────────── */
+    function applyNotesSection(section) {
+      st.section = section === 'modules' ? 'modules' : 'notes';
+      Array.prototype.forEach.call(els.sections || [], function (b) {
+        var on = b.getAttribute('data-notes-section') === st.section;
+        b.classList.toggle('is-on', on);
+        b.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      if (els.notesSection) els.notesSection.hidden = st.section !== 'notes';
+      if (els.modulesSection) els.modulesSection.hidden = st.section !== 'modules';
+    }
+
+    function setNotesSection(section) {
+      applyNotesSection(section);
+      try { localStorage.setItem('notes-section', st.section); } catch (_) {}
+      if (st.section === 'modules') loadModuleFollowups();
+    }
+
+    function renderModuleCount() {
+      if (!els.modulesCount) return;
+      var n = Math.max(0, Number(st.modulesPending) || 0);
+      els.modulesCount.textContent = n > 99 ? '99+' : String(n);
+      els.modulesCount.hidden = n === 0;
+    }
+
+    function renderModules() {
+      if (!els.modulesList) return;
+      if (!st.modulesLoaded) return;
+      var items = st.modules || [];
+      if (!items.length) {
+        els.modulesList.innerHTML = '<div class="np-modules-empty">' +
+          '<span class="ri-check-double-line" aria-hidden="true"></span>' +
+          '<b>No tenés seguimientos pendientes</b>' +
+          '<span>Cuando una sesión pasada quede marcada como Desarrollada sin asistencia, aparecerá aquí.</span>' +
+          '</div>';
+        return;
+      }
+      els.modulesList.innerHTML = items.map(function (item) {
+        var done = item.status === 'done';
+        var assigned = item.assigned_name || 'Responsable';
+        var actions = '';
+        if (item.link) {
+          actions += '<a class="btn btn-sm btn-soft-primary" href="' + escapeHtml(item.link) + '" target="_blank" rel="noopener">' +
+            '<span class="ri-external-link-line" aria-hidden="true"></span> Abrir en cronogramas</a>';
+        }
+        if (!done) {
+          actions += '<button type="button" class="btn btn-sm btn-soft-success" data-module-done="' + item.id + '">' +
+            '<span class="ri-check-line" aria-hidden="true"></span> Marcar como atendido</button>';
+        }
+        return '<article class="np-module-card' + (done ? ' is-done' : '') + '">' +
+            '<div class="np-module-top">' +
+              '<span class="np-module-ico" aria-hidden="true"><span class="' + (done ? 'ri-check-double-line' : 'ri-error-warning-line') + '"></span></span>' +
+              '<div class="np-module-title">' +
+                '<h6>' + escapeHtml(item.title || 'Seguimiento de módulo') + '</h6>' +
+                '<p>' + escapeHtml([item.program, item.module].filter(Boolean).join(' · ')) + '</p>' +
+              '</div>' +
+              '<span class="np-module-status">' + (done ? 'Atendido' : 'Pendiente') + '</span>' +
+            '</div>' +
+            '<div class="np-module-meta">' +
+              (item.session_label ? '<span><span class="ri-calendar-line" aria-hidden="true"></span>Sesión: ' + escapeHtml(item.session_label) + '</span>' : '') +
+              '<span><span class="ri-user-settings-line" aria-hidden="true"></span>Responsable: ' + escapeHtml(assigned) + '</span>' +
+            '</div>' +
+            (item.details ? '<p class="np-module-detail">' + escapeHtml(item.details) + '</p>' : '') +
+            (actions ? '<div class="np-module-actions">' + actions + '</div>' : '') +
+          '</article>';
+      }).join('');
+    }
+
+    function loadModuleFollowups() {
+      return api('/notes/module-followups').then(function (d) {
+        st.modules = (d && d.items) || [];
+        st.modulesPending = Number(d && d.pending) || 0;
+        st.modulesAdmin = !!(d && d.is_admin);
+        st.modulesLoaded = true;
+        renderModuleCount();
+        if (st.section === 'modules') renderModules();
+      }).catch(function (e) {
+        st.modulesLoaded = true;
+        if (st.section === 'modules' && els.modulesList) {
+          els.modulesList.innerHTML = '<div class="np-modules-empty">' +
+            '<span class="ri-error-warning-line" aria-hidden="true"></span>' +
+            '<b>No se pudieron cargar los seguimientos</b>' +
+            '<span>' + escapeHtml(e && e.message || '') + '</span>' +
+            '</div>';
+        }
+      });
     }
 
     function loadTags() {
@@ -6755,6 +6849,23 @@
           refresh();
         }, 600);
       });
+      liveSource().addEventListener('module_followup', function () {
+        loadModuleFollowups();
+      });
+    }
+    Array.prototype.forEach.call(els.sections || [], function (b) {
+      b.addEventListener('click', function () { setNotesSection(b.getAttribute('data-notes-section')); });
+    });
+    if (els.modulesList) {
+      els.modulesList.addEventListener('click', function (ev) {
+        var btn = ev.target.closest ? ev.target.closest('[data-module-done]') : null;
+        if (!btn) return;
+        if (!confirm('¿Marcar este seguimiento como atendido?')) return;
+        btn.disabled = true;
+        jsonApi('/notes/module-followups/' + encodeURIComponent(btn.getAttribute('data-module-done')) + '/done', 'POST')
+          .then(function () { return loadModuleFollowups(); })
+          .catch(function (err) { btn.disabled = false; toast(err.message, true); });
+      });
     }
     els.search.addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(loadNotes, 250); });
     els.order.addEventListener('change', loadNotes);
@@ -6785,8 +6896,10 @@
     });
 
     // Desde el compositor de la ficha se llega con #tags para crear etiquetas.
+    applyNotesSection(st.section);
     loadTags().then(function () { if (location.hash === '#tags') setManaging(true); });
     loadNotes();
+    loadModuleFollowups();
   }
 
   /* ── Envíos por usuario: búsqueda, orden y detalle (tabla ya renderizada) ── */

@@ -355,6 +355,31 @@ CREATE TABLE IF NOT EXISTS contact_notes (
 
 CREATE INDEX IF NOT EXISTS idx_contact_notes_contact ON contact_notes(contact_id);
 
+-- Seguimientos de desarrollo de módulos enviados desde cronogramas.
+-- No dependen de un contacto: son tareas para el responsable de la sesión.
+CREATE TABLE IF NOT EXISTS module_followups (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  ref           TEXT NOT NULL UNIQUE,
+  assigned_to   INTEGER NOT NULL,
+  created_by    INTEGER,
+  title         TEXT NOT NULL,
+  program       TEXT,
+  module        TEXT,
+  session_at    TEXT,
+  session_label TEXT,
+  details       TEXT,
+  link          TEXT,
+  status        TEXT NOT NULL DEFAULT 'pending',
+  seen_at       TEXT,
+  done_at       TEXT,
+  done_by       INTEGER,
+  meta          TEXT,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_module_followups_assigned ON module_followups(assigned_to, status);
+
 -- Etiquetas de notas (globales, compartidas por el equipo).
 CREATE TABLE IF NOT EXISTS note_tags (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,

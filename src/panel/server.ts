@@ -246,7 +246,7 @@ export function renderNotesPage(opts: { focusId?: number; status?: string } = {}
         </div>
       </aside>
     </div>
-    </div>{{-- /np-notes-section --}}
+    </div>
 
     <section id="np-modules-section" class="np-modules" hidden aria-live="polite">
       <div class="np-modules-head">

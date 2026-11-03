@@ -685,6 +685,69 @@ export function listMessages(sessionId: string, chatId: string, query: MessageQu
   return { messages: rows.map((r) => mapMessage(r, reactions.get(r.id) ?? [])), hasMore };
 }
 
+/** Máximo de mensajes sin leer que se muestran en la vista previa al pasar el mouse. */
+export const MAX_PREVIEW_MESSAGES = 12;
+
+export interface ConversationPreview {
+  /** Mensajes sin leer de la conversación (el contador de WhatsApp). */
+  unread_count: number;
+  /** 'unread' cuando hay mensajes sin leer; 'last' cuando ya está al día. */
+  mode: 'unread' | 'last';
+  messages: MessageDTO[];
+  /** Hay más mensajes sin leer de los devueltos en `messages`. */
+  has_more: boolean;
+}
+
+/**
+ * Vista previa de una conversación para el hover de la lista: si tiene mensajes
+ * sin leer devuelve los últimos de la persona (hasta `MAX_PREVIEW_MESSAGES`);
+ * si ya está leída, el último mensaje del chat.
+ */
+export function conversationPreview(sessionId: string, chatId: string, limit = MAX_PREVIEW_MESSAGES): ConversationPreview {
+  const conv = get<{ unread_count: number }>(
+    'SELECT unread_count FROM conversations WHERE session_id = ? AND chat_id = ?',
+    sessionId,
+    chatId,
+  );
+  const unread = Math.max(0, Number(conv?.unread_count ?? 0));
+  const max = Math.min(Math.max(limit, 1), 50);
+
+  if (unread === 0) {
+    const rows = all<MessageJoinRow>(
+      `${MSG_SELECT} WHERE m.session_id = ? AND m.chat_id = ?
+       ORDER BY m.occurred_at DESC, m.id DESC LIMIT 1`,
+      sessionId,
+      chatId,
+    );
+    fillGroupSenderNames(rows);
+    const reactions = messageReactions(rows.map((r) => r.id), sessionId);
+    return {
+      unread_count: 0,
+      mode: 'last',
+      messages: rows.map((r) => mapMessage(r, reactions.get(r.id) ?? [])),
+      has_more: false,
+    };
+  }
+
+  const take = Math.min(unread, max);
+  const rows = all<MessageJoinRow>(
+    `${MSG_SELECT} WHERE m.session_id = ? AND m.chat_id = ? AND m.direction = 'in'
+     ORDER BY m.occurred_at DESC, m.id DESC LIMIT ?`,
+    sessionId,
+    chatId,
+    take,
+  ).reverse();
+  const hasMore = unread > take;
+  fillGroupSenderNames(rows);
+  const reactions = messageReactions(rows.map((r) => r.id), sessionId);
+  return {
+    unread_count: unread,
+    mode: 'unread',
+    messages: rows.map((r) => mapMessage(r, reactions.get(r.id) ?? [])),
+    has_more: hasMore,
+  };
+}
+
 /**
  * Busca texto en el historial de un chat (cuerpo y transcripciones).
  *

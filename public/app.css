@@ -5862,6 +5862,96 @@ html[data-bs-theme="dark"] .ps-view-btn { background: #1d2125; }
 }
 html[data-bs-theme="dark"] .convo.unread { background: color-mix(in srgb, var(--ib-brand) 9%, transparent); }
 
+/* ── Vista previa de una conversación (hover) ── */
+.convo-preview {
+  position: fixed;
+  z-index: 1400;
+  width: min(360px, calc(100vw - 24px));
+  max-height: min(380px, calc(100vh - 24px));
+  overflow: auto;
+  padding: 0.65rem 0.72rem 0.55rem;
+  border: 1px solid var(--ib-line);
+  border-radius: 12px;
+  background: var(--ib-surface);
+  color: var(--ib-ink);
+  box-shadow: 0 18px 42px -18px rgba(6, 32, 63, 0.35), 0 4px 12px -6px rgba(6, 32, 63, 0.14);
+  font-size: 0.78rem;
+  line-height: 1.4;
+  animation: convo-preview-in 0.14s var(--esam-ease-out);
+}
+.convo-preview[hidden] { display: none; }
+@keyframes convo-preview-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
+}
+.convo-preview .cp-head {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0.4rem;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+  color: var(--ib-ink-mute);
+}
+.convo-preview .cp-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #1f9d55;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #1f9d55 16%, transparent);
+}
+.convo-preview .cp-msg {
+  padding: 0.38rem 0;
+}
+.convo-preview .cp-msg + .cp-msg {
+  border-top: 1px solid color-mix(in srgb, var(--ib-line) 70%, transparent);
+}
+.convo-preview .cp-msg-top {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  min-width: 0;
+}
+.convo-preview .cp-who {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.72rem;
+  font-weight: 650;
+  color: var(--ib-brand);
+}
+.convo-preview .cp-msg.is-out .cp-who { color: #0e9f6e; }
+.convo-preview .cp-when {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: 0.64rem;
+  color: var(--ib-ink-mute);
+  font-variant-numeric: tabular-nums;
+}
+.convo-preview .cp-text {
+  margin-top: 0.12rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--ib-ink-soft);
+}
+.convo-preview .cp-more {
+  margin-top: 0.35rem;
+  padding-top: 0.35rem;
+  border-top: 1px dashed var(--ib-line);
+  font-size: 0.68rem;
+  color: var(--ib-ink-mute);
+}
+.convo-preview .cp-loading,
+.convo-preview .cp-empty {
+  padding: 0.4rem 0;
+  font-size: 0.74rem;
+  font-style: italic;
+  color: var(--ib-ink-mute);
+}
+
 /* ── Cabecera del hilo ── */
 .chat-header { padding: 0.6rem 0.9rem; gap: 0.65rem; }
 .chat-header .chat-id { display: flex; flex-direction: column; gap: 0.06rem; }

@@ -2685,9 +2685,160 @@
       else host.appendChild(summary);
     })();
 
+    // ── Vista previa de la conversación al pasar el mouse ───────────────────
+    // Muestra los mensajes sin leer o, si ya está leída, el último mensaje. Es
+    // solo lectura: no abre el chat ni marca los mensajes como leídos.
+    var previewEl = document.createElement('div');
+    previewEl.className = 'convo-preview';
+    previewEl.hidden = true;
+    previewEl.setAttribute('role', 'tooltip');
+    document.body.appendChild(previewEl);
+
+    var previewShowTimer = null;
+    var previewHideTimer = null;
+    var previewToken = 0;
+    var previewKeyShown = '';
+    var previewCache = Object.create(null);
+
+    function previewKey(c) {
+      return String(c && c.session_id) + '|' + String(c && c.chat_id);
+    }
+
+    function hideConvoPreview() {
+      previewToken++;
+      previewEl.hidden = true;
+      previewEl.innerHTML = '';
+      previewKeyShown = '';
+      clearTimeout(previewShowTimer);
+      clearTimeout(previewHideTimer);
+    }
+
+    function cancelHideConvoPreview() {
+      clearTimeout(previewHideTimer);
+    }
+
+    function scheduleHideConvoPreview() {
+      clearTimeout(previewShowTimer);
+      clearTimeout(previewHideTimer);
+      previewHideTimer = setTimeout(hideConvoPreview, 180);
+    }
+
+    // Ubica el panel al costado de la fila, sin salirse de la ventana.
+    function positionConvoPreview(anchor) {
+      if (!anchor || !anchor.isConnected) return;
+      var r = anchor.getBoundingClientRect();
+      var margin = 12;
+      var gap = 10;
+      var w = previewEl.offsetWidth || 340;
+      var h = previewEl.offsetHeight || 120;
+      var left = r.right + gap;
+      if (left + w > window.innerWidth - margin) left = r.left - w - gap;
+      if (left < margin) left = Math.max(margin, Math.min(window.innerWidth - w - margin, r.left));
+      var top = r.top;
+      if (top + h > window.innerHeight - margin) top = window.innerHeight - h - margin;
+      if (top < margin) top = margin;
+      previewEl.style.left = Math.round(left) + 'px';
+      previewEl.style.top = Math.round(top) + 'px';
+    }
+
+    function previewWho(c, m) {
+      if (m.direction !== 'in') return 'Equipo';
+      return m.sender_name || convoName(c) || 'Contacto';
+    }
+
+    function renderConvoPreview(c, data) {
+      var unread = Math.max(0, Number(data.unread_count) || 0);
+      var msgs = data.messages || [];
+      var head = data.mode === 'unread'
+        ? '<span class="cp-dot" aria-hidden="true"></span>' +
+          (unread === 1 ? '1 mensaje sin leer' : unread + ' mensajes sin leer')
+        : '<span class="ri-time-line" aria-hidden="true"></span>Último mensaje';
+      var items = msgs.map(function (m) {
+        var out = m.direction === 'out';
+        var text = pinnedPreview(m);
+        if (!text) text = out ? 'Mensaje enviado' : 'Mensaje recibido';
+        return '<div class="cp-msg' + (out ? ' is-out' : '') + '">' +
+            '<div class="cp-msg-top">' +
+              '<span class="cp-who">' + escapeHtml(previewWho(c, m)) + '</span>' +
+              '<span class="cp-when" title="' + escapeHtml(fmtDateTime(m.occurred_at)) + '">' +
+                escapeHtml(timeAgo(m.occurred_at)) +
+              '</span>' +
+            '</div>' +
+            '<div class="cp-text">' + escapeHtml(text) + '</div>' +
+          '</div>';
+      }).join('');
+      var footer = '';
+      if (data.mode === 'unread' && data.has_more) {
+        var rest = Math.max(0, unread - msgs.length);
+        footer = '<div class="cp-more">' +
+          (rest ? 'y ' + rest + ' mensaje' + (rest === 1 ? '' : 's') + ' más sin leer' : 'Hay más mensajes sin leer') +
+          '</div>';
+      }
+      previewEl.innerHTML = '<div class="cp-head">' + head + '</div>' +
+        (items || '<div class="cp-empty">No se pudieron cargar los mensajes.</div>') +
+        footer;
+    }
+
+    function openConvoPreview(c, anchor) {
+      var key = previewKey(c);
+      previewKeyShown = key;
+      var hit = previewCache[key];
+      if (hit && Date.now() - hit.at < 20000) {
+        renderConvoPreview(c, hit.data);
+        previewEl.hidden = false;
+        positionConvoPreview(anchor);
+        return;
+      }
+      var loadingHead = c.unread_count > 0
+        ? '<span class="cp-dot" aria-hidden="true"></span>' +
+          (c.unread_count === 1 ? '1 mensaje sin leer' : c.unread_count + ' mensajes sin leer')
+        : '<span class="ri-time-line" aria-hidden="true"></span>Último mensaje';
+      previewEl.innerHTML = '<div class="cp-head">' + loadingHead + '</div>' +
+        '<div class="cp-loading">Cargando…</div>';
+      previewEl.hidden = false;
+      positionConvoPreview(anchor);
+      var token = ++previewToken;
+      api('/inbox/' + encodeURIComponent(c.session_id) + '/' + encodeURIComponent(c.chat_id) + '/preview')
+        .then(function (data) {
+          previewCache[key] = { at: Date.now(), data: data };
+          if (token !== previewToken || previewKeyShown !== key) return;
+          renderConvoPreview(c, data);
+          positionConvoPreview(anchor);
+        })
+        .catch(function () {
+          if (token !== previewToken || previewKeyShown !== key) return;
+          previewEl.innerHTML = '<div class="cp-head"><span class="ri-error-warning-line" aria-hidden="true"></span>Vista previa</div>' +
+            '<div class="cp-empty">No se pudieron cargar los mensajes.</div>';
+          positionConvoPreview(anchor);
+        });
+    }
+
+    function attachConvoPreview(el, c) {
+      if (!c || !c.session_id || !c.chat_id) return;
+      el.addEventListener('mouseenter', function () {
+        clearTimeout(previewShowTimer);
+        clearTimeout(previewHideTimer);
+        // Al pasar de una fila a otra no se deja la vista previa anterior.
+        if (previewKeyShown && previewKeyShown !== previewKey(c)) hideConvoPreview();
+        previewShowTimer = setTimeout(function () {
+          if (el.isConnected) openConvoPreview(c, el);
+        }, 220);
+      });
+      el.addEventListener('mouseleave', scheduleHideConvoPreview);
+    }
+
+    previewEl.addEventListener('mouseenter', cancelHideConvoPreview);
+    previewEl.addEventListener('mouseleave', scheduleHideConvoPreview);
+    document.addEventListener('scroll', function () { if (!previewEl.hidden) hideConvoPreview(); }, true);
+    window.addEventListener('resize', hideConvoPreview);
+    document.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Escape') hideConvoPreview();
+    });
+
     // Los paneles del compositor se cierran al tocar fuera o con Escape.
     document.addEventListener('click', function (ev) {
       var t = ev.target;
+      if (!previewEl.contains(t)) hideConvoPreview();
       if (t && t.closest && t.closest('#emoji-list, #quick-list, #btn-emoji, #btn-quick')) return;
       closeComposerPopovers();
     });
@@ -2733,6 +2884,7 @@
       if (!sessionId || !chatId) return Promise.resolve();
       return jsonApi('/inbox/' + encodeURIComponent(sessionId) + '/' + encodeURIComponent(chatId) + '/read', 'POST')
         .then(function () {
+          delete previewCache[sessionId + '|' + chatId];
           state.conversations.forEach(function (c) {
             if (c.session_id === sessionId && c.chat_id === chatId) c.unread_count = 0;
           });
@@ -3021,6 +3173,7 @@
           '<div class="convo-side">' +
             (c && c.unread_count > 0 ? '<span class="unread-pill">' + (c.unread_count > 99 ? '99+' : c.unread_count) + '</span>' : '') +
           '</div>';
+        if (c) attachConvoPreview(el, c);
         el.addEventListener('click', function () { openTeamMember(m); });
         els.list.appendChild(el);
       });
@@ -3109,6 +3262,7 @@
 
     function renderList() {
       if (!els.list) return;
+      if (!previewEl.hidden) hideConvoPreview();
       renderStateBar();
       renderListSummary();
       if (state.tab === 'team') { els.list.innerHTML = ''; renderTeamList(); return; }
@@ -3206,6 +3360,7 @@
           convoNotesHtml(c) +
           (c.unread_count > 0 ? '<span class="unread-pill">' + (c.unread_count > 99 ? '99+' : c.unread_count) + '</span>' : '') +
         '</div>';
+      attachConvoPreview(el, c);
       el.addEventListener('click', function () { openChat(c.session_id, c.chat_id, true); });
       return el;
     }

@@ -494,6 +494,22 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
     }),
   );
 
+  // Vista previa para la lista: los mensajes sin leer o, si ya está al día,
+  // el último mensaje del chat. Se muestra al pasar el mouse por la fila.
+  app.get(
+    '/inbox/:session/:chat/preview',
+    ...auth,
+    ah((req, res) => {
+      const resolved = resolveAuthorized(req, res, String(req.params.session), String(req.params.chat));
+      if (!resolved) return;
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({
+        chatId: resolved.chatId,
+        ...conversations.conversationPreview(resolved.session.id, resolved.chatId),
+      });
+    }),
+  );
+
   // Buscar dentro de la conversación: devuelve las coincidencias del historial
   // completo (no solo lo cargado) para saltar a ellas.
   app.get(

@@ -4048,25 +4048,37 @@
           '<div id="chat-meta" class="chat-meta">' + chatMetaHtml(c) + '</div>' +
         '</div>' +
         '<div class="chat-actions">' +
-          (isGroup || !c.id ? '' : chatStateHtml(c)) +
           '<button type="button" class="btn btn-icon btn-soft-secondary" id="toggle-search" title="Buscar en la conversación (Ctrl+F)" aria-label="Buscar en la conversación"><span class="ri-search-line"></span></button>' +
           '<button type="button" class="btn btn-soft-primary btn-sm" id="sync-history" title="Sincronizar historial"><span class="ri-refresh-line"></span><span class="d-none d-md-inline ms-1">Sincronizar</span></button>' +
           '<button type="button" class="btn btn-icon btn-soft-secondary" id="toggle-contact" title="Ficha del contacto" aria-label="Abrir la ficha del contacto"><span class="ri-user-line"></span></button>' +
-        '</div></div>';
+        '</div></div>' +
+        (isGroup || !c.id ? '' : chatStateHtml(c));
     }
 
-    // Estado de la atención y responsable del chat abierto.
+    // Estado de la atención y responsable del chat abierto. Van en una barra
+    // aparte: así la identidad y las acciones respiran en cualquier pantalla.
     function chatStateHtml(c) {
       var st = c.status || 'open';
+      var stClass = st === 'pending' ? 'is-pending' : st === 'closed' ? 'is-closed' : 'is-open';
       var opt = function (v, l) { return '<option value="' + v + '"' + (st === v ? ' selected' : '') + '>' + l + '</option>'; };
       var agent = c.assigned_agent;
-      return '<div class="chat-state-ctl">' +
-        '<select id="chat-status" class="form-select form-select-sm" aria-label="Estado de la atención" title="Estado de la atención">' +
-          opt('open', 'Por atender') + opt('pending', 'En atención') + opt('closed', 'Resuelto') + '</select>' +
-        '<select id="chat-assign" class="form-select form-select-sm" aria-label="Responsable" title="Responsable">' +
-          '<option value="">Sin responsable</option>' +
-          (agent ? '<option value="' + agent.id + '" selected>' + escapeHtml(agent.name || 'Asignado') + '</option>' : '') +
-        '</select></div>';
+      return '<div class="chat-attn" aria-label="Atención de la conversación">' +
+        '<span class="chat-attn-label"><span class="ri-customer-service-2-line" aria-hidden="true"></span> Atención</span>' +
+        '<div class="chat-attn-ctls">' +
+          '<label class="chat-ctl is-status ' + stClass + '" title="Estado de la atención">' +
+            '<span class="ri-flag-line" aria-hidden="true"></span>' +
+            '<select id="chat-status" aria-label="Estado de la atención">' +
+              opt('open', 'Por atender') + opt('pending', 'En atención') + opt('closed', 'Resuelto') +
+            '</select>' +
+          '</label>' +
+          '<label class="chat-ctl is-agent' + (agent ? '' : ' is-empty') + '" title="Responsable de la conversación">' +
+            '<span class="ri-user-follow-line" aria-hidden="true"></span>' +
+            '<select id="chat-assign" aria-label="Responsable">' +
+              '<option value="">Sin responsable</option>' +
+              (agent ? '<option value="' + agent.id + '" selected>' + escapeHtml(agent.name || 'Asignado') + '</option>' : '') +
+            '</select>' +
+          '</label>' +
+        '</div></div>';
     }
 
     function fillAssignees(select, current) {
@@ -4091,6 +4103,14 @@
           });
           c.status = d.status;
           c.assigned_agent = d.assigned_agent;
+          // El chip de estado y el de responsable se repintan sin rehacer el hilo.
+          var statusCtl = els.pane.querySelector('.chat-ctl.is-status');
+          if (statusCtl) {
+            statusCtl.classList.remove('is-open', 'is-pending', 'is-closed');
+            statusCtl.classList.add(d.status === 'pending' ? 'is-pending' : d.status === 'closed' ? 'is-closed' : 'is-open');
+          }
+          var agentCtl = els.pane.querySelector('.chat-ctl.is-agent');
+          if (agentCtl) agentCtl.classList.toggle('is-empty', !d.assigned_agent);
           renderList();
           toast(body.status ? 'Estado actualizado.' : (d.assigned_agent ? 'Responsable: ' + (d.assigned_agent.name || '') : 'Sin responsable.'));
         })

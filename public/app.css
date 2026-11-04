@@ -1438,7 +1438,7 @@ html[data-bs-theme="dark"] .inbox {
   font-size: 0.75rem;
   color: var(--ib-ink-mute);
 }
-.chat-header .chat-actions { display: flex; align-items: center; gap: 0.4rem; }
+.chat-header .chat-actions { display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0; }
 .typing-hint { color: var(--ib-brand); font-style: italic; font-weight: 500; }
 
 /* Buscar dentro de la conversación */
@@ -6415,23 +6415,43 @@ html[data-bs-theme="dark"] .ps-view-btn { background: #1d2125; }
   box-shadow: inset 0 0 0 1.5px var(--ib-brand), 0 6px 16px -12px rgba(6, 32, 63, 0.5);
 }
 html[data-bs-theme="dark"] .convo.unread { background: color-mix(in srgb, var(--ib-brand) 9%, transparent); }
+/* En oscuro la superficie de la lista y la del hover son casi iguales:
+   el hover necesita tinte de marca y un borde más claro para notarse. */
+html[data-bs-theme="dark"] .convo:hover {
+  background: color-mix(in srgb, var(--ib-brand) 15%, var(--ib-surface-2));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ib-brand) 42%, var(--ib-line));
+}
+html[data-bs-theme="dark"] .convo.active {
+  background: color-mix(in srgb, var(--ib-brand) 20%, var(--ib-surface-2));
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--ib-brand) 70%, transparent),
+    0 8px 20px -14px rgba(0, 0, 0, 0.85);
+}
 
-/* ── Vista previa de una conversación (hover) ── */
+/* ── Vista previa de una conversación (hover) ──
+   Se monta en <body>, fuera de .inbox: sus colores salen de los tokens
+   globales --esam-* (definidos también en modo oscuro), no de --ib-*. */
 .convo-preview {
+  --cp-brand: #045474;
+  --cp-ok: #0f7b55;
   position: fixed;
   z-index: 1400;
   width: min(360px, calc(100vw - 24px));
   max-height: min(380px, calc(100vh - 24px));
   overflow: auto;
   padding: 0.65rem 0.72rem 0.55rem;
-  border: 1px solid var(--ib-line);
+  border: 1px solid var(--esam-line);
   border-radius: 12px;
-  background: var(--ib-surface);
-  color: var(--ib-ink);
-  box-shadow: 0 18px 42px -18px rgba(6, 32, 63, 0.35), 0 4px 12px -6px rgba(6, 32, 63, 0.14);
+  background: var(--esam-surface);
+  color: var(--esam-ink);
+  box-shadow: var(--esam-shadow-lg);
   font-size: 0.78rem;
   line-height: 1.4;
   animation: convo-preview-in 0.14s var(--esam-ease-out);
+}
+html[data-bs-theme="dark"] .convo-preview {
+  --cp-brand: #6cc3e3;
+  --cp-ok: #5fd3a6;
+  box-shadow: 0 24px 52px -20px rgba(0, 0, 0, 0.85), 0 4px 14px -8px rgba(0, 0, 0, 0.7);
 }
 .convo-preview[hidden] { display: none; }
 @keyframes convo-preview-in {
@@ -6447,7 +6467,7 @@ html[data-bs-theme="dark"] .convo.unread { background: color-mix(in srgb, var(--
   font-weight: 700;
   letter-spacing: 0.045em;
   text-transform: uppercase;
-  color: var(--ib-ink-mute);
+  color: var(--esam-muted);
 }
 .convo-preview .cp-dot {
   width: 7px;
@@ -6460,7 +6480,7 @@ html[data-bs-theme="dark"] .convo.unread { background: color-mix(in srgb, var(--
   padding: 0.38rem 0;
 }
 .convo-preview .cp-msg + .cp-msg {
-  border-top: 1px solid color-mix(in srgb, var(--ib-line) 70%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--esam-line) 70%, transparent);
 }
 .convo-preview .cp-msg-top {
   display: flex;
@@ -6475,35 +6495,35 @@ html[data-bs-theme="dark"] .convo.unread { background: color-mix(in srgb, var(--
   white-space: nowrap;
   font-size: 0.72rem;
   font-weight: 650;
-  color: var(--ib-brand);
+  color: var(--cp-brand);
 }
-.convo-preview .cp-msg.is-out .cp-who { color: #0e9f6e; }
+.convo-preview .cp-msg.is-out .cp-who { color: var(--cp-ok); }
 .convo-preview .cp-when {
   flex-shrink: 0;
   margin-left: auto;
   font-size: 0.64rem;
-  color: var(--ib-ink-mute);
+  color: var(--esam-muted);
   font-variant-numeric: tabular-nums;
 }
 .convo-preview .cp-text {
   margin-top: 0.12rem;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  color: var(--ib-ink-soft);
+  color: var(--esam-ink-soft);
 }
 .convo-preview .cp-more {
   margin-top: 0.35rem;
   padding-top: 0.35rem;
-  border-top: 1px dashed var(--ib-line);
+  border-top: 1px dashed var(--esam-line);
   font-size: 0.68rem;
-  color: var(--ib-ink-mute);
+  color: var(--esam-muted);
 }
 .convo-preview .cp-loading,
 .convo-preview .cp-empty {
   padding: 0.4rem 0;
   font-size: 0.74rem;
   font-style: italic;
-  color: var(--ib-ink-mute);
+  color: var(--esam-muted);
 }
 
 /* ── Cabecera del hilo ── */
@@ -7179,9 +7199,121 @@ html[data-bs-theme="dark"] .cl-st.on, html[data-bs-theme="dark"] .cl-st b { colo
 .convo-state.is-pending { color: #b45309; background: color-mix(in srgb, #b45309 12%, transparent); }
 .convo-state.is-closed { color: #0f7b55; background: color-mix(in srgb, #0f7b55 12%, transparent); }
 .convo-agent { display: inline-flex; align-items: center; gap: 0.2rem; font-size: 0.7rem; color: var(--esam-ink-soft, #4b5563); }
-.chat-state-ctl { display: flex; gap: 0.35rem; }
-.chat-state-ctl .form-select { width: auto; max-width: 11rem; font-size: 0.78rem; padding-top: 0.2rem; padding-bottom: 0.2rem; }
-@media (max-width: 767.98px) { .chat-state-ctl #chat-assign { display: none; } .chat-state-ctl .form-select { max-width: 8rem; } }
+html[data-bs-theme="dark"] .convo-state.is-pending { color: #f3b25f; }
+html[data-bs-theme="dark"] .convo-state.is-closed { color: #5fd3a6; }
+
+/* Barra de atención del hilo: estado y responsable como chips legibles */
+.chat-attn {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.6rem;
+  padding: 0.48rem 0.9rem;
+  border-bottom: 1px solid var(--ib-line);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--ib-brand) 3%, var(--ib-surface)), var(--ib-surface));
+}
+.chat-attn-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.61rem;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ib-ink-mute);
+  white-space: nowrap;
+}
+.chat-attn-label [class^="ri-"] { color: var(--ib-brand); font-size: 0.82rem; }
+.chat-attn-ctls { display: flex; flex-wrap: wrap; gap: 0.4rem; min-width: 0; }
+
+.chat-ctl {
+  --ctl: var(--ib-ink-mute);
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0.12rem 0.2rem 0.12rem 0.6rem;
+  border: 1px solid var(--ib-line);
+  border-radius: 999px;
+  background: var(--ib-surface);
+  color: var(--ctl);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.45;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+}
+.chat-ctl:hover { border-color: color-mix(in srgb, var(--ctl) 45%, var(--ib-line)); }
+.chat-ctl:focus-within { border-color: var(--ctl); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ctl) 14%, transparent); }
+.chat-ctl > [class^="ri-"] { flex-shrink: 0; font-size: 0.85rem; color: var(--ctl); }
+.chat-ctl select {
+  appearance: none;
+  -webkit-appearance: none;
+  min-width: 0;
+  max-width: 11.5rem;
+  padding: 0.16rem 1.05rem 0.16rem 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.chat-ctl select option { color: var(--ib-ink); background: var(--ib-surface); }
+.chat-ctl::after {
+  content: '';
+  position: absolute;
+  right: 0.55rem;
+  top: 50%;
+  width: 0.36rem;
+  height: 0.36rem;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-65%) rotate(45deg);
+  opacity: 0.7;
+  pointer-events: none;
+}
+.chat-ctl.is-open {
+  --ctl: var(--esam-warning, #b45309);
+  background: color-mix(in srgb, #f59e0b 8%, var(--ib-surface));
+}
+.chat-ctl.is-pending {
+  --ctl: var(--ib-brand);
+  background: color-mix(in srgb, var(--ib-brand) 8%, var(--ib-surface));
+}
+.chat-ctl.is-closed {
+  --ctl: var(--esam-success, #0f7b55);
+  background: color-mix(in srgb, #0f7b55 8%, var(--ib-surface));
+}
+.chat-ctl.is-agent:not(.is-empty) {
+  --ctl: var(--ib-brand);
+  background: color-mix(in srgb, var(--ib-brand) 8%, var(--ib-surface));
+}
+.chat-ctl.is-agent.is-empty { --ctl: var(--ib-ink-mute); }
+
+html[data-bs-theme="dark"] .chat-ctl.is-open { --ctl: #f3b25f; }
+html[data-bs-theme="dark"] .chat-ctl.is-pending,
+html[data-bs-theme="dark"] .chat-ctl.is-agent:not(.is-empty) { --ctl: #6cc3e3; }
+html[data-bs-theme="dark"] .chat-ctl.is-closed { --ctl: #5fd3a6; }
+html[data-bs-theme="dark"] .chat-ctl.is-agent.is-empty { --ctl: #8fa0b6; }
+
+@media (max-width: 991.98px) {
+  .chat-attn { padding: 0.45rem 0.75rem; }
+}
+@media (max-width: 575.98px) {
+  .chat-header { padding: 0.55rem 0.65rem; gap: 0.5rem; }
+  .chat-header .chat-id .name { font-size: 0.9rem; }
+  .chat-header .avatar-sm { width: 2.35rem; height: 2.35rem; font-size: 0.82rem; }
+  .chat-attn { padding: 0.42rem 0.6rem; gap: 0.35rem; }
+  .chat-attn-label { display: none; }
+  .chat-attn-ctls { width: 100%; }
+  .chat-ctl { flex: 1 1 8rem; }
+  .chat-ctl select { max-width: none; width: 100%; }
+}
 
 /* ── Lote › Volver a escribir ── */
 .bd-followup { margin-bottom: 0.9rem; }

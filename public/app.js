@@ -5975,9 +5975,11 @@
       modulesList: root.querySelector('#np-modules-list'),
       modulesCount: root.querySelector('#np-modules-count'),
       moduleStats: root.querySelector('#np-module-stats'),
+      moduleProgress: root.querySelector('#np-module-progress'),
       moduleSearch: root.querySelector('#np-modules-search'),
       moduleFilters: root.querySelectorAll('[data-module-filter]'),
       moduleSummary: root.querySelector('#np-module-summary'),
+      modulePendingTag: root.querySelector('#np-module-pending-tag'),
     };
     var st = { status: STATUS.some(function (x) { return x.key === initialStatus; }) ? initialStatus : 'pending', tag: null, tags: [], colors: ['#045474'], color: '#045474', notes: [], stats: null, managing: false, view: 'list', area: 'all', advisor: 0, supervisor: false, supervisorArea: null, section: 'notes', modules: [], modulesPending: 0, modulesLoaded: false, modulesAdmin: false, moduleFilter: 'pending', moduleSearch: '' };
     try { if (localStorage.getItem('notes-view') === 'board') st.view = 'board'; } catch (_) {}
@@ -6119,29 +6121,56 @@
       return (st.modules || []).filter(function (item) { return item.status !== 'done'; });
     }
 
-    function renderModuleCount() {
-      if (!els.modulesCount) return;
-      var n = Math.max(0, Number(st.modulesPending) || 0);
-      els.modulesCount.textContent = n > 99 ? '99+' : String(n);
-      els.modulesCount.hidden = n === 0;
-    }
-
-    function renderModuleStats() {
-      if (!els.moduleStats) return;
+    function moduleTotals() {
       var all = st.modules || [];
       var pending = modulePendingItems();
       var done = all.filter(function (item) { return item.status === 'done'; });
       var sessions = pending.reduce(function (sum, item) { return sum + ((item.sessions || []).length); }, 0);
-      var people = {};
-      pending.forEach(function (item) {
+      return { all: all, pending: pending, done: done, sessions: sessions };
+    }
+
+    function renderModuleCount() {
+      var pending = Math.max(0, Number(st.modulesPending) || 0);
+      if (els.modulesCount) {
+        els.modulesCount.textContent = pending > 99 ? '99+' : String(pending);
+        els.modulesCount.hidden = pending === 0;
+      }
+      var totals = moduleTotals();
+      var counts = { pending: pending, done: totals.done.length, all: totals.all.length };
+      Array.prototype.forEach.call(root.querySelectorAll('[data-module-count]'), function (el) {
+        var key = el.getAttribute('data-module-count');
+        el.textContent = counts[key] != null ? String(counts[key]) : '0';
+      });
+    }
+
+    function renderModuleProgress() {
+      if (!els.moduleProgress) return;
+      var totals = moduleTotals();
+      var total = totals.all.length;
+      var pct = total ? Math.round((totals.done.length / total) * 100) : 0;
+      els.moduleProgress.innerHTML =
+        '<div class="np-mh-ring" style="--pct: ' + pct + '" role="img" aria-label="' + pct + '% atendido">' +
+          '<span>' + pct + '%</span>' +
+        '</div>' +
+        '<div class="np-mh-progress-copy">' +
+          '<b>' + totals.done.length + ' de ' + total + '</b>' +
+          '<span>notas atendidas</span>' +
+        '</div>';
+    }
+
+    function renderModuleStats() {
+      if (!els.moduleStats) return;
+      var totals = moduleTotals();
+      var people = Object.create(null);
+      totals.pending.forEach(function (item) {
         var name = item.assigned_name || item.assigned_to;
         if (name) people[String(name)] = true;
       });
       var cards = [
-        { label: 'Notas pendientes', num: pending.length, icon: 'ri-time-line', tone: 'np-warn' },
-        { label: 'Sesiones por atender', num: sessions, icon: 'ri-calendar-event-line', tone: 'np-danger' },
+        { label: 'Notas pendientes', num: totals.pending.length, icon: 'ri-time-line', tone: 'np-warn' },
+        { label: 'Sesiones por atender', num: totals.sessions, icon: 'ri-calendar-event-line', tone: 'np-danger' },
         { label: 'Responsables', num: Object.keys(people).length, icon: 'ri-user-settings-line', tone: 'np-info' },
-        { label: 'Notas atendidas', num: done.length, icon: 'ri-check-double-line', tone: 'np-ok' },
+        { label: 'Notas atendidas', num: totals.done.length, icon: 'ri-check-double-line', tone: 'np-ok' },
       ];
       els.moduleStats.innerHTML = cards.map(function (c) {
         return '<div class="np-stat np-module-stat ' + c.tone + (c.num ? '' : ' zero') + '">' +
@@ -6154,17 +6183,45 @@
 
     function renderModuleSummary() {
       if (!els.moduleSummary) return;
-      var pending = modulePendingItems();
-      var done = (st.modules || []).filter(function (item) { return item.status === 'done'; });
-      var sessions = pending.reduce(function (sum, item) { return sum + ((item.sessions || []).length); }, 0);
-      var rows = [
-        ['Notas pendientes', pending.length],
-        ['Sesiones por atender', sessions],
-        ['Notas atendidas', done.length],
-      ];
-      els.moduleSummary.innerHTML = rows.map(function (r) {
-        return '<div class="np-module-summary-row"><span>' + escapeHtml(r[0]) + '</span><b>' + r[1] + '</b></div>';
-      }).join('');
+      var totals = moduleTotals();
+      if (els.modulePendingTag) {
+        els.modulePendingTag.textContent = totals.pending.length
+          ? totals.pending.length + ' pendiente' + (totals.pending.length === 1 ? '' : 's')
+          : 'Todo al día';
+        els.modulePendingTag.classList.toggle('is-ok', totals.pending.length === 0);
+      }
+      if (!totals.pending.length) {
+        els.moduleSummary.innerHTML = '<div class="np-sum-empty">' +
+          '<span class="ri-check-double-line" aria-hidden="true"></span>' +
+          '<b>Sin pendientes</b>' +
+          '<span>No hay sesiones sin asistencia asignadas por ahora.</span></div>';
+        return;
+      }
+      var groups = Object.create(null);
+      totals.pending.forEach(function (item) {
+        var name = item.assigned_name || 'Sin responsable';
+        var g = groups[name] || (groups[name] = { name: name, notes: 0, sessions: 0 });
+        g.notes++;
+        g.sessions += (item.sessions || []).length;
+      });
+      var list = Object.keys(groups).map(function (k) { return groups[k]; }).sort(function (a, b) {
+        return b.notes - a.notes || b.sessions - a.sessions || a.name.localeCompare(b.name);
+      });
+      var max = list[0].notes || 1;
+      var shown = list.slice(0, 8);
+      els.moduleSummary.innerHTML = shown.map(function (g) {
+        var pct = Math.max(8, Math.round((g.notes / max) * 100));
+        return '<div class="np-sum-person">' +
+            avatarHtml(g.name, 'avatar-xs', null, 'np-sum-avatar') +
+            '<div class="np-sum-body">' +
+              '<div class="np-sum-line"><span class="np-sum-name">' + escapeHtml(g.name) + '</span><b class="np-sum-count">' + g.notes + '</b></div>' +
+              '<span class="np-sum-bar"><span style="width:' + pct + '%"></span></span>' +
+              '<span class="np-sum-sub">' + g.sessions + ' sesión' + (g.sessions === 1 ? '' : 'es') + ' por atender</span>' +
+            '</div>' +
+          '</div>';
+      }).join('') + (list.length > shown.length
+        ? '<div class="np-sum-more">y ' + (list.length - shown.length) + ' responsable' + (list.length - shown.length === 1 ? '' : 's') + ' más</div>'
+        : '');
     }
 
     function moduleMatches(item, q) {
@@ -6174,6 +6231,16 @@
         .join(' ')
         .toLowerCase();
       return hay.indexOf(q) !== -1;
+    }
+
+    function applyModuleFilter(filter) {
+      st.moduleFilter = filter === 'done' || filter === 'all' ? filter : 'pending';
+      Array.prototype.forEach.call(els.moduleFilters || [], function (x) {
+        var on = x.getAttribute('data-module-filter') === st.moduleFilter;
+        x.classList.toggle('on', on);
+        x.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+      renderModules();
     }
 
     function renderModules() {
@@ -6188,15 +6255,27 @@
       });
 
       if (!items.length) {
-        var title = q ? 'Sin coincidencias' : (st.moduleFilter === 'done' ? 'No hay notas atendidas' : 'No tenés seguimientos pendientes');
-        var sub = q
+        var isSearch = !!q;
+        var title = isSearch ? 'Sin coincidencias' : (st.moduleFilter === 'done' ? 'Todavía no hay notas atendidas' : 'No tenés seguimientos pendientes');
+        var sub = isSearch
           ? 'Probá con otro programa, módulo o responsable.'
           : (st.moduleFilter === 'done'
-            ? 'Las notas que marques como atendidas aparecerán aquí.'
-            : 'Cuando haya sesiones pasadas en Confirmado o Desarrolladas sin asistencia, aparecerán acá agrupadas por día.');
+            ? 'Las notas que marques como atendidas se archivarán aquí.'
+            : 'Cuando existan sesiones pasadas en Confirmado o Desarrolladas sin asistencia, aparecerán agrupadas por día.');
+        var hasDone = (st.modules || []).some(function (item) { return item.status === 'done'; });
+        var emptyAction = isSearch
+          ? '<button type="button" class="np-empty-btn" data-module-clear-search><span class="ri-close-line" aria-hidden="true"></span> Limpiar búsqueda</button>'
+          : (st.moduleFilter === 'done'
+            ? '<button type="button" class="np-empty-btn" data-module-empty-filter="pending"><span class="ri-time-line" aria-hidden="true"></span> Ver pendientes</button>'
+            : (hasDone
+              ? '<button type="button" class="np-empty-btn" data-module-empty-filter="done"><span class="ri-check-double-line" aria-hidden="true"></span> Ver atendidas</button>'
+              : ''));
         els.modulesList.innerHTML = '<div class="np-modules-empty">' +
-          '<span class="' + (q ? 'ri-search-eye-line' : 'ri-check-double-line') + '" aria-hidden="true"></span>' +
-          '<b>' + escapeHtml(title) + '</b><span>' + escapeHtml(sub) + '</span></div>';
+          '<span class="np-modules-empty-ico"><span class="' + (isSearch ? 'ri-search-eye-line' : (st.moduleFilter === 'done' ? 'ri-inbox-archive-line' : 'ri-check-double-line')) + '" aria-hidden="true"></span></span>' +
+          '<b>' + escapeHtml(title) + '</b>' +
+          '<p>' + escapeHtml(sub) + '</p>' +
+          (emptyAction ? '<div class="np-modules-empty-actions">' + emptyAction + '</div>' : '') +
+          '</div>';
         return;
       }
 
@@ -6205,27 +6284,32 @@
         var assigned = item.assigned_name || 'Responsable';
         var sessions = item.sessions || [];
         var actions = '';
-        if (!sessions.length && item.link) {
-          actions += '<a class="btn btn-sm btn-soft-primary" href="' + escapeHtml(item.link) + '" target="_blank" rel="noopener">' +
+        if (item.link) {
+          actions += '<a class="np-mc-btn is-ghost" href="' + escapeHtml(item.link) + '" target="_blank" rel="noopener">' +
             '<span class="ri-external-link-line" aria-hidden="true"></span> Abrir en cronogramas</a>';
         }
         if (!done) {
-          actions += '<button type="button" class="btn btn-sm btn-soft-success" data-module-done="' + item.id + '">' +
+          actions += '<button type="button" class="np-mc-btn is-primary" data-module-done="' + item.id + '">' +
             '<span class="ri-check-line" aria-hidden="true"></span> Marcar como atendido</button>';
         }
         var sessionsHtml = '';
         if (sessions.length) {
-          sessionsHtml = '<div class="np-module-sessions">' + sessions.map(function (s) {
-            return '<div class="np-module-session">' +
-                '<span class="np-module-session-time">' + escapeHtml(s.time || '—') + '</span>' +
-                '<div class="np-module-session-info">' +
-                  '<b>' + escapeHtml(s.module || 'Módulo') + '</b>' +
-                  (s.program ? '<span>' + escapeHtml(s.program) + '</span>' : '') +
-                  (s.state ? '<span class="np-module-session-state is-' + (s.state === 'Confirmado' ? 'confirmado' : 'desarrollado') + '">' + escapeHtml(s.state) + '</span>' : '') +
-                '</div>' +
-                (s.link ? '<a class="np-module-session-open" href="' + escapeHtml(s.link) + '" target="_blank" rel="noopener">Abrir</a>' : '') +
-              '</div>';
-          }).join('') + '</div>';
+          sessionsHtml = '<div class="np-mc-sessions">' +
+            '<div class="np-mc-sessions-head"><span class="ri-calendar-event-line" aria-hidden="true"></span> Sesiones incluidas <span>' + sessions.length + '</span></div>' +
+            sessions.map(function (s) {
+              var state = String(s.state || '');
+              var tone = /confirm/i.test(state) ? 'confirmado' : 'desarrollado';
+              return '<div class="np-mc-session">' +
+                  '<span class="np-mc-time"><span class="ri-time-line" aria-hidden="true"></span>' + escapeHtml(s.time || '—') + '</span>' +
+                  '<div class="np-mc-session-body">' +
+                    '<b>' + escapeHtml(s.module || 'Módulo') + '</b>' +
+                    (s.program ? '<span>' + escapeHtml(s.program) + '</span>' : '') +
+                  '</div>' +
+                  (state ? '<span class="np-mc-state is-' + tone + '">' + escapeHtml(state) + '</span>' : '') +
+                  (s.link ? '<a class="np-mc-open" href="' + escapeHtml(s.link) + '" target="_blank" rel="noopener" aria-label="Abrir sesión en cronogramas" title="Abrir en cronogramas"><span class="ri-arrow-right-up-line" aria-hidden="true"></span></a>' : '') +
+                '</div>';
+            }).join('') +
+          '</div>';
         }
         var subtitle = sessions.length
           ? sessions.length + ' sesión' + (sessions.length === 1 ? '' : 'es') + (done ? (sessions.length === 1 ? ' atendida' : ' atendidas') : ' sin asistencia')
@@ -6233,23 +6317,26 @@
         var cardTitle = item.title || 'Seguimiento de módulo';
         if (done) cardTitle = cardTitle.replace(/^Sesiones pendientes/, 'Sesiones atendidas');
         return '<article class="np-module-card' + (done ? ' is-done' : '') + '">' +
-            '<div class="np-module-top">' +
-              '<span class="np-module-ico" aria-hidden="true"><span class="' + (done ? 'ri-check-double-line' : 'ri-error-warning-line') + '"></span></span>' +
-              '<div class="np-module-title">' +
+            '<div class="np-mc-head">' +
+              '<span class="np-mc-ico" aria-hidden="true"><span class="' + (done ? 'ri-check-double-line' : 'ri-error-warning-line') + '"></span></span>' +
+              '<div class="np-mc-title">' +
+                '<div class="np-mc-kicker">' +
+                  '<span class="np-mc-status">' + (done ? 'Atendida' : 'Pendiente') + '</span>' +
+                  (done && item.done_at ? '<span class="np-mc-timeago">' + escapeHtml(timeAgo(item.done_at)) + '</span>' : '') +
+                '</div>' +
                 '<h6>' + escapeHtml(cardTitle) + '</h6>' +
                 '<p>' + escapeHtml(subtitle) + '</p>' +
               '</div>' +
-              '<span class="np-module-status">' + (done ? 'Atendido' : 'Pendiente') + '</span>' +
             '</div>' +
-            '<div class="np-module-meta">' +
-              (item.session_label ? '<span class="np-module-chip"><span class="ri-calendar-line" aria-hidden="true"></span>' + escapeHtml(item.session_label) + '</span>' : '') +
-              '<span class="np-module-chip"><span class="ri-user-settings-line" aria-hidden="true"></span>' + escapeHtml(assigned) + '</span>' +
-              '<span class="np-module-chip"><span class="ri-list-check-2" aria-hidden="true"></span>' + sessions.length + ' sesión' + (sessions.length === 1 ? '' : 'es') + '</span>' +
-              (done && item.done_at ? '<span class="np-module-chip"><span class="ri-check-double-line" aria-hidden="true"></span>Atendida ' + escapeHtml(timeAgo(item.done_at)) + '</span>' : '') +
+            '<div class="np-mc-meta">' +
+              '<span class="np-mc-person">' + avatarHtml(assigned, 'avatar-xs', null, 'np-mc-avatar') +
+                '<span class="np-mc-name">' + escapeHtml(assigned) + '</span></span>' +
+              (item.session_label ? '<span class="np-mc-chip"><span class="ri-calendar-line" aria-hidden="true"></span>' + escapeHtml(item.session_label) + '</span>' : '') +
+              '<span class="np-mc-chip"><span class="ri-list-check-2" aria-hidden="true"></span>' + sessions.length + ' sesión' + (sessions.length === 1 ? '' : 'es') + '</span>' +
             '</div>' +
             (!sessions.length && item.details ? '<p class="np-module-detail">' + escapeHtml(item.details) + '</p>' : '') +
             sessionsHtml +
-            (actions ? '<div class="np-module-actions">' + actions + '</div>' : '') +
+            (actions ? '<div class="np-mc-actions">' + actions + '</div>' : '') +
           '</article>';
       }).join('');
     }
@@ -6261,16 +6348,17 @@
         st.modulesAdmin = !!(d && d.is_admin);
         st.modulesLoaded = true;
         renderModuleCount();
+        renderModuleProgress();
         renderModuleStats();
         renderModuleSummary();
         if (st.section === 'modules') renderModules();
       }).catch(function (e) {
         st.modulesLoaded = true;
         if (st.section === 'modules' && els.modulesList) {
-          els.modulesList.innerHTML = '<div class="np-modules-empty">' +
-            '<span class="ri-error-warning-line" aria-hidden="true"></span>' +
+          els.modulesList.innerHTML = '<div class="np-modules-empty is-error">' +
+            '<span class="np-modules-empty-ico"><span class="ri-error-warning-line" aria-hidden="true"></span></span>' +
             '<b>No se pudieron cargar los seguimientos</b>' +
-            '<span>' + escapeHtml(e && e.message || '') + '</span>' +
+            '<p>' + escapeHtml(e && e.message || 'Intentá de nuevo en unos segundos.') + '</p>' +
             '</div>';
         }
       });
@@ -6953,6 +7041,18 @@
     });
     if (els.modulesList) {
       els.modulesList.addEventListener('click', function (ev) {
+        var clear = ev.target.closest ? ev.target.closest('[data-module-clear-search]') : null;
+        if (clear) {
+          st.moduleSearch = '';
+          if (els.moduleSearch) els.moduleSearch.value = '';
+          renderModules();
+          return;
+        }
+        var emptyFilter = ev.target.closest ? ev.target.closest('[data-module-empty-filter]') : null;
+        if (emptyFilter) {
+          applyModuleFilter(emptyFilter.getAttribute('data-module-empty-filter'));
+          return;
+        }
         var btn = ev.target.closest ? ev.target.closest('[data-module-done]') : null;
         if (!btn) return;
         if (!confirm('¿Marcar este seguimiento como atendido?')) return;
@@ -6964,13 +7064,7 @@
     }
     Array.prototype.forEach.call(els.moduleFilters || [], function (b) {
       b.addEventListener('click', function () {
-        st.moduleFilter = b.getAttribute('data-module-filter') || 'pending';
-        Array.prototype.forEach.call(els.moduleFilters, function (x) {
-          var on = x === b;
-          x.classList.toggle('on', on);
-          x.setAttribute('aria-pressed', on ? 'true' : 'false');
-        });
-        renderModules();
+        applyModuleFilter(b.getAttribute('data-module-filter') || 'pending');
       });
     });
     if (els.moduleSearch) {

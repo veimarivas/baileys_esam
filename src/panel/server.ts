@@ -249,43 +249,49 @@ export function renderNotesPage(opts: { focusId?: number; status?: string } = {}
     </div>
 
     <section id="np-modules-section" class="np-modules" hidden aria-live="polite">
-      <div class="np-modules-head">
-        <span class="np-modules-ico" aria-hidden="true"><span class="ri-book-open-line"></span></span>
-        <div>
-          <h5>Seguimiento de desarrollo de módulos</h5>
-          <p>Sesiones pasadas en estado Confirmado o Desarrolladas sin asistencia. Cada nota agrupa las sesiones de un responsable en un día.</p>
+      <div class="np-modules-hero">
+        <div class="np-mh-main">
+          <span class="np-mh-ico" aria-hidden="true"><span class="ri-book-open-line"></span></span>
+          <div class="np-mh-copy">
+            <span class="np-mh-eyebrow"><span class="ri-plug-line" aria-hidden="true"></span> Cronogramas · Asistencia</span>
+            <h5>Seguimiento de módulos</h5>
+            <p>Sesiones pasadas en estado <b>Confirmado</b> o <b>Desarrolladas</b> sin asistencia. Cada tarjeta agrupa las sesiones de un responsable en un día.</p>
+          </div>
         </div>
+        <div class="np-mh-progress" id="np-module-progress" aria-label="Progreso de seguimientos"></div>
       </div>
 
       <div class="np-stats np-module-stats" id="np-module-stats" aria-label="Resumen de seguimientos"></div>
 
       <div class="np-layout">
         <div class="np-main">
-          <div class="np-toolbar">
-            <label class="notes-search">
-              <span class="ri-search-line" aria-hidden="true"></span>
-              <input type="search" id="np-modules-search" placeholder="Buscar por programa, módulo o responsable…" autocomplete="off" aria-label="Buscar seguimientos" />
-            </label>
-            <div class="np-view" role="group" aria-label="Filtrar seguimientos">
-              <button type="button" class="np-view-btn on" data-module-filter="pending" aria-pressed="true"><span class="ri-time-line" aria-hidden="true"></span> Pendientes</button>
-              <button type="button" class="np-view-btn" data-module-filter="done" aria-pressed="false"><span class="ri-check-double-line" aria-hidden="true"></span> Atendidas</button>
-              <button type="button" class="np-view-btn" data-module-filter="all" aria-pressed="false"><span class="ri-stack-line" aria-hidden="true"></span> Todas</button>
+          <div class="np-modules-panel">
+            <div class="np-toolbar np-modules-toolbar">
+              <label class="notes-search">
+                <span class="ri-search-line" aria-hidden="true"></span>
+                <input type="search" id="np-modules-search" placeholder="Buscar por programa, módulo o responsable…" autocomplete="off" aria-label="Buscar seguimientos" />
+              </label>
+              <div class="np-view np-module-filter" role="group" aria-label="Filtrar seguimientos">
+                <button type="button" class="np-view-btn on" data-module-filter="pending" aria-pressed="true"><span class="ri-time-line" aria-hidden="true"></span> Pendientes <span class="np-filter-count" data-module-count="pending">0</span></button>
+                <button type="button" class="np-view-btn" data-module-filter="done" aria-pressed="false"><span class="ri-check-double-line" aria-hidden="true"></span> Atendidas <span class="np-filter-count" data-module-count="done">0</span></button>
+                <button type="button" class="np-view-btn" data-module-filter="all" aria-pressed="false"><span class="ri-stack-line" aria-hidden="true"></span> Todas <span class="np-filter-count" data-module-count="all">0</span></button>
+              </div>
             </div>
-          </div>
-          <div class="np-legend" aria-label="Cómo se agrupan las notas">
-            <span class="np-legend-t">Cada tarjeta es una nota diaria por responsable.</span>
-            <span class="np-legend-sep" aria-hidden="true"></span>
-            <span class="np-legend-t">Abrí cada sesión para registrar la asistencia.</span>
-          </div>
-          <div id="np-modules-list" class="np-modules-list">
-            <div class="np-loading" role="status"><span class="np-loading-dot" aria-hidden="true"></span> Cargando seguimientos…</div>
+            <div class="np-modules-hint" id="np-modules-hint">
+              <span class="ri-information-line" aria-hidden="true"></span>
+              Abrí cada sesión para registrar la asistencia en cronogramas.
+            </div>
+            <div id="np-modules-list" class="np-modules-list">
+              <div class="np-loading" role="status"><span class="np-loading-dot" aria-hidden="true"></span> Cargando seguimientos…</div>
+            </div>
           </div>
         </div>
 
         <aside class="np-side" aria-label="Resumen de seguimientos">
-          <div class="np-side-card">
+          <div class="np-side-card np-module-summary-card">
             <div class="np-side-head">
-              <h6><span class="ri-pie-chart-2-line" aria-hidden="true"></span> Resumen</h6>
+              <h6><span class="ri-pie-chart-2-line" aria-hidden="true"></span> Carga por responsable</h6>
+              <span class="np-side-tag" id="np-module-pending-tag"></span>
             </div>
             <div id="np-module-summary" class="np-module-summary"></div>
           </div>

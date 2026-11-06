@@ -3655,6 +3655,9 @@ html[data-bs-theme="dark"] .chat-notes-banner.warn { --cnb: #f3b25f; --cnb-soft:
 }
 .np-trash-btn:hover { border-color: var(--nk-danger); color: var(--nk-danger); }
 .np-trash-btn.on { border-color: var(--nk-danger); color: var(--nk-danger); background: var(--nk-danger-soft); }
+.np-trash-btn.is-danger { border-color: var(--nk-danger); color: var(--nk-danger); }
+.np-trash-btn.is-danger:hover { background: var(--nk-danger-soft); }
+#notes-empty-trash { margin-left: 0; }
 .np-trash-btn:focus-visible { outline: 2px solid var(--nk-brand); outline-offset: 2px; }
 .np-trash-count:not(:empty) {
   min-width: 18px; padding: 0 0.3rem; border-radius: 999px; font-size: 0.66rem; text-align: center;

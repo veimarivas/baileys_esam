@@ -480,6 +480,23 @@ export function restoreNote(id: number, userId: number | null = null): void {
   if (changed.changes) logNoteEvent(id, userId, 'restored');
 }
 
+/**
+ * Vacía la papelera: elimina definitivamente todas las notas eliminadas y sus
+ * datos asociados (etiquetas, historial y avisos). Solo se expone al Super Admin.
+ */
+export function emptyTrash(): number {
+  const ids = all<{ id: number }>('SELECT id FROM contact_notes WHERE deleted_at IS NOT NULL').map((r) => r.id);
+  if (!ids.length) return 0;
+
+  const placeholders = ids.map(() => '?').join(',');
+  run(`DELETE FROM notifications WHERE note_id IN (${placeholders})`, ...ids);
+  run(`DELETE FROM contact_note_history WHERE note_id IN (${placeholders})`, ...ids);
+  run(`DELETE FROM contact_note_tags WHERE note_id IN (${placeholders})`, ...ids);
+
+  const result = run(`DELETE FROM contact_notes WHERE id IN (${placeholders})`, ...ids);
+  return result.changes;
+}
+
 // ── Historial de cambios ─────────────────────────────────────────────────────
 
 export type NoteAction =

@@ -11,6 +11,7 @@ import * as conversations from '../core/conversations.js';
 import {
   addNote,
   deleteNote,
+  emptyTrash,
   getNote,
   getOrCreateContact,
   listAllNotes,
@@ -41,6 +42,7 @@ import { personTagsByKeys, phoneKeyOf, setPersonName } from '../core/person.js';
 import { personSends } from '../core/person-sends.js';
 import { setConversationState, type ConversationStatus, type StateChange } from '../core/conversation-state.js';
 import * as directory from '../core/directory.js';
+import { audit } from '../core/webhooks.js';
 import { teamMembers, teamTagFor, type TeamTag } from '../core/team.js';
 import {
   isNotificationCategory,
@@ -145,13 +147,16 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
   function withPermissions<T extends { user_id: number | null; assigned_to?: number | null }>(
     user: UserRow,
     note: T,
-  ): T & { can_edit: boolean; assigned_to_me: boolean; supervisor: boolean; team: TeamTag | null } {
+  ): T & { can_edit: boolean; can_delete: boolean; assigned_to_me: boolean; supervisor: boolean; team: TeamTag | null } {
+    const team = teamForNote(note as { contact_phone?: string | null; chat_id?: string | null; contact_id?: number | null });
     return {
       ...note,
       can_edit: canEditNote(user, note),
+      // Las notas de Administración (comunicación interna) solo las elimina el Super Admin.
+      can_delete: team ? esamEsAdmin(user) : canEditNote(user, note),
       assigned_to_me: !!note.assigned_to && note.assigned_to === user.id,
       supervisor: esamEsAdmin(user),
-      team: teamForNote(note as { contact_phone?: string | null; chat_id?: string | null; contact_id?: number | null }),
+      team,
     };
   }
 
@@ -1442,19 +1447,38 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
     }),
   );
 
-  // Mandar una nota a la papelera (solo su autor o un admin). Se puede restaurar.
+  // Mandar una nota a la papelera (su autor o un admin). Las notas de
+  // Administración (equipo) solo las puede eliminar el Super Admin.
   app.delete(
     '/inbox/notes/:id',
     ...auth,
     ah((req, res) => {
       const note = accessibleNote(req, res);
       if (!note) return;
+      const team = teamForNote(note);
+      if (team && !esamEsAdmin(req.user!)) {
+        return res.status(403).json({ error: 'Solo el Super Admin puede eliminar notas de Administración.' });
+      }
       if (!canEditNote(req.user!, note)) {
         return res.status(403).json({ error: 'Solo el autor de la nota puede eliminarla.' });
       }
       deleteNote(note.id, req.user!.id);
       publishNoteChange(note.id, 'deleted', req.user!.id);
       res.json({ ok: true });
+    }),
+  );
+
+  // Vaciar la papelera: eliminación definitiva. Solo Super Admin.
+  app.delete(
+    '/notes/trash',
+    ...auth,
+    ah((req, res) => {
+      if (!esamEsAdmin(req.user!)) {
+        return res.status(403).json({ error: 'Solo el Super Admin puede vaciar la papelera.' });
+      }
+      const deleted = emptyTrash();
+      if (deleted) audit('notes.trash_emptied', { by: req.user!.id, deleted });
+      res.json({ ok: true, deleted });
     }),
   );
 

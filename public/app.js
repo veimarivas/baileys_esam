@@ -1955,8 +1955,10 @@
         '<button type="button" class="nk-icon nk-pin' + (n.pinned ? ' on' : '') + '" title="' + pinTitle + '" aria-label="' + pinTitle + '" aria-pressed="' + !!n.pinned + '">' +
           '<span class="' + (n.pinned ? 'ri-pushpin-2-fill' : 'ri-pushpin-2-line') + '"></span></button>' +
         (n.can_edit
-        ? '<button type="button" class="nk-icon nk-edit" title="Editar nota" aria-label="Editar nota"><span class="ri-pencil-line"></span></button>' +
-          '<button type="button" class="nk-icon nk-del" title="Eliminar nota" aria-label="Eliminar nota"><span class="ri-delete-bin-6-line"></span></button>'
+        ? '<button type="button" class="nk-icon nk-edit" title="Editar nota" aria-label="Editar nota"><span class="ri-pencil-line"></span></button>'
+        : '') +
+        (n.can_delete
+        ? '<button type="button" class="nk-icon nk-del" title="Eliminar nota" aria-label="Eliminar nota"><span class="ri-delete-bin-6-line"></span></button>'
         : '');
       var checkTitle = n.done_at ? 'Reabrir' : (n.due_at ? 'Marcar tarea como hecha' : 'Marcar como resuelta');
       // En /notes: franja del color del área, etapa del pipeline y vigencia.
@@ -6065,7 +6067,17 @@
       return AREA_INFO[key] || { label: key.charAt(0).toUpperCase() + key.slice(1), icon: 'ri-team-line', color: '#475569' };
     }
     function visibleNotes() {
-      var list = st.area === 'all' ? st.notes : st.notes.filter(function (n) { return areaOf(n) === st.area; });
+      var list;
+      if (st.area === 'all') {
+        // «Otras áreas» no mezcla Administración (equipo) con Marketing (prospectos):
+        // cada una tiene su propio apartado.
+        list = st.notes.filter(function (n) {
+          var a = areaOf(n);
+          return a !== 'admin' && a !== 'marketing';
+        });
+      } else {
+        list = st.notes.filter(function (n) { return areaOf(n) === st.area; });
+      }
       if (st.area === 'marketing') {
         // Marketing es exclusivamente el pipeline de prospectos.
         list = list.filter(function (n) { return !!n.prospect_meta; });
@@ -6164,7 +6176,8 @@
       });
     }
 
-    function renderAreas() {      if (!els.areas) return;
+    function renderAreas() {
+      if (!els.areas) return;
       var base = st.notes.filter(function (n) { return !n.deleted_at || st.status === 'trash'; });
       var counts = {};
       base.forEach(function (n) {
@@ -6174,15 +6187,19 @@
       });
       var keys = AREA_ORDER.filter(function (k) { return counts[k]; })
         .concat(Object.keys(counts).filter(function (k) { return AREA_ORDER.indexOf(k) === -1; }));
-      // Si el área elegida quedó sin notas, se vuelve a «Todas».
+      // Si el área elegida quedó sin notas, se vuelve a «Otras áreas».
       if (st.area !== 'all' && !counts[st.area]) st.area = 'all';
+      var otherCount = base.filter(function (n) {
+        var a = areaOf(n);
+        return a !== 'admin' && a !== 'marketing';
+      }).length;
       var chip = function (key, label, icon, color, n) {
         var on = st.area === key;
         return '<button type="button" class="np-area' + (on ? ' on' : '') + '" role="tab" aria-selected="' + on + '" data-area="' + escapeHtml(key) + '" style="--area:' + color + '">' +
           '<span class="np-area-ic ' + icon + '" aria-hidden="true"></span><span class="np-area-name">' + escapeHtml(label) + '</span>' +
           '<span class="np-area-n">' + n + '</span></button>';
       };
-      els.areas.innerHTML = chip('all', 'Todas las áreas', 'ri-apps-2-line', '#045474', base.length) +
+      els.areas.innerHTML = chip('all', 'Otras áreas', 'ri-apps-2-line', '#045474', otherCount) +
         keys.map(function (k) { var i = areaInfo(k); return chip(k, i.label, i.icon, i.color, counts[k]); }).join('');
       els.areas.hidden = base.length === 0;
       Array.prototype.forEach.call(els.areas.querySelectorAll('.np-area'), function (b) {
@@ -6557,6 +6574,8 @@
         var cnt = trashBtn.querySelector('.np-trash-count');
         if (cnt) cnt.textContent = s.trash ? String(s.trash) : '';
       }
+      var emptyTrashBtn = root.querySelector('#notes-empty-trash');
+      if (emptyTrashBtn) emptyTrashBtn.hidden = !(st.status === 'trash' && st.supervisor);
     }
 
     function renderActive() {
@@ -7200,6 +7219,19 @@
     if (trashToggle) trashToggle.addEventListener('click', function () {
       st.status = st.status === 'trash' ? 'pending' : 'trash';
       loadNotes();
+    });
+    var emptyTrashBtn = root.querySelector('#notes-empty-trash');
+    if (emptyTrashBtn) emptyTrashBtn.addEventListener('click', function () {
+      if (!confirm('¿Vaciar la papelera?\nSe eliminarán definitivamente todas las notas eliminadas. Esta acción no se puede deshacer.')) return;
+      emptyTrashBtn.disabled = true;
+      api('/notes/trash', { method: 'DELETE' })
+        .then(function (d) {
+          toast(d.deleted ? ('Papelera vaciada: ' + d.deleted + ' nota(s) eliminada(s)') : 'La papelera ya estaba vacía');
+          st.status = 'pending';
+          loadNotes();
+        })
+        .catch(function (e) { toast(e.message, true); })
+        .finally(function () { emptyTrashBtn.disabled = false; });
     });
     // En vivo: lo que el equipo registra o completa aparece sin recargar.
     // Si llega un aviso con un arrastre activo, se espera: redibujar el

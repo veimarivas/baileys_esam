@@ -198,6 +198,8 @@ export function renderNotesPage(opts: { focusId?: number; status?: string; marke
           <label class="np-mine"><input type="checkbox" class="form-check-input" id="notes-assigned" /> Asignadas a mí</label>
           <button type="button" id="notes-trash" class="np-trash-btn" aria-pressed="false" title="Notas eliminadas (se pueden restaurar)">
             <span class="ri-delete-bin-6-line" aria-hidden="true"></span> Papelera <span class="np-trash-count"></span></button>
+          <button type="button" id="notes-empty-trash" class="np-trash-btn is-danger" title="Eliminar definitivamente todas las notas de la papelera" hidden>
+            <span class="ri-delete-bin-2-line" aria-hidden="true"></span> Vaciar papelera</button>
         </div>
         <div id="np-areas" class="np-areas" role="tablist" aria-label="Área"></div>
         <div id="np-team-areas" class="np-advisors" role="tablist" aria-label="Áreas del equipo" hidden></div>

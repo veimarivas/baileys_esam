@@ -4279,6 +4279,47 @@ html:has(.ab-page), body:has(.ab-page) { overflow-x: clip; }
 .adm-raw code { font-size: 0.68rem; overflow-wrap: anywhere; }
 .adm-more { display: flex; justify-content: center; padding-top: 0.75rem; }
 
+/* Usuarios: pestañas por área */
+.ab-user-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0.3rem;
+  margin-bottom: 0.9rem;
+  border: 1px solid var(--esam-line);
+  border-radius: 0.7rem;
+  background: var(--esam-surface-2);
+}
+.ab-user-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.42rem 0.75rem;
+  border-radius: 0.5rem;
+  color: var(--esam-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+.ab-user-tab b {
+  min-width: 1.35rem;
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  background: var(--esam-surface-3);
+  color: inherit;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-align: center;
+}
+.ab-user-tab:hover { color: var(--ab-brand); background: var(--esam-surface); }
+.ab-user-tab.on {
+  background: var(--esam-surface);
+  color: var(--ab-brand);
+  box-shadow: 0 2px 8px -6px rgba(15, 23, 42, 0.45);
+}
+.ab-user-tab.on b { background: var(--ab-brand-soft); color: var(--ab-brand); }
+
 /* Usuarios */
 .adm-sub { font-size: 0.7rem; color: var(--esam-muted); margin-top: 0.15rem; }
 .adm-line { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; }
@@ -4834,10 +4875,35 @@ html[data-bs-theme="dark"] .tpl-phone { background: #0b141a; }
 .pl-col-doing { --stage: #2563eb; }
 .pl-col-contacted { --stage: #d97706; }
 .pl-col-done { --stage: #0e9f6e; }
+/* Pipeline de Marketing (estado comercial del prospecto) */
+.pl-col-nuevo { --stage: #64748b; }
+.pl-col-contactado { --stage: #2563eb; }
+.pl-col-interesado { --stage: #d97706; }
+.pl-col-no_interesado { --stage: #dc2626; }
+.pl-col-inscrito { --stage: #0e9f6e; }
 html[data-bs-theme="dark"] .pl-col-todo { --stage: #94a3b8; }
 html[data-bs-theme="dark"] .pl-col-doing { --stage: #60a5fa; }
 html[data-bs-theme="dark"] .pl-col-contacted { --stage: #fbbf24; }
 html[data-bs-theme="dark"] .pl-col-done { --stage: #34d399; }
+html[data-bs-theme="dark"] .pl-col-nuevo { --stage: #94a3b8; }
+html[data-bs-theme="dark"] .pl-col-contactado { --stage: #60a5fa; }
+html[data-bs-theme="dark"] .pl-col-interesado { --stage: #fbbf24; }
+html[data-bs-theme="dark"] .pl-col-no_interesado { --stage: #f87171; }
+html[data-bs-theme="dark"] .pl-col-inscrito { --stage: #34d399; }
+.pl-board-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  margin-bottom: 0.75rem;
+  padding: 0.65rem 0.85rem;
+  border: 1px solid var(--esam-line);
+  border-radius: 0.65rem;
+  background: var(--esam-surface-2);
+  color: var(--esam-muted);
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+.pl-board-note .ri-information-line { color: var(--ab-brand); margin-top: 0.1rem; }
 
 /* Columna destino: resaltado cuando hay una tarjeta encima */
 .pl-col.over,

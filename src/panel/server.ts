@@ -155,10 +155,10 @@ const INBOX_WHERE = `chat_id NOT LIKE '%@broadcast' AND chat_id NOT LIKE '%@news
  * listado agrupado por fecha y gestor de etiquetas en la columna lateral.
  * El contenido lo arma `initNotes()` en public/app.js.
  */
-export function renderNotesPage(opts: { focusId?: number; status?: string } = {}): string {
+export function renderNotesPage(opts: { focusId?: number; status?: string; marketingAsesor?: boolean } = {}): string {
   const focus = opts.focusId && opts.focusId > 0 ? String(opts.focusId) : '';
   const status = opts.status && opts.status !== 'all' ? opts.status : '';
-  return `<div class="notes-page" id="notes-page" data-focus="${esc(focus)}" data-status="${esc(status)}">
+  return `<div class="notes-page" id="notes-page" data-focus="${esc(focus)}" data-status="${esc(status)}" data-marketing-asesor="${opts.marketingAsesor ? '1' : '0'}">
     <div class="np-sections" role="tablist" aria-label="Sección de notas">
       <button type="button" class="np-section is-on" data-notes-section="notes" role="tab" aria-selected="true">
         <span class="ri-sticky-note-line" aria-hidden="true"></span> Notas y tareas
@@ -705,16 +705,19 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
           ['Zona horaria', esc(APP_TIMEZONE)],
         ])}</div></details>`;
       const diagnosis = session ? connectionDiagnosis(await diagnosisFor(session)) : '';
-      const body = `${session ? `${sectionHead('ri-traffic-light-line', 'Salud de tu número', '¿Está en condiciones de enviar? Abrí cada punto para ver qué se midió y qué hacer.')}${lineVerdictCard(lineVerdict(session))}` : ''}
-      ${sectionHead('ri-plug-line', 'Conexión con WhatsApp', 'Estado de la vinculación, diagnóstico y herramientas para resolver problemas.')}
+      const health = session
+        ? `<div class="mt-4">${sectionHead('ri-traffic-light-line', 'Salud de tu número', '¿Está en condiciones de enviar? Abrí cada punto para ver qué se midió y qué hacer.')}${lineVerdictCard(lineVerdict(session))}</div>`
+        : '';
+      const body = `${sectionHead('ri-plug-line', 'Conexión con WhatsApp', 'Estado de la vinculación, diagnóstico y herramientas para resolver problemas.')}
       <div class="row g-3">
         <div class="col-lg-7">${connectionCard(session, session?.owner_name ?? undefined)}</div>
         <div class="col-lg-5">${diagnosis}</div>
       </div>
-      ${connectionHelp()}
-      ${admin ? `${linesCard}<div class="row g-3 mt-0"><div class="col-lg-7">${linesHealthCard(lineIssues())}</div><div class="col-lg-5">${gatewayCard}</div></div>` : ''}`;
+      ${health}
+      <div class="mt-4">${sectionHead('ri-question-answer-line', 'Ayuda y buenas prácticas', 'Problemas frecuentes, cómo resolverlos y consejos para cuidar el número.')}${connectionHelp()}</div>
+      ${admin ? `<div class="mt-4">${linesCard}<div class="row g-3 mt-0"><div class="col-lg-7">${linesHealthCard(lineIssues())}</div><div class="col-lg-5">${gatewayCard}</div></div></div>` : ''}`;
       sendPage(req, res, 'Conexión', 'settings', body, {
-        subtitle: 'Tu número de WhatsApp: si está sano para enviar, cómo está la conexión y qué hacer si algo falla.',
+        subtitle: 'Primero revisá tu conexión de WhatsApp; debajo encontrás la salud del número, la ayuda y las herramientas de administración.',
         restrictToSettings: !isConnected(req.user!),
       });
     }),
@@ -1719,12 +1722,20 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
 
   // ── Notas internas (todas las notas + etiquetas) ────────────────────────────
   const sendNotesPage = (req: AuthedRequest, res: Response, opts: { focusId?: number; status?: string } = {}): void => {
-    sendPage(req, res, 'Notas y tareas', 'conversations', renderNotesPage(opts), {
-      subtitle: esamEsAdmin(req.user!)
-        ? 'Notas, tareas y derivaciones de todo el equipo, en lista o en pipeline por etapas.'
-        : esamSupervisaArea(req.user!) === 'marketing'
-          ? 'Tus notas y el seguimiento de todo Marketing (prospectos de cada asesor), en lista o en pipeline.'
-          : 'Tus notas, tareas y lo que te derivaron, en lista o en pipeline por etapas.',
+    const user = req.user!;
+    const esAsesorMarketing = user.source === 'cronogramas'
+      && esamRoles(user).includes('Asesor de Marketing')
+      && esamSupervisaArea(user) !== 'marketing'
+      && !esamEsAdmin(user);
+    const subtitle = esamEsAdmin(user)
+      ? 'Notas, tareas y derivaciones de todo el equipo, en lista o en pipeline por etapas.'
+      : esamSupervisaArea(user) === 'marketing'
+        ? 'Tus notas y el seguimiento de todo Marketing (prospectos de cada asesor), en lista o en pipeline.'
+        : esAsesorMarketing
+          ? 'Tus prospectos de Marketing y su pipeline por estado comercial (Nuevo, Contactado, Interesado, No interesado e Inscrito).'
+          : 'Tus notas, tareas y lo que te derivaron, en lista o en pipeline por etapas.';
+    sendPage(req, res, 'Notas y tareas', 'conversations', renderNotesPage({ ...opts, marketingAsesor: esAsesorMarketing }), {
+      subtitle,
       activeHref: '/notes',
     });
   };

@@ -6004,7 +6004,8 @@
     var st = { status: STATUS.some(function (x) { return x.key === initialStatus; }) ? initialStatus : 'pending', tag: null, tags: [], colors: ['#045474'], color: '#045474', notes: [], stats: null, managing: false, view: 'list', area: 'all', advisor: 0, supervisor: false, supervisorArea: null, section: 'notes', modules: [], modulesPending: 0, modulesLoaded: false, modulesAdmin: false, moduleFilter: 'pending', moduleSearch: '' };
     try { if (localStorage.getItem('notes-view') === 'board') st.view = 'board'; } catch (_) {}
     try { if (localStorage.getItem('notes-section') === 'modules') st.section = 'modules'; } catch (_) {}
-    try { st.area = localStorage.getItem('notes-area') || 'all'; } catch (_) {}
+    var defaultArea = root.getAttribute('data-marketing-asesor') === '1' ? 'marketing' : 'all';
+    try { st.area = localStorage.getItem('notes-area') || defaultArea; } catch (_) { st.area = defaultArea; }
     st.group = 'estado';
     try { st.group = localStorage.getItem('notes-group') || 'estado'; } catch (_) {}
     els.group = root.querySelector('#notes-group');
@@ -6042,7 +6043,12 @@
     }
     function visibleNotes() {
       var list = st.area === 'all' ? st.notes : st.notes.filter(function (n) { return areaOf(n) === st.area; });
-      if (st.area === 'marketing' && st.advisor) list = list.filter(function (n) { return n.user_id === st.advisor; });
+      if (st.area === 'marketing') {
+        // El asesor ve solo sus prospectos; la supervisión y el Super Admin ven
+        // todo marketing (y pueden filtrar por asesor).
+        if (!showAdvisor()) list = list.filter(function (n) { return !!n.prospect_meta; });
+        if (st.advisor) list = list.filter(function (n) { return n.user_id === st.advisor; });
+      }
       return list;
     }
     // Quien supervisa ve el asesor de cada prospecto en la tarjeta.
@@ -6088,7 +6094,11 @@
       if (!els.areas) return;
       var base = st.notes.filter(function (n) { return !n.deleted_at || st.status === 'trash'; });
       var counts = {};
-      base.forEach(function (n) { var k = areaOf(n); counts[k] = (counts[k] || 0) + 1; });
+      base.forEach(function (n) {
+        var k = areaOf(n);
+        if (k === 'marketing' && !showAdvisor() && !n.prospect_meta) return;
+        counts[k] = (counts[k] || 0) + 1;
+      });
       var keys = AREA_ORDER.filter(function (k) { return counts[k]; })
         .concat(Object.keys(counts).filter(function (k) { return AREA_ORDER.indexOf(k) === -1; }));
       // Si el área elegida quedó sin notas, se vuelve a «Todas».
@@ -6518,16 +6528,15 @@
         return { key: 'a' + a, title: i.label, sort: String(pos === -1 ? 50 : pos).padStart(2, '0') + a, color: i.color, icon: i.icon, tone: 'area' };
       }
       if (g === 'etapa') {
-        var sk = stageOf(n);
-        var sg = STAGES[STAGE_KEYS.indexOf(sk)];
-        return { key: 's' + sk, title: sg.label, sort: String(STAGE_KEYS.indexOf(sk)), tone: 'st-' + sk, icon: sg.icon };
+        var sk = currentStageOf(n);
+        var info = stageInfo(sk);
+        return { key: 's' + sk, title: info.stage.label, sort: String(info.index), tone: 'st-' + sk, icon: info.stage.icon };
       }
       return null;
     }
     function stageTag(n) {
-      var sk = stageOf(n);
-      var sg = STAGES[STAGE_KEYS.indexOf(sk)];
-      return { key: sk, label: sg.label, icon: sg.icon };
+      var info = stageInfo(currentStageOf(n));
+      return { key: info.stage.key, label: info.stage.label, icon: info.stage.icon };
     }
 
     function groupKey(n) {
@@ -6663,6 +6672,41 @@
       { key: 'done', label: 'Resuelta', icon: 'ri-check-double-line', hint: 'Cerradas en los últimos 14 días.' },
     ];
     var STAGE_KEYS = STAGES.map(function (s) { return s.key; });
+    // Pipeline específico de Marketing: el estado comercial del prospecto que
+    // llega desde Cronogramas. Es de solo lectura: se actualiza desde allá.
+    var MARKETING_STAGES = [
+      { key: 'nuevo', label: 'Nuevo', icon: 'ri-user-add-line', hint: 'Prospecto registrado. Todavía no se contactó.' },
+      { key: 'contactado', label: 'Contactado', icon: 'ri-phone-line', hint: 'Ya hubo comunicación; falta avanzar en el interés.' },
+      { key: 'interesado', label: 'Interesado', icon: 'ri-star-line', hint: 'Mostró interés; hacer seguimiento y cerrar.' },
+      { key: 'no_interesado', label: 'No interesado', icon: 'ri-close-circle-line', hint: 'Descartado o sin interés en el programa.' },
+      { key: 'inscrito', label: 'Inscrito', icon: 'ri-check-double-line', hint: 'Prospecto convertido en inscrito.' },
+    ];
+
+    function activeStages() {
+      return st.area === 'marketing' ? MARKETING_STAGES : STAGES;
+    }
+
+    function stageInfo(key) {
+      var stages = activeStages();
+      for (var i = 0; i < stages.length; i++) {
+        if (stages[i].key === key) return { stage: stages[i], index: i };
+      }
+      return { stage: stages[0], index: 0 };
+    }
+
+    function marketingStageOf(n) {
+      var p = NoteKit.prospectOf(n);
+      if (p && p.estado && MARKETING_STAGES.some(function (s) { return s.key === p.estado; })) return p.estado;
+      // Notas de marketing que no son prospectos: se ubican según la etapa general.
+      var g = stageOf(n);
+      if (g === 'done') return 'inscrito';
+      if (g === 'contacted' || g === 'doing') return 'contactado';
+      return 'nuevo';
+    }
+
+    function currentStageOf(n) {
+      return st.area === 'marketing' ? marketingStageOf(n) : stageOf(n);
+    }
     // Estado del tablero: instancias activas, token de render y si hay un
     // arrastre en curso (mientras arrastra no se refresca desde el servidor).
     var boardSortables = [];
@@ -6701,7 +6745,12 @@
       return (n.assigned_to && n.seen_at) ? 'doing' : 'todo';
     }
 
-    function canMove(n) { return !!(n.can_edit || n.assigned_to_me); }
+    function canMove(n) {
+      // El pipeline de Marketing refleja el estado comercial de Cronogramas:
+      // no se arrastra desde acá.
+      if (st.area === 'marketing') return false;
+      return !!(n.can_edit || n.assigned_to_me);
+    }
 
     function boardCard(n) {
       var due = n.due_at ? NoteKit.dueState(n) : null;
@@ -6709,7 +6758,9 @@
       var text = (n.note_text || (n.audio_path ? 'Nota de voz' : '')).replace(/\s+/g, ' ');
       var tags = (n.tags || []).map(function (t) { return '<span class="pl-tag" style="--tag:' + t.color + '" title="' + escapeHtml(t.name) + '">' + escapeHtml(t.name) + '</span>'; }).join('');
       var movable = canMove(n);
-      var idx = STAGE_KEYS.indexOf(stageOf(n));
+      var info = stageInfo(currentStageOf(n));
+      var idx = info.index;
+      var stages = activeStages();
       return '<article class="pl-card pl-has-area' + (due === 'overdue' && !n.done_at ? ' is-overdue' : '') + (NoteKit.isPinned(n) && !n.done_at ? ' is-pinned' : '') +
           (movable ? '' : ' is-locked') + '"' +
           ' style="--area:' + areaInfo(areaOf(n)).color + '"' +
@@ -6735,8 +6786,8 @@
         '</div>' +
         (movable
           ? '<div class="pl-move">' +
-              (idx > 0 ? '<button type="button" class="pl-mv" data-to="' + STAGE_KEYS[idx - 1] + '" title="Mover a «' + STAGES[idx - 1].label + '»"><span class="ri-arrow-left-s-line"></span></button>' : '<span></span>') +
-              (idx < STAGES.length - 1 ? '<button type="button" class="pl-mv pl-mv-next" data-to="' + STAGE_KEYS[idx + 1] + '">' + STAGES[idx + 1].label + ' <span class="ri-arrow-right-s-line"></span></button>' : '') +
+              (idx > 0 ? '<button type="button" class="pl-mv" data-to="' + stages[idx - 1].key + '" title="Mover a «' + stages[idx - 1].label + '»"><span class="ri-arrow-left-s-line"></span></button>' : '<span></span>') +
+              (idx < stages.length - 1 ? '<button type="button" class="pl-mv pl-mv-next" data-to="' + stages[idx + 1].key + '">' + stages[idx + 1].label + ' <span class="ri-arrow-right-s-line"></span></button>' : '') +
             '</div>'
           : '') +
       '</article>';
@@ -6745,31 +6796,45 @@
     function renderBoard() {
       killBoardDrag();
       var token = ++boardToken;
+      var marketing = st.area === 'marketing';
+      var stages = activeStages();
+      var keys = stages.map(function (s) { return s.key; });
       var cutoff = Date.now() - 14 * 86400000;
       var cols = {};
-      STAGE_KEYS.forEach(function (k) { cols[k] = []; });
+      keys.forEach(function (k) { cols[k] = []; });
       visibleNotes().forEach(function (n) {
         if (n.deleted_at) return;
-        var k = stageOf(n);
-        if (k === 'done' && new Date(n.done_at).getTime() < cutoff) return;
+        var k = currentStageOf(n);
+        if (keys.indexOf(k) === -1) k = keys[0];
+        if (!marketing && k === 'done' && new Date(n.done_at).getTime() < cutoff) return;
         cols[k].push(n);
       });
       // Dentro de cada columna: importantes y vencidas arriba, luego por fecha.
       var rank = function (n) { return (NoteKit.isPinned(n) ? 0 : 2) + (n.due_at && NoteKit.dueState(n) === 'overdue' ? 0 : 1); };
-      STAGE_KEYS.forEach(function (k) {
+      keys.forEach(function (k) {
         cols[k].sort(function (a, b) {
-          if (k === 'done') return String(b.done_at).localeCompare(String(a.done_at));
+          if (!marketing && k === 'done') return String(b.done_at).localeCompare(String(a.done_at));
+          if (marketing && (k === 'inscrito' || k === 'no_interesado')) {
+            return String(b.updated_at || b.done_at || '').localeCompare(String(a.updated_at || a.done_at || ''));
+          }
           return rank(a) - rank(b) || String(a.due_at || '9999').localeCompare(String(b.due_at || '9999'));
         });
       });
-      els.board.innerHTML = STAGES.map(function (s) {
+      var boardNote = marketing
+        ? '<div class="pl-board-note"><span class="ri-information-line" aria-hidden="true"></span>' +
+            (showAdvisor()
+              ? 'El estado comercial se actualiza desde Cronogramas. Podés filtrar por asesor para revisar su pipeline.'
+              : 'El estado comercial se actualiza desde Cronogramas. Acá ves el seguimiento de tus prospectos.') +
+          '</div>'
+        : '';
+      els.board.innerHTML = boardNote + stages.map(function (s) {
         var list = cols[s.key];
         return '<section class="pl-col pl-col-' + s.key + '" data-stage="' + s.key + '">' +
           '<header class="pl-col-head"><span class="pl-col-ic ' + s.icon + '" aria-hidden="true"></span>' +
             '<span class="pl-col-title">' + s.label + '</span><span class="pl-col-count">' + list.length + '</span></header>' +
           '<p class="pl-col-hint">' + s.hint + '</p>' +
           '<div class="pl-col-body">' + (list.length ? list.map(boardCard).join('')
-            : '<div class="pl-empty"><span class="ri-drag-drop-line" aria-hidden="true"></span><b>Arrastrá una nota aquí</b></div>') + '</div>' +
+            : '<div class="pl-empty"><span class="ri-drag-drop-line" aria-hidden="true"></span><b>' + (marketing ? 'Sin prospectos en esta etapa' : 'Arrastrá una nota aquí') + '</b></div>') + '</div>' +
         '</section>';
       }).join('');
       bindBoard(token);
@@ -6910,6 +6975,7 @@
 
     function bindBoard(token) {
       bindMoveButtons();
+      if (st.area === 'marketing') return;
       if (window.Sortable) { bindSortableBoard(); return; }
       loadSortable().then(function (ok) {
         if (token !== boardToken) return;   // el tablero se volvió a dibujar

@@ -6,7 +6,7 @@ import { emptyState, fmtDate, initials } from './views.js';
 import { auditUrl, positiveInt, templatesUrl, type AuditCatSlug } from './urls.js';
 import { setFlash } from './flash.js';
 import { pageHtml, sendPage } from './page.js';
-import { esamEsAdmin, esamRoles, listUsers, type UserRow } from '../auth/users.js';
+import { esamAreas, esamEsAdmin, esamRoles, listUsers, type UserRow } from '../auth/users.js';
 import { lastUseByUser } from '../core/user-activity.js';
 import { audit } from '../core/webhooks.js';
 import {
@@ -350,10 +350,29 @@ const SESSION_STATUS: Record<string, { label: string; tone: string }> = {
 
 const INACTIVE_DAYS = 30;
 
+const USER_AREA_TABS: Array<{ key: string; label: string }> = [
+  { key: 'admin', label: 'Administración' },
+  { key: 'academico', label: 'Académico' },
+  { key: 'contabilidad', label: 'Contabilidad' },
+  { key: 'marketing', label: 'Marketing' },
+  { key: 'consulta', label: 'Consulta' },
+];
+
+/** Áreas de un usuario: su área de cronogramas + las áreas de sus roles. */
+function userAreas(u: UserRow): string[] {
+  const areas = new Set<string>();
+  if (u.source === 'local') areas.add('admin');
+  if (u.esam_area) areas.add(String(u.esam_area).toLowerCase());
+  for (const area of esamAreas(u)) areas.add(area);
+  return [...areas];
+}
+
 function renderUsers(req: Request, sessions: SessionRow[]): string {
   const users = listUsers();
-  const text = q(req, 'q').toLowerCase();
+  const rawText = q(req, 'q');
+  const text = rawText.toLowerCase();
   const filter = q(req, 'f');
+  const area = q(req, 'area') || 'all';
   const since = new Date(Date.now() - 30 * 86_400_000).toISOString();
   const responses = new Map(
     all<{ uid: number; c: number; chats: number }>(
@@ -377,8 +396,18 @@ function renderUsers(req: Request, sessions: SessionRow[]): string {
   };
   const isInactive = (u: UserRow) => !u.last_login_at || Date.now() - Date.parse(u.last_login_at) > INACTIVE_DAYS * 86_400_000;
 
+  const areaCounts = new Map<string, number>();
+  const sinArea = users.filter((u) => userAreas(u).length === 0).length;
+  for (const u of users) {
+    for (const a of userAreas(u)) areaCounts.set(a, (areaCounts.get(a) ?? 0) + 1);
+  }
+
   const rows = users.filter((u) => {
     if (text && ![u.name, u.username, u.email, u.esam_area].some((v) => (v ?? '').toLowerCase().includes(text))) return false;
+    if (area !== 'all') {
+      const areas = userAreas(u);
+      if (area === 'sin-area' ? areas.length > 0 : !areas.includes(area)) return false;
+    }
     const line = lineOf(u);
     if (filter === 'admins' && !esamEsAdmin(u)) return false;
     if (filter === 'inactivos' && !isInactive(u)) return false;
@@ -392,8 +421,35 @@ function renderUsers(req: Request, sessions: SessionRow[]): string {
   const connected = users.filter((u) => lineOf(u)?.session?.status === 'ready').length;
   const noLine = users.filter((u) => u.source !== 'local' && lineOf(u)?.session?.status !== 'ready').length;
   const unauthorized = users.filter((u) => !u.esam_autorizado).length;
-  const chip = (id: string, label: string, n: number) =>
-    `<a class="ab-filter ${filter === id ? 'on' : ''}" href="/users${id || text ? `?${new URLSearchParams({ ...(id ? { f: id } : {}), ...(text ? { q: text } : {}) })}` : ''}">${esc(label)} <span>${n}</span></a>`;
+  const chip = (id: string, label: string, n: number) => {
+    const params = new URLSearchParams();
+    if (id) params.set('f', id);
+    if (rawText) params.set('q', rawText);
+    if (area !== 'all') params.set('area', area);
+    const query = params.toString();
+
+    return `<a class="ab-filter ${filter === id ? 'on' : ''}" href="/users${query ? `?${query}` : ''}">${esc(label)} <span>${n}</span></a>`;
+  };
+
+  const areaHref = (key: string) => {
+    const params = new URLSearchParams();
+    if (key !== 'all') params.set('area', key);
+    if (filter) params.set('f', filter);
+    if (rawText) params.set('q', rawText);
+    const query = params.toString();
+
+    return `/users${query ? `?${query}` : ''}`;
+  };
+
+  const areaTabs = [
+    { key: 'all', label: 'Todas', count: users.length },
+    ...USER_AREA_TABS.map((t) => ({ ...t, count: areaCounts.get(t.key) ?? 0 })),
+    ...(sinArea ? [{ key: 'sin-area', label: 'Sin área', count: sinArea }] : []),
+  ]
+    .filter((t) => t.key !== 'sin-area' || t.count > 0)
+    .map((t) => `<a class="ab-user-tab${area === t.key ? ' on' : ''}" href="${areaHref(t.key)}" role="tab" aria-selected="${area === t.key ? 'true' : 'false'}">
+      <span>${esc(t.label)}</span><b>${t.count}</b></a>`)
+    .join('');
 
   const table = rows.length
     ? `<div class="adm-table-wrap"><table class="table table-hover align-middle mb-0 ab-table adm-users">
@@ -449,10 +505,12 @@ function renderUsers(req: Request, sessions: SessionRow[]): string {
       ${kpi('ri-user-forbid-line', unauthorized ? 'danger' : 'mute', 'Sin autorizar', unauthorized, 'no pueden ingresar', unauthorized ? '/users?f=sin-autorizar' : undefined)}
     </div>
     <div class="card ab-card"><div class="card-body">
+      <div class="ab-user-tabs" role="tablist" aria-label="Filtrar usuarios por área">${areaTabs}</div>
       <div class="ab-bl-toolbar">
         <form method="get" action="/users" class="ab-search" role="search">
           ${filter ? `<input type="hidden" name="f" value="${esc(filter)}"/>` : ''}
-          <i class="ri-search-line"></i><input type="search" name="q" value="${esc(q(req, 'q'))}" placeholder="Buscar por nombre, usuario, correo o área…" aria-label="Buscar usuarios"/>
+          ${area !== 'all' ? `<input type="hidden" name="area" value="${esc(area)}"/>` : ''}
+          <i class="ri-search-line"></i><input type="search" name="q" value="${esc(rawText)}" placeholder="Buscar por nombre, usuario, correo o área…" aria-label="Buscar usuarios"/>
         </form>
         <div class="ab-filters">
           ${chip('', 'Todos', users.length)}

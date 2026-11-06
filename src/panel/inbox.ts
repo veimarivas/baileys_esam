@@ -41,7 +41,7 @@ import { personTagsByKeys, phoneKeyOf, setPersonName } from '../core/person.js';
 import { personSends } from '../core/person-sends.js';
 import { setConversationState, type ConversationStatus, type StateChange } from '../core/conversation-state.js';
 import * as directory from '../core/directory.js';
-import { teamMembers, teamTagFor } from '../core/team.js';
+import { teamMembers, teamTagFor, type TeamTag } from '../core/team.js';
 import {
   isNotificationCategory,
   listNotifications,
@@ -127,15 +127,31 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
     return note.user_id === user.id || esamEsAdmin(user);
   }
 
+  /** Compañero del equipo dueño de la conversación de una nota (o null). */
+  function teamForNote(note: { contact_phone?: string | null; chat_id?: string | null; contact_id?: number | null }): TeamTag | null {
+    let key: string | null = null;
+    if (note.contact_phone || note.chat_id) {
+      key = phoneKeyOf(note.contact_phone ?? note.chat_id ?? '');
+    } else if (note.contact_id) {
+      const c = get<{ phone_key: string | null; chat_id: string }>(
+        'SELECT phone_key, chat_id FROM contacts WHERE id = ?',
+        note.contact_id,
+      );
+      key = c?.phone_key ?? phoneKeyOf(c?.chat_id ?? '');
+    }
+    return teamTagFor(key);
+  }
+
   function withPermissions<T extends { user_id: number | null; assigned_to?: number | null }>(
     user: UserRow,
     note: T,
-  ): T & { can_edit: boolean; assigned_to_me: boolean } {
+  ): T & { can_edit: boolean; assigned_to_me: boolean; supervisor: boolean; team: TeamTag | null } {
     return {
       ...note,
       can_edit: canEditNote(user, note),
       assigned_to_me: !!note.assigned_to && note.assigned_to === user.id,
       supervisor: esamEsAdmin(user),
+      team: teamForNote(note as { contact_phone?: string | null; chat_id?: string | null; contact_id?: number | null }),
     };
   }
 
@@ -322,6 +338,7 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
             user_id: m.user_id,
             name: m.name,
             area: m.area,
+            area_key: m.area_key,
             phone: m.phone,
             line_ready: m.line_ready,
             conversation: conv ?? null,

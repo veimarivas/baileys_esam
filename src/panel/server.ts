@@ -191,6 +191,7 @@ export function renderNotesPage(opts: { focusId?: number; status?: string; marke
             <option value="mes">Agrupar: mes de seguimiento</option>
             <option value="registro">Agrupar: día de registro</option>
             <option value="area">Agrupar: área</option>
+            <option value="equipo">Agrupar: área del equipo</option>
             <option value="etapa">Agrupar: etapa</option>
           </select>
           <label class="np-mine"><input type="checkbox" class="form-check-input" id="notes-mine" /> Registradas por mí</label>
@@ -199,6 +200,7 @@ export function renderNotesPage(opts: { focusId?: number; status?: string; marke
             <span class="ri-delete-bin-6-line" aria-hidden="true"></span> Papelera <span class="np-trash-count"></span></button>
         </div>
         <div id="np-areas" class="np-areas" role="tablist" aria-label="Área"></div>
+        <div id="np-team-areas" class="np-advisors" role="tablist" aria-label="Áreas del equipo" hidden></div>
         <div class="np-legend" aria-label="Qué significan los colores">
           <span class="np-legend-t">Vigencia:</span>
           <span class="nk-vig is-overdue"><span class="ri-alarm-warning-line" aria-hidden="true"></span>Vencida</span>

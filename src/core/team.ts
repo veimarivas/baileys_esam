@@ -1,5 +1,5 @@
 import { all } from '../db/index.js';
-import { esamAreaLabel, type UserRow } from '../auth/users.js';
+import { esamAreas, esamAreaLabel, type UserRow } from '../auth/users.js';
 import { phoneKeyOf } from './person.js';
 
 /**
@@ -12,6 +12,8 @@ export interface TeamMember {
   user_id: number;
   name: string;
   area: string;
+  /** Clave del área (contabilidad, academico, marketing, admin, consulta). */
+  area_key: string;
   /** Número principal (dígitos, con 591). */
   phone: string;
   /** Todos los números conocidos del usuario (`phone_key`). */
@@ -25,6 +27,7 @@ export interface TeamTag {
   user_id: number;
   name: string;
   area: string;
+  area_key: string;
 }
 
 const TTL_MS = 60_000;
@@ -58,6 +61,7 @@ function load(): NonNullable<typeof cache> {
       user_id: u.id,
       name: (u.name ?? '').trim() || u.username || u.email || `Usuario ${u.id}`,
       area: esamAreaLabel(u),
+      area_key: (u.source === 'local' ? 'admin' : u.esam_area || esamAreas(u)[0] || '').toLowerCase(),
       phone: keys[0],
       keys,
       line_ready: own.some((s) => s.status === 'ready'),
@@ -81,5 +85,5 @@ export function teamMembers(): TeamMember[] {
 export function teamTagFor(key: string | null | undefined): TeamTag | null {
   if (!key) return null;
   const m = load().byKey.get(key);
-  return m ? { user_id: m.user_id, name: m.name, area: m.area } : null;
+  return m ? { user_id: m.user_id, name: m.name, area: m.area, area_key: m.area_key } : null;
 }

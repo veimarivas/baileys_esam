@@ -6001,7 +6001,7 @@
       moduleSummary: root.querySelector('#np-module-summary'),
       modulePendingTag: root.querySelector('#np-module-pending-tag'),
     };
-    var st = { status: STATUS.some(function (x) { return x.key === initialStatus; }) ? initialStatus : 'pending', tag: null, tags: [], colors: ['#045474'], color: '#045474', notes: [], stats: null, managing: false, view: 'list', area: 'all', advisor: 0, supervisor: false, supervisorArea: null, section: 'notes', modules: [], modulesPending: 0, modulesLoaded: false, modulesAdmin: false, moduleFilter: 'pending', moduleSearch: '' };
+    var st = { status: STATUS.some(function (x) { return x.key === initialStatus; }) ? initialStatus : 'pending', tag: null, tags: [], colors: ['#045474'], color: '#045474', notes: [], stats: null, managing: false, view: 'list', area: 'all', teamArea: '', advisor: 0, supervisor: false, supervisorArea: null, section: 'notes', modules: [], modulesPending: 0, modulesLoaded: false, modulesAdmin: false, moduleFilter: 'pending', moduleSearch: '' };
     try { if (localStorage.getItem('notes-view') === 'board') st.view = 'board'; } catch (_) {}
     try { if (localStorage.getItem('notes-section') === 'modules') st.section = 'modules'; } catch (_) {}
     var defaultArea = root.getAttribute('data-marketing-asesor') === '1' ? 'marketing' : 'all';
@@ -6013,8 +6013,13 @@
       if (!els.group.querySelector('option[value="' + st.group + '"]')) st.group = 'estado';
       els.group.value = st.group;
     }
+    if (st.area === 'admin' && st.group !== 'equipo') {
+      st.group = 'equipo';
+      if (els.group) els.group.value = 'equipo';
+    }
     els.board = root.querySelector('#np-board');
     els.areas = root.querySelector('#np-areas');
+    els.teamAreas = root.querySelector('#np-team-areas');
     // Filtro por asesor dentro de Marketing (gerencia, supervisión y Super Admin).
     if (els.areas) {
       els.advisors = document.createElement('div');
@@ -6036,18 +6041,42 @@
       '': { label: 'Sin área', icon: 'ri-inbox-line', color: '#64748b' },
     };
     var AREA_ORDER = ['academico', 'contabilidad', 'marketing', 'admin', 'consulta', ''];
+    // Sub-áreas del equipo para el apartado Administración.
+    var TEAM_AREA_INFO = {
+      contabilidad: { label: 'Contabilidad', icon: 'ri-money-dollar-circle-line', color: '#0e9f6e' },
+      academico: { label: 'Académico', icon: 'ri-graduation-cap-line', color: '#2563eb' },
+      marketing: { label: 'Marketing', icon: 'ri-megaphone-line', color: '#d97706' },
+      admin: { label: 'Administración', icon: 'ri-shield-user-line', color: '#7c3aed' },
+      consulta: { label: 'Consulta', icon: 'ri-question-answer-line', color: '#0891b2' },
+      '': { label: 'Equipo', icon: 'ri-team-line', color: '#64748b' },
+    };
+    var TEAM_AREA_ORDER = ['contabilidad', 'academico', 'marketing', 'admin', 'consulta', ''];
 
-    function areaOf(n) { return String(n.assigned_area || n.author_area || '').toLowerCase(); }
+    function areaOf(n) {
+      // Las conversaciones con compañeros del equipo son comunicación interna:
+      // van a Administración, no al área del autor.
+      if (n.team && n.team.area_key) return 'admin';
+      return String(n.assigned_area || n.author_area || '').toLowerCase();
+    }
+    function teamAreaInfo(key) {
+      return TEAM_AREA_INFO[key] || { label: key ? key.charAt(0).toUpperCase() + key.slice(1) : 'Equipo', icon: 'ri-team-line', color: '#475569' };
+    }
     function areaInfo(key) {
       return AREA_INFO[key] || { label: key.charAt(0).toUpperCase() + key.slice(1), icon: 'ri-team-line', color: '#475569' };
     }
     function visibleNotes() {
       var list = st.area === 'all' ? st.notes : st.notes.filter(function (n) { return areaOf(n) === st.area; });
       if (st.area === 'marketing') {
-        // El asesor ve solo sus prospectos; la supervisión y el Super Admin ven
-        // todo marketing (y pueden filtrar por asesor).
-        if (!showAdvisor()) list = list.filter(function (n) { return !!n.prospect_meta; });
+        // Marketing es exclusivamente el pipeline de prospectos.
+        list = list.filter(function (n) { return !!n.prospect_meta; });
         if (st.advisor) list = list.filter(function (n) { return n.user_id === st.advisor; });
+      }
+      if (st.area === 'admin' && st.teamArea) {
+        if (st.teamArea === '__none') {
+          list = list.filter(function (n) { return n.team && !n.team.area_key; });
+        } else {
+          list = list.filter(function (n) { return n.team && n.team.area_key === st.teamArea; });
+        }
       }
       return list;
     }
@@ -6090,13 +6119,57 @@
       });
     }
 
-    function renderAreas() {
-      if (!els.areas) return;
+    /* ── Áreas del equipo dentro de Administración ── */
+    function renderTeamAreas() {
+      if (!els.teamAreas) return;
+      if (st.area !== 'admin') {
+        els.teamAreas.hidden = true;
+        els.teamAreas.innerHTML = '';
+        st.teamArea = '';
+        return;
+      }
+
+      var base = st.notes.filter(function (n) {
+        return n.team && (!n.deleted_at || st.status === 'trash');
+      });
+      var counts = {};
+      base.forEach(function (n) {
+        var k = n.team.area_key || '__none';
+        counts[k] = (counts[k] || 0) + 1;
+      });
+      var keys = TEAM_AREA_ORDER.map(function (k) { return k || '__none'; }).filter(function (k) { return counts[k]; });
+      if (st.teamArea && !counts[st.teamArea]) st.teamArea = '';
+
+      var chip = function (id, label, n, icon, color) {
+        var on = st.teamArea === id;
+        return '<button type="button" class="np-advisor' + (on ? ' on' : '') + '" role="tab" aria-selected="' + on + '" data-team-area="' + escapeHtml(id) + '">' +
+          '<span class="np-advisor-all ' + icon + '" style="color:' + color + '" aria-hidden="true"></span>' +
+          '<span class="np-advisor-name">' + escapeHtml(label) + '</span><span class="np-advisor-n">' + n + '</span></button>';
+      };
+
+      els.teamAreas.innerHTML = '<span class="np-advisors-label"><span class="ri-team-line" aria-hidden="true"></span>Áreas del equipo</span>' +
+        chip('', 'Todas', base.length, 'ri-team-line', '#045474') +
+        keys.map(function (k) {
+          var info = teamAreaInfo(k === '__none' ? '' : k);
+          return chip(k, info.label, counts[k], info.icon, info.color);
+        }).join('');
+      els.teamAreas.hidden = false;
+
+      Array.prototype.forEach.call(els.teamAreas.querySelectorAll('.np-advisor'), function (b) {
+        b.addEventListener('click', function () {
+          st.teamArea = b.getAttribute('data-team-area') || '';
+          renderTeamAreas();
+          if (st.view === 'board') renderBoard(); else renderNotes();
+        });
+      });
+    }
+
+    function renderAreas() {      if (!els.areas) return;
       var base = st.notes.filter(function (n) { return !n.deleted_at || st.status === 'trash'; });
       var counts = {};
       base.forEach(function (n) {
         var k = areaOf(n);
-        if (k === 'marketing' && !showAdvisor() && !n.prospect_meta) return;
+        if (k === 'marketing' && !n.prospect_meta) return;
         counts[k] = (counts[k] || 0) + 1;
       });
       var keys = AREA_ORDER.filter(function (k) { return counts[k]; })
@@ -6116,15 +6189,30 @@
         b.addEventListener('click', function () {
           st.area = b.getAttribute('data-area');
           st.advisor = 0;
+          st.teamArea = '';
+          if (st.area === 'admin') {
+            st.group = 'equipo';
+            if (els.group) els.group.value = 'equipo';
+            try { localStorage.setItem('notes-group', st.group); } catch (_) {}
+          } else if (st.group === 'equipo') {
+            st.group = 'estado';
+            if (els.group) els.group.value = 'estado';
+            try { localStorage.setItem('notes-group', st.group); } catch (_) {}
+          }
           try { localStorage.setItem('notes-area', st.area); } catch (_) {}
           renderAreas();
           renderAdvisors();
+          renderTeamAreas();
           if (st.view === 'board') renderBoard(); else renderNotes();
         });
       });
     }
 
     function areaBadge(n) {
+      if (n.team) {
+        var t = teamAreaInfo(n.team.area_key || '');
+        return '<span class="np-area-badge" style="--area:' + t.color + '" title="Comunicación interna del equipo"><span class="ri-team-line" aria-hidden="true"></span>Administración · ' + escapeHtml(t.label) + '</span>';
+      }
       var i = areaInfo(areaOf(n));
       return '<span class="np-area-badge" style="--area:' + i.color + '" title="Área"><span class="' + i.icon + '" aria-hidden="true"></span>' + escapeHtml(i.label) + '</span>';
     }
@@ -6424,6 +6512,7 @@
         renderStats();
         renderAreas();
         renderAdvisors();
+        renderTeamAreas();
         if (st.view === 'board') renderBoard(); else renderNotes();
         markSeen();
       }).catch(function (e) {
@@ -6526,6 +6615,13 @@
         var i = areaInfo(a);
         var pos = AREA_ORDER.indexOf(a);
         return { key: 'a' + a, title: i.label, sort: String(pos === -1 ? 50 : pos).padStart(2, '0') + a, color: i.color, icon: i.icon, tone: 'area' };
+      }
+      if (g === 'equipo') {
+        if (!n.team) return { key: 't__none', title: 'Sin área del equipo', sort: '9999', tone: 'none' };
+        var tk = n.team.area_key || '__none';
+        var ti = teamAreaInfo(tk === '__none' ? '' : tk);
+        var tpos = TEAM_AREA_ORDER.map(function (k) { return k || '__none'; }).indexOf(tk);
+        return { key: 't' + tk, title: ti.label, sort: String(tpos === -1 ? 98 : tpos).padStart(2, '0') + tk, color: ti.color, icon: ti.icon, tone: 'area', sub: 'Comunicación interna' };
       }
       if (g === 'etapa') {
         var sk = currentStageOf(n);
@@ -6645,7 +6741,7 @@
         return '<section class="np-group np-group-' + (info ? 'custom' : byDue ? k : 'time') + '">' + title +
           '<div class="np-cards">' + list.map(function (n) {
             return NoteKit.cardHtml(n, {
-              showContact: true, areaBadge: st.area === 'all' ? areaBadge : null, showAdvisor: showAdvisor(),
+              showContact: true, areaBadge: (st.area === 'all' || st.area === 'admin') ? areaBadge : null, showAdvisor: showAdvisor(),
               area: areaInfo(areaOf(n)), stage: n.deleted_at ? null : stageTag(n), vigencia: !n.deleted_at,
             });
           }).join('') + '</div>' +
@@ -6777,7 +6873,7 @@
         (text ? '<div class="pl-text">' + escapeHtml(text.slice(0, 220)) + '</div>' : '') +
         (n.contact_result && n.contacted_at ? '<div class="pl-result"><span class="ri-chat-check-line"></span> ' + escapeHtml(n.contact_result.slice(0, 140)) + '</div>' : '') +
         (tags ? '<div class="pl-tags">' + tags + '</div>' : '') +
-        (st.area === 'all' ? '<div class="pl-area-row">' + areaBadge(n) + '</div>' : '') +
+        (st.area === 'all' || st.area === 'admin' ? '<div class="pl-area-row">' + areaBadge(n) + '</div>' : '') +
         '<div class="pl-vig">' + NoteKit.vigenciaHtml(n) + '</div>' +
         '<div class="pl-foot">' +
           (n.due_at ? '<span class="pl-due pl-due-date" title="Fecha de seguimiento"><span class="ri-calendar-event-line"></span> ' + escapeHtml(NoteKit.fmtDay(n.due_at) + (n.due_time ? ' · ' + n.due_time : '')) + '</span>' : '') +

@@ -221,6 +221,7 @@ export interface UpsertUser {
   username?: string | null;
   email?: string | null;
   password?: string | null;
+  passwordHash?: string | null;
   source?: string;
   autorizado?: boolean;
   area?: string | null;
@@ -246,7 +247,7 @@ export function upsertUser(input: UpsertUser): UserRow {
       input.name ?? 'Usuario ESAM',
       username || null,
       email,
-      bcrypt.hashSync(input.password || randomUUID(), 10),
+      input.passwordHash || bcrypt.hashSync(input.password || randomUUID(), 10),
       input.source ?? 'cronogramas',
       input.sourceUid ?? null,
       input.autorizado ? 1 : 0,
@@ -260,7 +261,7 @@ export function upsertUser(input: UpsertUser): UserRow {
     return user;
   }
 
-  const password = input.password ? bcrypt.hashSync(input.password, 10) : user.password;
+  const password = input.passwordHash || (input.password ? bcrypt.hashSync(input.password, 10) : user.password);
   run(
     `UPDATE users SET name = ?, username = COALESCE(NULLIF(?, ''), username), email = ?, password = ?,
        source = ?, source_uid = COALESCE(?, source_uid), esam_autorizado = ?, esam_area = ?, esam_numero = ?,

@@ -385,6 +385,7 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
             username,
             email: req.body?.email ?? null,
             password: req.body?.password ?? null,
+            passwordHash: typeof req.body?.password_hash === 'string' ? req.body.password_hash : null,
             source: 'cronogramas',
             autorizado: true,
             area: req.body?.area ?? null,

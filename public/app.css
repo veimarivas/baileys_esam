@@ -4853,10 +4853,19 @@ html[data-bs-theme="dark"] .tpl-phone { background: #0b141a; }
 .np-view-btn.on { background: var(--nk-surface); color: var(--nk-brand); box-shadow: var(--esam-shadow-xs); }
 .np-view-btn:focus-visible { outline: 2px solid var(--nk-brand); outline-offset: 1px; }
 
-/* Pipeline de seguimiento */
-.np-board { display: grid; grid-template-columns: repeat(4, minmax(230px, 1fr)); gap: 0.8rem; align-items: stretch; overflow-x: auto; padding-bottom: 0.5rem; }
+/* Pipeline de seguimiento: una fila de columnas con scroll horizontal. */
+.np-board { display: block; padding-bottom: 0; }
+.np-board-grid {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(230px, 1fr);
+  gap: 0.8rem;
+  align-items: stretch;
+  overflow-x: auto;
+  padding-bottom: 0.5rem;
+}
 @media (max-width: 991.98px) {
-  .np-board { grid-template-columns: repeat(4, minmax(250px, 80vw)); scroll-snap-type: x proximity; }
+  .np-board-grid { grid-auto-columns: minmax(250px, 80vw); scroll-snap-type: x proximity; }
   .pl-col { scroll-snap-align: start; }
 }
 .pl-col {
@@ -5075,7 +5084,7 @@ html[data-bs-theme="dark"] .pl-dialog textarea:focus { border-color: var(--brand
 html[data-bs-theme="dark"] .np-area { background: #1d2125; border-color: #2a2f34; color: #ced4da; }
 
 /* Pipeline: columnas con desplazamiento vertical propio cuando hay muchas notas */
-.notes-page .np-board { align-items: stretch; }
+.notes-page .np-board-grid { align-items: stretch; }
 .notes-page .pl-col { max-height: calc(100dvh - 250px); min-height: 260px; }
 .notes-page .pl-col-body { overflow-y: auto; min-height: 0; padding-right: 0.2rem; margin-right: -0.2rem; scrollbar-width: thin; overscroll-behavior: contain; }
 .notes-page .pl-col-body::-webkit-scrollbar { width: 6px; }
@@ -5240,13 +5249,13 @@ html[data-bs-theme="dark"] .batch-who { background: rgba(255, 255, 255, 0.05); }
 .notes-page.board-mode .np-side { display: none; }
 .notes-page.board-mode #np-modules-section .np-layout { grid-template-columns: minmax(0, 1fr) 290px; }
 .notes-page.board-mode #np-modules-section .np-side { display: block; }
-.notes-page.board-mode .np-board { grid-template-columns: repeat(4, minmax(240px, 1fr)); }
+.notes-page.board-mode .np-board-grid { grid-auto-columns: minmax(240px, 1fr); }
 @media (max-width: 1199.98px) {
   .notes-page.board-mode #np-modules-section .np-layout { grid-template-columns: 1fr; }
 }
-@media (max-width: 1199.98px) { .notes-page.board-mode .np-board { grid-template-columns: repeat(4, minmax(250px, 300px)); } }
-.np-board { scroll-snap-type: x proximity; }
-.np-board .pl-col { scroll-snap-align: start; }
+@media (max-width: 1199.98px) { .notes-page.board-mode .np-board-grid { grid-auto-columns: minmax(250px, 300px); } }
+.np-board-grid { scroll-snap-type: x proximity; }
+.np-board-grid .pl-col { scroll-snap-align: start; }
 
 /* Notas: secciones (notas / seguimiento de módulos) */
 .np-sections {

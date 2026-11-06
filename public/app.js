@@ -6827,7 +6827,7 @@
               : 'El estado comercial se actualiza desde Cronogramas. Acá ves el seguimiento de tus prospectos.') +
           '</div>'
         : '';
-      els.board.innerHTML = boardNote + stages.map(function (s) {
+      els.board.innerHTML = boardNote + '<div class="np-board-grid">' + stages.map(function (s) {
         var list = cols[s.key];
         return '<section class="pl-col pl-col-' + s.key + '" data-stage="' + s.key + '">' +
           '<header class="pl-col-head"><span class="pl-col-ic ' + s.icon + '" aria-hidden="true"></span>' +
@@ -6836,7 +6836,7 @@
           '<div class="pl-col-body">' + (list.length ? list.map(boardCard).join('')
             : '<div class="pl-empty"><span class="ri-drag-drop-line" aria-hidden="true"></span><b>' + (marketing ? 'Sin prospectos en esta etapa' : 'Arrastrá una nota aquí') + '</b></div>') + '</div>' +
         '</section>';
-      }).join('');
+      }).join('') + '</div>';
       bindBoard(token);
     }
 

@@ -1674,6 +1674,7 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
           <button type="button" class="cl-st" data-state="pending">En atención <b data-n="pending"></b></button>
           <button type="button" class="cl-st" data-state="closed">Resueltos</button>
         </div>
+        <div class="cl-state cl-team-areas" id="team-areas" role="tablist" aria-label="Áreas del equipo" hidden></div>
         <div class="chatlist-items" id="chatlist-items"></div>
       </aside>
       <section class="chat-col" id="chat-pane"></section>

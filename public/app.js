@@ -919,8 +919,14 @@
   /* ── Tarjetas de contacto compartido (una o varias) ── */
   function contactCardList(msg) {
     var meta = msg.meta || {};
-    var list = Array.isArray(meta.contacts) ? meta.contacts : [];
+    var list = Array.isArray(meta.contacts) ? meta.contacts.slice() : [];
     if (!list.length) list = [{ name: msg.body || 'Contacto', phone: null }];
+    // Mensajes antiguos pueden no traer el teléfono en los metadatos: si el
+    // cuerpo incluye el número, se rescata para mostrarlo en la tarjeta.
+    if (!list.some(function (c) { return c.phone; })) {
+      var match = String(msg.body || '').match(/(?:\+?\d[\d\s().-]{6,}\d)/);
+      if (match) list[0].phone = match[0].replace(/\D+/g, '');
+    }
     return list;
   }
 
@@ -2649,6 +2655,7 @@
       syntheticConv: null,
       participants: [],
       memberFilter: '',
+      teamArea: '',
       contactTab: 'info',
       contactGroups: null,
       contactGroupsLoading: false,
@@ -2669,6 +2676,7 @@
       clear: root.querySelector('#chat-clear'),
       tabs: root.querySelector('#chat-tabs'),
       stateBar: root.querySelector('#chat-state'),
+      teamAreas: root.querySelector('#team-areas'),
       pane: root.querySelector('#chat-pane'),
       contact: root.querySelector('#contact-pane'),
       rail: root.querySelector('#list-rail'),
@@ -3103,7 +3111,7 @@
     // ── Equipo: compañeros del sistema, siempre visibles ──
     function loadTeam() {
       return api('/inbox/team')
-        .then(function (d) { state.team = (d && d.members) || []; renderTabs(); if (state.tab === 'team') renderList(); })
+        .then(function (d) { state.team = (d && d.members) || []; renderTabs(); renderTeamAreas(); if (state.tab === 'team') renderList(); })
         .catch(function () {});
     }
 
@@ -3135,9 +3143,48 @@
       });
     }
 
+    var TEAM_AREA_TABS = [
+      { key: 'academico', label: 'Académico' },
+      { key: 'contabilidad', label: 'Contable' },
+      { key: 'marketing', label: 'Marketing' },
+    ];
+
+    function renderTeamAreas() {
+      var box = els.teamAreas;
+      if (!box) return;
+      if (state.tab !== 'team') {
+        box.hidden = true;
+        box.innerHTML = '';
+        return;
+      }
+      var base = state.team || [];
+      var counts = {};
+      base.forEach(function (m) {
+        var k = m.area_key || '';
+        counts[k] = (counts[k] || 0) + 1;
+      });
+      var chip = function (key, label, n) {
+        var on = (state.teamArea || '') === key;
+        return '<button type="button" class="cl-st' + (on ? ' on' : '') + '" data-team-area="' + escapeHtml(key) + '" role="tab" aria-selected="' + on + '">' +
+          escapeHtml(label) + (n ? ' <b>' + n + '</b>' : '') + '</button>';
+      };
+      box.innerHTML = chip('', 'Todos', base.length) +
+        TEAM_AREA_TABS.map(function (t) { return chip(t.key, t.label, counts[t.key] || 0); }).join('');
+      box.hidden = false;
+      Array.prototype.forEach.call(box.querySelectorAll('[data-team-area]'), function (b) {
+        b.addEventListener('click', function () {
+          state.teamArea = b.getAttribute('data-team-area') || '';
+          renderTeamAreas();
+          renderList();
+        });
+      });
+    }
+
     function renderTeamList() {
       var s = state.search.trim().toLowerCase();
+      var area = state.teamArea || '';
       var rows = (state.team || []).filter(function (m) {
+        if (area && m.area_key !== area) return false;
         return !s || (m.name + ' ' + m.area + ' ' + m.phone).toLowerCase().indexOf(s) !== -1;
       }).map(function (m) { return { m: m, c: teamConversation(m) }; });
       // Con mensajes sin leer arriba, luego por actividad reciente y después por nombre.
@@ -3240,7 +3287,9 @@
         }
       } else if (state.tab === 'team') {
         var qTeam = state.search.trim().toLowerCase();
+        var teamArea = state.teamArea || '';
         var team = (state.team || []).filter(function (m) {
+          if (teamArea && m.area_key !== teamArea) return false;
           return !qTeam || (m.name + ' ' + m.area + ' ' + m.phone).toLowerCase().indexOf(qTeam) !== -1;
         });
         parts.push(team.length + (team.length === 1 ? ' compañero' : ' compañeros'));
@@ -3266,6 +3315,7 @@
       if (!els.list) return;
       if (!previewEl.hidden) hideConvoPreview();
       renderStateBar();
+      renderTeamAreas();
       renderListSummary();
       if (state.tab === 'team') { els.list.innerHTML = ''; renderTeamList(); return; }
       if (state.tab === 'contacts') { renderDirectoryList(); return; }
@@ -4146,6 +4196,7 @@
           '<span id="recorder-slot"></span>' +
           '<button type="button" class="btn btn-icon btn-soft-secondary" id="btn-quick" title="Plantillas rápidas"><span class="ri-flashlight-line fs-5"></span></button>' +
           '<button type="button" class="btn btn-icon btn-soft-secondary" id="btn-poll" title="Crear encuesta"><span class="ri-bar-chart-horizontal-line fs-5"></span></button>' +
+          '<button type="button" class="btn btn-icon btn-soft-secondary" id="btn-contact" title="Enviar contacto"><span class="ri-user-shared-line fs-5"></span></button>' +
           '<button type="button" class="btn btn-icon btn-soft-secondary composer-emoji" id="btn-emoji" title="Emoji"><span class="ri-emotion-line fs-5"></span></button>' +
         '</div></div>';
     }
@@ -4214,6 +4265,8 @@
 
       // Encuestas
       els.pane.querySelector('#btn-poll').addEventListener('click', openPollDialog);
+      // Contacto compartido
+      els.pane.querySelector('#btn-contact').addEventListener('click', openContactDialog);
 
       // Emojis: primero los más usados y abajo el catálogo completo.
       var emojiBtn = els.pane.querySelector('#btn-emoji');
@@ -4477,6 +4530,87 @@
         })
         .catch(function (e) { toast(e.message, true); })
         .finally(function () { state.sending = false; closeComposerPopovers(); input.focus(); });
+    }
+
+    // Diálogo para compartir un contacto (nombre + número de WhatsApp).
+    function openContactDialog() {
+      var wrap = document.createElement('div');
+      wrap.className = 'pl-dialog-backdrop';
+      wrap.innerHTML = '<div class="pl-dialog contact-dialog" role="dialog" aria-modal="true" aria-labelledby="contact-dlg-title">' +
+        '<h6 id="contact-dlg-title"><span class="ri-user-shared-line"></span> Enviar contacto</h6>' +
+        '<p class="pl-dialog-sub">Compartí el nombre y el número de WhatsApp del contacto.</p>' +
+        '<label class="poll-label" for="contact-search">Buscar contacto registrado</label>' +
+        '<input id="contact-search" class="form-control" placeholder="Nombre o número…" autocomplete="off">' +
+        '<div class="contact-results"></div>' +
+        '<label class="poll-label" for="contact-name">Nombre</label>' +
+        '<input id="contact-name" class="form-control" maxlength="120" placeholder="Nombre del contacto">' +
+        '<label class="poll-label" for="contact-phone">Número de WhatsApp</label>' +
+        '<input id="contact-phone" class="form-control" inputmode="tel" placeholder="591XXXXXXXX">' +
+        '<div class="pl-dialog-actions">' +
+          '<button type="button" class="btn btn-light btn-sm" data-act="cancel">Cancelar</button>' +
+          '<button type="button" class="btn btn-primary btn-sm" data-act="ok">Enviar contacto</button>' +
+        '</div></div>';
+      document.body.appendChild(wrap);
+      var search = wrap.querySelector('#contact-search');
+      var results = wrap.querySelector('.contact-results');
+      var nameInput = wrap.querySelector('#contact-name');
+      var phoneInput = wrap.querySelector('#contact-phone');
+      var ok = wrap.querySelector('[data-act="ok"]');
+      var timer = null;
+      var close = function () { if (timer) clearTimeout(timer); wrap.remove(); };
+      wrap.addEventListener('click', function (e) { if (e.target === wrap) close(); });
+      wrap.querySelector('[data-act="cancel"]').addEventListener('click', close);
+
+      search.addEventListener('input', function () {
+        var q = search.value.trim();
+        if (timer) clearTimeout(timer);
+        if (q.length < 2) { results.innerHTML = ''; return; }
+        timer = setTimeout(function () {
+          api('/inbox/directory?q=' + encodeURIComponent(q) + '&limit=8')
+            .then(function (d) {
+              var people = (d && d.people) || [];
+              if (!people.length) { results.innerHTML = '<div class="contact-none">Sin coincidencias</div>'; return; }
+              results.innerHTML = people.map(function (p) {
+                var nm = p.full_name || p.phone || 'Contacto';
+                return '<button type="button" class="contact-result" data-name="' + escapeHtml(nm) + '" data-phone="' + escapeHtml(p.phone || '') + '">' +
+                  '<span class="ri-user-line" aria-hidden="true"></span><span><b>' + escapeHtml(nm) + '</b><small>' + escapeHtml(fmtPhone(p.phone || '')) + '</small></span></button>';
+              }).join('');
+              Array.prototype.forEach.call(results.querySelectorAll('.contact-result'), function (b) {
+                b.addEventListener('click', function () {
+                  nameInput.value = b.getAttribute('data-name') || '';
+                  phoneInput.value = b.getAttribute('data-phone') || '';
+                  results.innerHTML = '';
+                  search.value = '';
+                  nameInput.focus();
+                });
+              });
+            })
+            .catch(function () { results.innerHTML = '<div class="contact-none">No se pudo buscar.</div>'; });
+        }, 250);
+      });
+
+      ok.addEventListener('click', function () {
+        var name = nameInput.value.trim();
+        var phone = phoneInput.value.trim();
+        if (!name) { toast('Escribí el nombre del contacto.', true); nameInput.focus(); return; }
+        if (String(phone).replace(/\D+/g, '').length < 8) { toast('Escribí un número de WhatsApp válido.', true); phoneInput.focus(); return; }
+        ok.disabled = true;
+        jsonApi('/inbox/' + encodeURIComponent(state.selectedSession) + '/' + encodeURIComponent(state.selectedChat) + '/contact', 'POST', {
+          name: name,
+          phone: phone,
+          reply_to_wa_id: state.replyTo ? state.replyTo.wa_message_id : null,
+        })
+          .then(function () {
+            close();
+            state.replyTo = null;
+            toast('Contacto enviado');
+            reloadStream();
+            loadConversations();
+            renderPane();
+          })
+          .catch(function (e) { ok.disabled = false; toast(e.message, true); });
+      });
+      nameInput.focus();
     }
 
     // Diálogo para crear una encuesta con pregunta, opciones y modo de respuesta.

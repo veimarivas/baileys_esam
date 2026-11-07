@@ -129,7 +129,8 @@ export function contactPreview(meta: ContactMessageMeta): string {
   const first = meta.contacts[0];
   if (!first) return 'Contacto';
   const name = first.name || first.phone || 'Contacto';
-  return meta.contacts.length > 1 ? `${name} y ${meta.contacts.length - 1} más` : name;
+  const label = first.phone ? `${name} · +${first.phone}` : name;
+  return meta.contacts.length > 1 ? `${label} y ${meta.contacts.length - 1} más` : label;
 }
 
 /** Serializa los metadatos para guardarlos en SQLite. */

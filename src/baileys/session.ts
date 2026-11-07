@@ -1124,6 +1124,40 @@ export class WaSession extends EventEmitter {
     return this.doSend(chatId, { text: text.slice(0, 4096) }, quoted);
   }
 
+  /** Envía una tarjeta de contacto (vCard) con nombre y número de WhatsApp. */
+  async sendContact(
+    chatId: string,
+    displayName: string,
+    phone: string,
+    quoted?: QuotedRef | null,
+  ): Promise<{ messageId?: string; timestamp?: number }> {
+    const name = displayName.slice(0, 120);
+    const digits = String(phone).replace(/\D+/g, '');
+    const safe = name
+      .replace(/\\/g, '\\\\')
+      .replace(/\n/g, '\\n')
+      .replace(/,/g, '\\,')
+      .replace(/;/g, '\\;');
+    const vcard = [
+      'BEGIN:VCARD',
+      'VERSION:3.0',
+      `FN:${safe}`,
+      `N:${safe};;;;`,
+      `TEL;type=CELL;type=VOICE;waid=${digits}:+${digits}`,
+      'END:VCARD',
+    ].join('\n');
+    return this.doSend(
+      chatId,
+      {
+        contacts: {
+          displayName: name,
+          contacts: [{ displayName: name, vcard }],
+        },
+      },
+      quoted,
+    );
+  }
+
   /**
    * Envía una encuesta. `selectableCount` 1 = una respuesta; 0 = varias, que es
    * la convención que usa WhatsApp/Baileys para las encuestas de opción múltiple.

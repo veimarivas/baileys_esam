@@ -18,7 +18,7 @@ import { getPolicy, resetTrust } from '../core/anti-ban.js';
 import { personChatsByKeys, personTagsByKeys, phoneKeyOf, tagPerson } from '../core/person.js';
 import { alertSessionDown } from '../core/notifications.js';
 import { lidForPhone, resolveChatId } from '../core/lid.js';
-import { metaJson, pollMeta } from '../core/message-meta.js';
+import { metaJson, pollMeta, contactPreview } from '../core/message-meta.js';
 import { panelBus } from '../panel/events.js';
 import type { OutboundSender, SessionRow } from '../types.js';
 
@@ -319,8 +319,61 @@ export class SessionManager implements OutboundSender {
     return { messageId: result.messageId };
   }
 
-  async sendPoll(
+  async sendContact(
     sessionId: string,
+    chatId: string,
+    opts: { name: string; phone: string },
+    contactName?: string | null,
+    sendOpts: SendOptions = {},
+  ) {
+    const quote = this.quoteRef(sessionId, sendOpts.quoteWaId);
+    const name = opts.name.slice(0, 120);
+    const phone = opts.phone.replace(/\D+/g, '');
+    let result: { messageId?: string };
+    try {
+      result = await this.guardedSend(
+        sessionId,
+        chatId,
+        { preview: name, typing: 'composing', human: !!sendOpts.human },
+        (session) => session.sendContact(chatId, name, phone, quote),
+      );
+    } catch (err) {
+      this.handleSendFailure(sessionId, chatId, err);
+      throw err;
+    }
+    const meta = { kind: 'contact' as const, contacts: [{ name, phone }] };
+    const body = contactPreview(meta);
+    this.persistOutbound(
+      sessionId,
+      chatId,
+      contactName ?? null,
+      'contact',
+      body,
+      null,
+      null,
+      result.messageId ?? null,
+      null,
+      null,
+      'panel',
+      undefined,
+      {
+        replyToWaId: sendOpts.quoteWaId ?? null,
+        senderUid: sendOpts.senderUid ?? null,
+        contentMeta: metaJson(meta),
+      },
+    );
+    panelBus.publish('message', {
+      sessionId,
+      chatId,
+      direction: 'out',
+      body,
+      content_type: 'contact',
+      occurred_at: nowIso(),
+    });
+    return { messageId: result.messageId };
+  }
+
+  async sendPoll(    sessionId: string,
     chatId: string,
     opts: { question: string; options: string[]; selectableCount: number },
     contactName?: string | null,

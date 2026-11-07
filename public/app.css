@@ -5941,6 +5941,35 @@ html[data-bs-theme="dark"] .poll-dialog .form-control:focus { border-color: var(
 .poll-mode label:has(input:checked) { border-color: var(--brand); background: var(--brand-soft, rgba(4, 84, 116, 0.08)); color: var(--brand); font-weight: 700; }
 .poll-mode input { accent-color: var(--brand); flex-shrink: 0; }
 
+/* Enviar contacto */
+.contact-dialog { max-width: 460px; }
+.contact-dialog .poll-label {
+  display: block; margin: 0.7rem 0 0.25rem;
+  font-size: 0.64rem; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 0.055em; color: var(--esam-muted);
+}
+.contact-dialog .form-control {
+  border-radius: 10px; font-size: 0.85rem;
+  background: var(--esam-surface-2); color: var(--esam-ink); border-color: var(--esam-line-strong);
+}
+.contact-dialog .form-control::placeholder { color: var(--esam-muted); }
+.contact-dialog .form-control:focus {
+  background: var(--esam-surface); color: var(--esam-ink);
+  border-color: var(--brand); box-shadow: var(--esam-ring);
+}
+html[data-bs-theme="dark"] .contact-dialog .form-control { border-color: var(--esam-line-strong); }
+html[data-bs-theme="dark"] .contact-dialog .form-control:focus { border-color: var(--brand-400); box-shadow: 0 0 0 3px rgba(79, 179, 214, 0.2); }
+.contact-results { display: flex; flex-direction: column; gap: 0.3rem; max-height: 180px; overflow-y: auto; margin-top: 0.35rem; }
+.contact-result {
+  display: flex; align-items: center; gap: 0.5rem; width: 100%; text-align: left;
+  padding: 0.42rem 0.55rem; border: 1px solid var(--esam-line); border-radius: 10px;
+  background: var(--esam-surface-2); color: var(--esam-ink); font-size: 0.78rem; cursor: pointer;
+}
+.contact-result:hover { border-color: var(--brand); background: var(--esam-surface); }
+.contact-result b { display: block; font-weight: 700; }
+.contact-result small { display: block; color: var(--esam-muted); font-size: 0.68rem; }
+.contact-none { font-size: 0.72rem; color: var(--esam-muted); padding: 0.25rem 0; }
+
 @media (max-width: 575.98px) {
   .pinned-summary { padding: 0.4rem 0.65rem; }
   .pinned-summary-text { flex-direction: column; align-items: flex-start; gap: 0.05rem; }
@@ -7266,6 +7295,8 @@ html[data-bs-theme="dark"] .cx-faq { border-color: #2a2f34; }
 /* ── Conversaciones: estado de la atención y responsable ── */
 .cl-state { display: flex; gap: 0.3rem; overflow-x: auto; padding: 0 0.75rem 0.5rem; scrollbar-width: none; }
 .cl-state::-webkit-scrollbar { display: none; }
+.cl-team-areas { padding-top: 0.1rem; }
+.cl-team-areas .cl-st { white-space: nowrap; }
 .cl-st { flex-shrink: 0; border: 1px solid var(--vz-border-color, #e3e6eb); background: var(--vz-card-bg, #fff); color: var(--esam-ink-soft, #4b5563);
   font-size: 0.74rem; font-weight: 600; padding: 0.2rem 0.6rem; border-radius: 999px; white-space: nowrap; }
 .cl-st b { font-weight: 700; margin-left: 0.15rem; color: var(--esam-brand, #045474); }

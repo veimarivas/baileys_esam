@@ -60,7 +60,7 @@ import * as moduleFollowups from '../core/module-followups.js';
 import * as quickReplies from '../core/quick-replies.js';
 import { getSticker } from '../core/stickers.js';
 import { storeNoteAudio } from '../core/media.js';
-import { typeForMime } from '../core/phone.js';
+import { normalizePhone, typeForMime } from '../core/phone.js';
 import { transcribe } from '../core/transcriber.js';
 
 /**
@@ -863,6 +863,34 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       } catch (err) {
         return res.status(502).json({ error: (err as Error).message });
       }
+      res.json({ ok: true, messageId: result.messageId ?? null });
+    }),
+  );
+
+  app.post(
+    '/inbox/:session/:chat/contact',
+    ...auth,
+    ctx.rateLimit(30, 60_000),
+    ah(async (req, res) => {
+      const resolved = resolveAuthorized(req, res, String(req.params.session), String(req.params.chat));
+      if (!resolved) return;
+      const name = String(req.body?.name ?? '').trim();
+      const phone = normalizePhone(String(req.body?.phone ?? ''));
+      if (!name) return res.status(422).json({ error: 'Escribí el nombre del contacto.' });
+      if (name.length > 120) return res.status(422).json({ error: 'El nombre es demasiado largo (máx. 120 caracteres).' });
+      if (phone.length < 8) return res.status(422).json({ error: 'El número del contacto no es válido.' });
+      if (phone.length > 15) return res.status(422).json({ error: 'El número del contacto es demasiado largo.' });
+      const replyTo = req.body?.reply_to_wa_id ? String(req.body?.reply_to_wa_id) : null;
+      const result = await manager.sendContact(resolved.session.id, resolved.chatId, { name, phone }, null, {
+        quoteWaId: replyTo,
+        senderUid: req.user!.id,
+        human: true,
+      });
+      conversations.tagOutbound(resolved.session.id, resolved.chatId, {
+        waMessageId: result.messageId ?? null,
+        senderUid: req.user!.id,
+        replyToWaId: replyTo,
+      });
       res.json({ ok: true, messageId: result.messageId ?? null });
     }),
   );

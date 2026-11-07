@@ -25,6 +25,10 @@ export function rememberLid(lid: string | null | undefined, pn: string | null | 
     nowIso(),
   );
   migrateLidChat(lidKey, `${pnDigits}@c.us`);
+  // Algunos clientes guardaron el LID como si fuera un número (`<lid>@c.us`):
+  // también se migra esa fila a la ficha real para no mostrar el código.
+  const lidDigits = digits(lid);
+  if (lidDigits) migrateLidChat(`${lidDigits}@c.us`, `${pnDigits}@c.us`);
 }
 
 /**

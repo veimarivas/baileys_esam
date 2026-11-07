@@ -170,8 +170,17 @@ const NO_NOTES: PersonNoteCounts = { open: 0, pinned: 0, overdue: 0 };
 const NO_PERSON: PersonTags = { full_name: null, programas: [] };
 
 /** Clave de la persona: la de su ficha o, si falta, la del número del chat. */
-function personKey(row: { ct_phone_key: string | null; chat_id: string }): string | null {
-  if (row.chat_id.endsWith('@g.us')) return null;
+/** Teléfono mostrable: si la ficha guardó un LID, se resuelve al número real. */
+function resolveDisplayPhone(phone: string | null, chatId: string | null | undefined): string | null {
+  const chat = String(chatId ?? '');
+  const raw = String(phone || (chat.endsWith('@lid') ? '' : phoneKeyOf(chat)) || '').replace(/\D+/g, '');
+  if (!raw) return phone;
+  const pn = phoneForLid(`${raw}@lid`);
+  if (pn) return phoneFromChatId(pn) || raw;
+  return phone || (chat && !chat.endsWith('@g.us') && !chat.endsWith('@broadcast') ? raw : phone);
+}
+
+function personKey(row: { ct_phone_key: string | null; chat_id: string }): string | null {  if (row.chat_id.endsWith('@g.us')) return null;
   // Número oculto (@lid): la clave es el propio identificador (permite registrar su nombre).
   return row.ct_phone_key ?? (row.chat_id.endsWith('@lid') ? row.chat_id : phoneKeyOf(row.chat_id));
 }
@@ -196,7 +205,7 @@ function mapConversation(
       id: row.contact_id,
       avatar: !!row.contact_id && (!!row.ct_avatar || (!!personKey(row) && !!avatars?.has(personKey(row)!))),
       name: row.ct_name,
-      phone: row.ct_phone,
+      phone: resolveDisplayPhone(row.ct_phone, row.chat_id),
       email: row.ct_email,
       company: row.ct_company,
       avatar_path: row.ct_avatar,
@@ -582,6 +591,18 @@ function replyRef(row: MessageJoinRow): NonNullable<MessageDTO['reply_to']> {
   };
 }
 
+/** Resuelve teléfonos LID guardados en los metadatos de contactos antiguos. */
+function resolveContactMeta(meta: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (!meta || meta.kind !== 'contact' || !Array.isArray(meta.contacts)) return meta;
+  return {
+    ...meta,
+    contacts: meta.contacts.map((raw) => {
+      const contact = raw as { name?: string | null; phone?: string | null };
+      return { ...contact, phone: resolveDisplayPhone(contact.phone ?? null, null) };
+    }),
+  };
+}
+
 function mapMessage(row: MessageJoinRow, reactions: MessageDTO['reactions']): MessageDTO {
   return {
     id: row.id,
@@ -589,7 +610,7 @@ function mapMessage(row: MessageJoinRow, reactions: MessageDTO['reactions']): Me
     direction: row.direction,
     content_type: row.content_type,
     body: row.body,
-    meta: parseContentMeta(row.content_meta),
+    meta: resolveContactMeta(parseContentMeta(row.content_meta)),
     pinned_at: row.pinned_at ?? null,
     pinned_by_name: row.pinned_by_name ?? null,
     media_path: row.media_path,

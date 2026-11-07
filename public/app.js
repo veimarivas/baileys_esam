@@ -2668,6 +2668,8 @@
       notesShowDone: false,
       chatToken: 0,
       sending: false,
+      listWidth: null,
+      contactWidth: null,
     };
 
     var els = {
@@ -2681,6 +2683,92 @@
       contact: root.querySelector('#contact-pane'),
       rail: root.querySelector('#list-rail'),
     };
+
+    // ── Ancho de columnas (lista y ficha) con divisores arrastrables ──────────
+    try { state.listWidth = Number(localStorage.getItem('inbox-list-width')) || null; } catch (_) { state.listWidth = null; }
+    try { state.contactWidth = Number(localStorage.getItem('inbox-contact-width')) || null; } catch (_) { state.contactWidth = null; }
+
+    function applyInboxWidths() {
+      if (state.listWidth) root.style.setProperty('--inbox-list-w', Math.round(state.listWidth) + 'px');
+      else root.style.removeProperty('--inbox-list-w');
+      if (state.contactWidth) root.style.setProperty('--inbox-contact-w', Math.round(state.contactWidth) + 'px');
+      else root.style.removeProperty('--inbox-contact-w');
+      positionInboxResizers();
+    }
+
+    function positionInboxResizers() {
+      var listRes = root.querySelector('[data-resizer="list"]');
+      var contactRes = root.querySelector('[data-resizer="contact"]');
+      var list = root.querySelector('.chatlist');
+      var contact = root.querySelector('.contact-panel');
+      var desktop = window.innerWidth >= 1200;
+      var box = root.getBoundingClientRect();
+
+      if (listRes) {
+        var hideList = !desktop || root.classList.contains('list-hidden') || !list;
+        listRes.hidden = hideList;
+        if (!hideList) {
+          var lr = list.getBoundingClientRect();
+          listRes.style.left = Math.round(lr.right - box.left - 4) + 'px';
+        }
+      }
+      if (contactRes) {
+        var hideContact = !desktop || root.classList.contains('contact-hidden') || !contact || getComputedStyle(contact).display === 'none';
+        contactRes.hidden = hideContact;
+        if (!hideContact) {
+          var cr = contact.getBoundingClientRect();
+          contactRes.style.left = Math.round(cr.left - box.left - 4) + 'px';
+        }
+      }
+    }
+
+    function bindInboxResizers() {
+      function start(which, ev) {
+        if (window.innerWidth < 1200) return;
+        ev.preventDefault();
+        var startX = ev.clientX;
+        var listEl = root.querySelector('.chatlist');
+        var contactEl = root.querySelector('.contact-panel');
+        var startList = listEl ? listEl.getBoundingClientRect().width : 320;
+        var startContact = contactEl ? contactEl.getBoundingClientRect().width : 320;
+        root.classList.add('resizing');
+        var move = function (e) {
+          if (which === 'list') {
+            var w = Math.max(240, Math.min(620, startList + (e.clientX - startX)));
+            state.listWidth = w;
+            root.style.setProperty('--inbox-list-w', Math.round(w) + 'px');
+          } else {
+            var cw = Math.max(260, Math.min(640, startContact - (e.clientX - startX)));
+            state.contactWidth = cw;
+            root.style.setProperty('--inbox-contact-w', Math.round(cw) + 'px');
+          }
+          positionInboxResizers();
+        };
+        var up = function () {
+          document.removeEventListener('pointermove', move);
+          document.removeEventListener('pointerup', up);
+          document.removeEventListener('pointercancel', up);
+          root.classList.remove('resizing');
+          try {
+            if (state.listWidth) localStorage.setItem('inbox-list-width', String(Math.round(state.listWidth)));
+            if (state.contactWidth) localStorage.setItem('inbox-contact-width', String(Math.round(state.contactWidth)));
+          } catch (_) {}
+          positionInboxResizers();
+        };
+        document.addEventListener('pointermove', move);
+        document.addEventListener('pointerup', up);
+        document.addEventListener('pointercancel', up);
+      }
+      var listRes = root.querySelector('[data-resizer="list"]');
+      var contactRes = root.querySelector('[data-resizer="contact"]');
+      if (listRes) listRes.addEventListener('pointerdown', function (e) { start('list', e); });
+      if (contactRes) contactRes.addEventListener('pointerdown', function (e) { start('contact', e); });
+      window.addEventListener('resize', positionInboxResizers);
+      applyInboxWidths();
+      setTimeout(positionInboxResizers, 0);
+    }
+
+    bindInboxResizers();
 
     // Resumen bajo las solapas de la lista: cuántas conversaciones hay, cuántas
     // sin leer y cuántas con notas pendientes.
@@ -4039,6 +4127,7 @@
       if (!c) {
         els.pane.innerHTML = emptyPane(); els.contact.innerHTML = ''; els.contact.classList.add('d-none');
         root.classList.add('contact-hidden'); root.classList.remove('has-chat');
+        setTimeout(positionInboxResizers, 0);
         return;
       }
       els.pane.innerHTML = chatHeaderHtml(c) + '<div id="chat-search" class="chat-search d-none"></div>' + '<div id="chat-pinned"></div><div id="chat-notes-banner"></div><div class="chat-body"></div>' + composerHtml(c);
@@ -4054,6 +4143,7 @@
       var body = els.pane.querySelector('.chat-body');
       body.innerHTML = '<div class="text-muted text-center p-3">Cargando mensajes…</div>';
       syncAudioScope();
+      setTimeout(positionInboxResizers, 0);
     }
 
     // Datos de la persona bajo el nombre: compañero del sistema y programas.
@@ -4223,10 +4313,12 @@
         // En el celular es «volver a la lista»; en pantallas grandes, ocultar/mostrar la lista.
         if (isMobile()) { root.classList.remove('has-chat'); root.classList.add('contact-hidden'); }
         else root.classList.toggle('list-hidden');
+        setTimeout(positionInboxResizers, 0);
       });
       var toggleContact = els.pane.querySelector('#toggle-contact');
       if (toggleContact) toggleContact.addEventListener('click', function () {
         root.classList.toggle('contact-hidden');
+        setTimeout(positionInboxResizers, 0);
       });
       var searchBtn = els.pane.querySelector('#toggle-search');
       if (searchBtn) searchBtn.addEventListener('click', toggleChatSearch);

@@ -1679,6 +1679,8 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
       </aside>
       <section class="chat-col" id="chat-pane"></section>
       <aside class="contact-panel d-none" id="contact-pane"></aside>
+      <div class="inbox-resizer" data-resizer="list" aria-hidden="true" title="Arrastrá para cambiar el ancho de la lista"></div>
+      <div class="inbox-resizer" data-resizer="contact" aria-hidden="true" title="Arrastrá para cambiar el ancho de la ficha"></div>
     </div>`;
   };
 

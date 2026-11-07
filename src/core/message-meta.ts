@@ -6,6 +6,16 @@
  * tarjeta útil sin depender del mensaje crudo (que no se conserva).
  */
 
+import { phoneForLid } from './lid.js';
+import { digits } from './phone.js';
+
+/** Si el vCard trae un LID en lugar del teléfono, se resuelve con el mapa LID→PN. */
+function resolveContactPhone(phone: string | null): string | null {
+  if (!phone) return null;
+  const pn = phoneForLid(`${phone}@lid`);
+  return pn ? digits(pn) : phone;
+}
+
 export interface ContactCard {
   name: string | null;
   /** Teléfono en dígitos, sin JID ni signos. */
@@ -86,7 +96,7 @@ export function contactMeta(
   const parsed = parseVCard(vcard);
   return {
     kind: 'contact',
-    contacts: [{ name: String(displayName ?? '').trim() || parsed.name, phone: parsed.phone }],
+    contacts: [{ name: String(displayName ?? '').trim() || parsed.name, phone: resolveContactPhone(parsed.phone) }],
   };
 }
 
@@ -99,7 +109,7 @@ export function contactsArrayMeta(
       const parsed = parseVCard(contact.vcard);
       return {
         name: String(contact.displayName ?? '').trim() || parsed.name,
-        phone: parsed.phone,
+        phone: resolveContactPhone(parsed.phone),
       };
     })
     .filter((contact) => contact.name || contact.phone);

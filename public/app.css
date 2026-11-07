@@ -1166,9 +1166,12 @@ html[data-bs-theme="dark"] .empty-state .empty-ico {
   --ib-ink-soft: #475467;
   --ib-ink-mute: #98a2b3;
   --ib-accent: #e6dd5e;
+  --inbox-list-w: 320px;
+  --inbox-contact-w: 320px;
 
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr) 320px;
+  grid-template-columns: var(--inbox-list-w) minmax(0, 1fr) var(--inbox-contact-w);
+  position: relative;
   /* Altura acotada al viewport (cabecera + paddings + footer ya en flujo). */
   height: min(760px, calc(100dvh - 210px));
   min-height: 420px;
@@ -1195,12 +1198,41 @@ html[data-bs-theme="dark"] .inbox {
   --ib-accent: #e6dd5e;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 18px 40px -24px rgba(0, 0, 0, 0.75);
 }
-.inbox.contact-hidden { grid-template-columns: 320px minmax(0, 1fr); }
+.inbox.contact-hidden { grid-template-columns: var(--inbox-list-w) minmax(0, 1fr); }
 .inbox.contact-hidden .contact-panel { display: none !important; }
-.inbox.list-hidden { grid-template-columns: 64px minmax(0, 1fr) 320px; }
+.inbox.list-hidden { grid-template-columns: 64px minmax(0, 1fr) var(--inbox-contact-w); }
 .inbox.list-hidden.contact-hidden { grid-template-columns: 64px minmax(0, 1fr); }
 .inbox:not(.list-hidden) .list-rail { display: none; }
 .inbox.list-hidden .chatlist { display: none; }
+
+/* Divisores para cambiar el ancho de la lista y de la ficha del contacto. */
+.inbox-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  z-index: 30;
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+}
+.inbox-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 2px;
+  border-radius: 2px;
+  background: transparent;
+  transition: background-color 0.15s ease;
+}
+.inbox-resizer:hover::after,
+.inbox.resizing .inbox-resizer::after { background: var(--ib-brand); opacity: 0.45; }
+.inbox.resizing { cursor: col-resize; user-select: none; }
+@media (max-width: 1199.98px) {
+  .inbox-resizer { display: none; }
+}
 
 /* Riel de la lista colapsada */
 .inbox .list-rail {
@@ -4811,14 +4843,38 @@ html[data-bs-theme="dark"] .tpl-phone { background: #0b141a; }
 .convo .team-start { color: var(--ib-brand, #045474); font-weight: 600; }
 /* Tres pestañas (Números · Grupos · Equipo): solo el contador de no leídos,
    que nunca se corta; la etiqueta se acorta si falta espacio. */
-.cl-tabs { display: flex; gap: 0.3rem; padding-left: 0.6rem; padding-right: 0.6rem; }
-/* Cada pestaña toma el ancho de su texto + contador y reparte el sobrante. */
-.cl-tab { flex: 1 1 auto; min-width: 0; padding: 0.42rem 0.4rem; gap: 0.25rem; font-size: 0.78rem; white-space: nowrap; overflow: hidden; }
-.cl-tab .cl-tab-ic { flex-shrink: 0; font-size: 0.9rem; }
-.cl-tab .cl-tab-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.cl-tab-count { flex-shrink: 0; min-width: 1.2rem; padding: 0 0.32rem; font-size: 0.66rem; line-height: 1.15rem; text-align: center; }
+/* Solapas de la lista: riel segmentado con desplazamiento horizontal */
+.cl-tabs {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.35rem 0.6rem 0.5rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.cl-tabs::-webkit-scrollbar { display: none; }
+.cl-tab {
+  flex: 0 0 auto;
+  min-width: max-content;
+  padding: 0.45rem 0.7rem;
+  gap: 0.35rem;
+  font-size: 0.74rem;
+  font-weight: 700;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ib-ink-soft);
+  box-shadow: none;
+  white-space: nowrap;
+  transition: background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+.cl-tab:hover { background: var(--ib-surface); color: var(--ib-brand); }
+.cl-tab.active { background: var(--ib-brand); color: #fff; box-shadow: 0 6px 16px -10px rgba(4, 84, 116, 0.8); }
+.cl-tab .cl-tab-ic { flex-shrink: 0; font-size: 0.92rem; }
+.cl-tab .cl-tab-label { overflow: hidden; text-overflow: ellipsis; }
+.cl-tab-count { flex-shrink: 0; min-width: 1.15rem; padding: 0 0.3rem; font-size: 0.64rem; line-height: 1.15rem; text-align: center; border-radius: 999px; background: rgba(16, 24, 40, 0.08); }
 .cl-tab-count[hidden] { display: none !important; }
-.cl-tab.has-unread .cl-tab-count { background: #e53935; color: #fff; }
+.cl-tab.active .cl-tab-count { background: rgba(255, 255, 255, 0.25); color: #fff; }
+.cl-tab.has-unread .cl-tab-count { background: var(--ib-accent, #e6dd5e); color: #06203f; }
 .cl-tab.active.has-unread .cl-tab-count { background: #fff; color: #c62828; }
 /* Fila de conversación: nombre y número a todo el ancho; hora e indicadores a la derecha */
 .convo { gap: 0.6rem; }
@@ -5142,14 +5198,12 @@ html[data-bs-theme="dark"] .batch-who { background: rgba(255, 255, 255, 0.05); }
 
 /* Pantallas anchas: columnas más holgadas */
 @media (min-width: 1400px) {
-  .inbox { grid-template-columns: 340px minmax(0, 1fr) 340px; }
-  .inbox.contact-hidden { grid-template-columns: 340px minmax(0, 1fr); }
+  .inbox { --inbox-list-w: 340px; --inbox-contact-w: 340px; }
 }
 /* Portátil: columnas un poco más angostas */
 @media (min-width: 1200px) and (max-width: 1399.98px) {
-  .inbox { grid-template-columns: 300px minmax(0, 1fr) 300px; }
-  .inbox.contact-hidden { grid-template-columns: 300px minmax(0, 1fr); }
-  .inbox.list-hidden { grid-template-columns: 64px minmax(0, 1fr) 300px; }
+  .inbox { --inbox-list-w: 300px; --inbox-contact-w: 300px; }
+  .inbox.list-hidden { grid-template-columns: 64px minmax(0, 1fr) var(--inbox-contact-w); }
 }
 
 /* Tablet horizontal / portátil chico: la ficha se abre como panel encima del chat */
@@ -6896,14 +6950,14 @@ html[data-bs-theme="dark"] .contact-panel .contact-hero {
   .convo .convo-meta > span { max-width: 9rem; }
 }
 
-/* Cuatro solapas en una columna angosta: sin iconos para que el texto no se corte */
+/* Cuatro solapas en una columna angosta: legibles y con scroll horizontal */
 @media (min-width: 992px) {
   .inbox .cl-tab {
-    padding: 0.34rem 0.28rem;
-    gap: 0.2rem;
-    font-size: 0.74rem;
+    padding: 0.42rem 0.6rem;
+    gap: 0.3rem;
+    font-size: 0.72rem;
   }
-  .inbox .cl-tab .cl-tab-ic { display: none; }
+  .inbox .cl-tab .cl-tab-ic { display: inline-flex; }
   .inbox .cl-tab-count {
     min-width: 1.05rem;
     padding: 0 0.26rem;

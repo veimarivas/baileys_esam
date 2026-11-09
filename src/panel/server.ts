@@ -393,7 +393,7 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
   const wantsJson = (req: Request): boolean =>
     !!req.headers.authorization ||
     /application\/json/i.test(String(req.headers.accept ?? '')) ||
-    /^\/(api|inbox|notifications)\//.test(req.path) ||
+    /^\/(api|inbox|notifications|agenda)\//.test(req.path) ||
     /^\/notes\/(all|tags|assignees|templates|my-day)/.test(req.path);
 
   const requireUser = (req: AuthedRequest, res: Response, next: NextFunction) => {

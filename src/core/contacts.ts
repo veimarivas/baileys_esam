@@ -453,6 +453,9 @@ export function addNote(
     personal?: boolean;
     /** Etapa inicial en el pipeline personal. */
     pipelineStage?: string | null;
+    /** Sub-agenda y columna del pipeline personal. */
+    agendaBoardId?: number | null;
+    agendaStageId?: number | null;
   } = {},
 ): ContactNoteWithAuthor {
   const assigneeIds = [
@@ -469,8 +472,8 @@ export function addNote(
   const now = nowIso();
   const created = run(
     `INSERT INTO contact_notes (contact_id, user_id, note_text, audio_path, due_at, due_time, pinned, assigned_to,
-       assigned_by, assigned_at, source_message_id, personal, pipeline_stage, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       assigned_by, assigned_at, source_message_id, personal, pipeline_stage, agenda_board_id, agenda_stage_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     contactId,
     userId,
     noteText,
@@ -484,6 +487,8 @@ export function addNote(
     extra.sourceMessageId ?? null,
     personal ? 1 : 0,
     personal ? extra.pipelineStage || 'todo' : extra.pipelineStage || null,
+    personal ? extra.agendaBoardId ?? null : null,
+    personal ? extra.agendaStageId ?? null : null,
     now,
   );
   setNoteTags(created.lastInsertRowid, tagIds);
@@ -1083,10 +1088,14 @@ export function listAllNotes(opts: {
  */
 export function listPersonalNotes(
   userId: number,
-  opts: { q?: string | null; limit?: number } = {},
+  opts: { q?: string | null; limit?: number; boardId?: number | null } = {},
 ): GlobalNote[] {
   const where: string[] = ['n.deleted_at IS NULL', 'n.personal = 1', 'n.user_id = ?'];
   const params: unknown[] = [userId];
+  if (opts.boardId) {
+    where.push('n.agenda_board_id = ?');
+    params.push(opts.boardId);
+  }
   if (opts.q) {
     const like = `%${foldText(opts.q).replace(/[!%_]/g, (c) => '!' + c)}%`;
     const f = (col: string) => `fold(${col}) LIKE ? ESCAPE '!'`;

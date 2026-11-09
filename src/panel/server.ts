@@ -166,6 +166,7 @@ export function renderAgendaPage(): string {
         <span class="ri-add-line" aria-hidden="true"></span> Nueva nota
       </button>
     </div>
+    <div class="agenda-boards" id="agenda-boards" aria-label="Sub-agendas"></div>
     <div class="agenda-stats" id="agenda-stats" aria-live="polite"></div>
     <div class="agenda-toolbar">
       <label class="agenda-search" for="agenda-search">

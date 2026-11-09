@@ -160,6 +160,9 @@ export function migrate(): void {
   addColumnIfMissing('contact_notes', 'assigned_to', 'INTEGER');
   // Nota privada del autor: vive en «Mi agenda» y no se comparte con el equipo.
   addColumnIfMissing('contact_notes', 'personal', 'INTEGER NOT NULL DEFAULT 0');
+  // Sub-agenda y columna pipeline propias de una nota personal.
+  addColumnIfMissing('contact_notes', 'agenda_board_id', 'INTEGER');
+  addColumnIfMissing('contact_notes', 'agenda_stage_id', 'INTEGER');
   addColumnIfMissing('contact_notes', 'source_message_id', 'INTEGER');
   db.exec('CREATE INDEX IF NOT EXISTS idx_contact_notes_assigned ON contact_notes(assigned_to, done_at)');
   // Hora del recordatorio (HH:MM, con `due_at`) y cuándo se avisó.

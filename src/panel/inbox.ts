@@ -7,6 +7,7 @@ import { config } from '../config.js';
 import { panelBus } from './events.js';
 import { esamEsAdmin, esamPuede, esamSupervisaArea, sessionScopeFor, type UserRow } from '../auth/users.js';
 import type { SessionManager } from '../baileys/manager.js';
+import * as agenda from '../core/agenda.js';
 import * as conversations from '../core/conversations.js';
 import {
   addNote,
@@ -1278,15 +1279,79 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
     }),
   );
 
-  // ── Mi agenda: notas privadas y pipeline personal ───────────────────────────
+  // ── Mi agenda: notas privadas, sub-agendas y columnas pipeline ──────────────
+  app.get(
+    '/agenda/boards',
+    ...auth,
+    ah((req, res) => {
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({ boards: agenda.listBoards(req.user!.id) });
+    }),
+  );
+
+  app.post(
+    '/agenda/boards',
+    ...auth,
+    ah((req, res) => {
+      const name = String(req.body?.name ?? '').trim();
+      const rawStages = req.body?.stages;
+      const stages = Array.isArray(rawStages)
+        ? rawStages.map((s: unknown) => String(s ?? ''))
+        : String(rawStages ?? '').split(/\r?\n/);
+      try {
+        const id = agenda.createBoard(req.user!.id, name, stages);
+        res.status(201).json({ id, boards: agenda.listBoards(req.user!.id) });
+      } catch (err) {
+        res.status(422).json({ error: (err as Error).message });
+      }
+    }),
+  );
+
+  app.put(
+    '/agenda/boards/:id',
+    ...auth,
+    ah((req, res) => {
+      const id = Number(req.params.id);
+      if (!id) return res.status(404).json({ error: 'Sub-agenda no encontrada.' });
+      const stages = Array.isArray(req.body?.stages)
+        ? req.body.stages.map((s: unknown) => {
+            if (typeof s === 'string') return { name: s };
+            const item = (s ?? {}) as { id?: number; name?: string; color?: string };
+            return { id: Number(item.id) || undefined, name: String(item.name ?? ''), color: item.color };
+          })
+        : [];
+      try {
+        agenda.updateBoard(req.user!.id, id, { name: String(req.body?.name ?? ''), stages });
+        res.json({ ok: true, boards: agenda.listBoards(req.user!.id) });
+      } catch (err) {
+        res.status(422).json({ error: (err as Error).message });
+      }
+    }),
+  );
+
+  app.delete(
+    '/agenda/boards/:id',
+    ...auth,
+    ah((req, res) => {
+      try {
+        agenda.deleteBoard(req.user!.id, Number(req.params.id));
+        res.json({ ok: true, boards: agenda.listBoards(req.user!.id) });
+      } catch (err) {
+        res.status(422).json({ error: (err as Error).message });
+      }
+    }),
+  );
+
   app.get(
     '/agenda/notes',
     ...auth,
     ah((req, res) => {
       const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+      const boardId = Number(req.query.board_id) || null;
+      agenda.ensureDefaultBoard(req.user!.id);
       res.setHeader('Cache-Control', 'no-store');
       res.json({
-        notes: listPersonalNotes(req.user!.id, { q: q || null })
+        notes: listPersonalNotes(req.user!.id, { q: q || null, boardId })
           .map((n) => withPermissions(req.user!, n)),
       });
     }),
@@ -1304,7 +1369,16 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       const text = String(req.body?.text ?? '').trim();
       if (!text) return res.status(422).json({ error: 'Escribí la nota.' });
       if (text.length > 4000) return res.status(422).json({ error: 'La nota es demasiado larga (máx. 4000 caracteres).' });
-      const stage = ['todo', 'doing'].includes(String(req.body?.stage)) ? String(req.body.stage) : 'todo';
+      let placement: { boardId: number; stageId: number };
+      try {
+        placement = agenda.resolvePlacement(
+          req.user!.id,
+          Number(req.body?.board_id) || null,
+          Number(req.body?.stage_id) || null,
+        );
+      } catch (err) {
+        return res.status(422).json({ error: (err as Error).message });
+      }
       const contact = getOrCreateContact(resolved.session.id, resolved.chatId);
       const note = addNote(
         contact.id,
@@ -1316,12 +1390,38 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
         parseFlag(req.body?.pinned),
         {
           personal: true,
-          pipelineStage: stage,
+          agendaBoardId: placement.boardId,
+          agendaStageId: placement.stageId,
           dueTime: parseTime(req.body?.due_time),
         },
       );
+      // Aplica la semántica de la columna elegida (p. ej. «Entregado» = resuelto).
+      agenda.moveNote(req.user!.id, note.id, placement.boardId, placement.stageId);
       publishNoteChange(note.id, 'created', req.user!.id);
-      res.status(201).json(withPermissions(req.user!, note));
+      res.status(201).json(withPermissions(req.user!, noteDTO(note.id)!));
+    }),
+  );
+
+  app.post(
+    '/agenda/notes/:id/stage',
+    ...auth,
+    ah((req, res) => {
+      const user = req.user!;
+      const noteId = Number(req.params.id);
+      const stageId = Number(req.body?.stage_id) || null;
+      let boardId = Number(req.body?.board_id) || 0;
+      if (!boardId && stageId) {
+        const row = get<{ board_id: number }>('SELECT board_id FROM agenda_stages WHERE id = ?', stageId);
+        boardId = row?.board_id ?? 0;
+      }
+      if (!noteId || !boardId) return res.status(422).json({ error: 'Elegí una columna válida.' });
+      try {
+        agenda.moveNote(user.id, noteId, boardId, stageId);
+      } catch (err) {
+        return res.status(422).json({ error: (err as Error).message });
+      }
+      publishNoteChange(noteId, 'edited', user.id);
+      res.json(withPermissions(user, noteDTO(noteId)!));
     }),
   );
 

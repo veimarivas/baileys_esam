@@ -356,6 +356,33 @@ CREATE TABLE IF NOT EXISTS contact_notes (
 
 CREATE INDEX IF NOT EXISTS idx_contact_notes_contact ON contact_notes(contact_id);
 
+-- Sub-agendas de «Mi agenda» (privadas de cada usuario) y sus columnas pipeline.
+CREATE TABLE IF NOT EXISTS agenda_boards (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    INTEGER NOT NULL,
+  name       TEXT NOT NULL,
+  color      TEXT,
+  position   INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(user_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS agenda_stages (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  board_id   INTEGER NOT NULL,
+  name       TEXT NOT NULL,
+  color      TEXT NOT NULL DEFAULT '#64748b',
+  position   INTEGER NOT NULL DEFAULT 0,
+  is_done    INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(board_id, name),
+  FOREIGN KEY(board_id) REFERENCES agenda_boards(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_agenda_stages_board ON agenda_stages(board_id, position);
+
 -- Seguimientos de desarrollo de módulos enviados desde cronogramas.
 -- No dependen de un contacto: son tareas para el responsable de la sesión.
 CREATE TABLE IF NOT EXISTS module_followups (

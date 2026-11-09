@@ -1927,11 +1927,38 @@
      * Devuelve una función que entrega los ids elegidos (el primero es el
      * responsable principal). Mantiene el orden de selección.
      */
+    var activeAssignDialog = null;
+
+    var ASSIGNEE_AREA_ICONS = {
+      'Académico': 'ri-graduation-cap-line',
+      'Contabilidad': 'ri-calculator-line',
+      'Marketing': 'ri-megaphone-line',
+      'Administrador': 'ri-shield-user-line',
+      'Administración': 'ri-shield-user-line',
+      'Consulta': 'ri-question-answer-line',
+      'Sin área': 'ri-team-line',
+    };
+
+    function assigneeAreaIcon(label) {
+      return ASSIGNEE_AREA_ICONS[label] || 'ri-team-line';
+    }
+
+    /**
+     * Selector de varias personas para derivar una nota, agrupado por área.
+     * La selección se muestra como chips en el formulario y se elige en un
+     * diálogo amplio (no en una caja con scroll interno diminuto).
+     */
     function bindAssignees(box, selected, onChange) {
       if (!box) return function () { return []; };
+      // Si la ficha se vuelve a pintar con otro compositor abierto, el diálogo
+      // anterior ya no corresponde a ningún formulario visible.
+      if (activeAssignDialog) {
+        try { activeAssignDialog.close(); } catch (e) { /* ya cerrado */ }
+        activeAssignDialog = null;
+      }
       var chosen = [];
       var search = '';
-      var open = false;
+      var dialog = null;
       (selected || []).forEach(function (id) {
         id = Number(id);
         if (id > 0 && chosen.indexOf(id) === -1) chosen.push(id);
@@ -1962,28 +1989,6 @@
         '</span>';
       }
 
-      function groupHtml(group) {
-        var q = search.trim().toLowerCase();
-        var users = group.users.filter(function (u) {
-          if (!q) return true;
-          return String(u.name || '').toLowerCase().indexOf(q) !== -1 ||
-            String(u.area_label || '').toLowerCase().indexOf(q) !== -1;
-        });
-        if (!users.length) return '';
-        return '<div class="nk-assign-group">' +
-          '<div class="nk-assign-group-head"><span>' + escapeHtml(group.label) + '</span>' +
-            '<span class="nk-assign-group-count">' + users.length + '</span></div>' +
-          '<div class="nk-assign-people">' + users.map(function (u) {
-            var on = chosen.indexOf(u.id) !== -1;
-            return '<label class="nk-assign-person' + (on ? ' on' : '') + '">' +
-              '<input type="checkbox" value="' + u.id + '"' + (on ? ' checked' : '') + '>' +
-              '<span class="nk-assign-check" aria-hidden="true"><span class="ri-check-line"></span></span>' +
-              '<span class="nk-assign-name">' + escapeHtml(u.name || ('Usuario ' + u.id)) +
-                (u.id === assigneesData.me ? ' <em>Yo</em>' : '') + '</span>' +
-            '</label>';
-          }).join('') + '</div></div>';
-      }
-
       function chipsHtml() {
         var users = selectedUsers();
         if (!users.length) {
@@ -1993,12 +1998,169 @@
         return users.map(chipHtml).join('');
       }
 
-      function render() {
+      function filteredGroups() {
+        var q = search.trim().toLowerCase();
+        return assigneeGroups()
+          .map(function (group) {
+            return {
+              label: group.label,
+              users: group.users.filter(function (u) {
+                if (!q) return true;
+                return String(u.name || '').toLowerCase().indexOf(q) !== -1 ||
+                  String(u.area_label || '').toLowerCase().indexOf(q) !== -1;
+              }),
+            };
+          })
+          .filter(function (group) { return group.users.length > 0; });
+      }
+
+      function groupHtml(group) {
+        return '<section class="nk-assign-group">' +
+          '<div class="nk-assign-group-head">' +
+            '<span class="nk-assign-group-title"><span class="' + assigneeAreaIcon(group.label) + '" aria-hidden="true"></span>' +
+              escapeHtml(group.label) + '</span>' +
+            '<span class="nk-assign-group-count">' + group.users.length + '</span>' +
+          '</div>' +
+          '<div class="nk-assign-people">' + group.users.map(function (u) {
+            var on = chosen.indexOf(u.id) !== -1;
+            var mine = u.id === assigneesData.me;
+            return '<label class="nk-assign-person' + (on ? ' on' : '') + (mine ? ' is-me' : '') + '" data-user-id="' + u.id + '">' +
+              '<span class="nk-assign-avatar" aria-hidden="true">' + escapeHtml(initials(u.name || 'U')) + '</span>' +
+              '<span class="nk-assign-name"><b>' + escapeHtml(u.name || ('Usuario ' + u.id)) + '</b>' +
+                (mine ? '<em>Yo</em>' : '') + '</span>' +
+              '<span class="nk-assign-check" aria-hidden="true"><span class="ri-check-line"></span></span>' +
+              '<input type="checkbox" value="' + u.id + '"' + (on ? ' checked' : '') + '>' +
+            '</label>';
+          }).join('') + '</div>' +
+        '</section>';
+      }
+
+      function renderDialogBody() {
+        if (!dialog) return;
+        var body = dialog.querySelector('.nk-assign-dialog-body');
+        if (!body) return;
+        var total = dialog.querySelector('.nk-assign-dialog-total');
+        var areas = assigneeGroups().length;
+        if (total) total.textContent = assigneesData.users.length + ' personas · ' + areas + ' áreas';
+        if (!assigneesData.users.length) {
+          body.innerHTML = '<div class="nk-assign-dialog-empty">Cargando personas…</div>';
+        } else {
+          var groups = filteredGroups();
+          body.innerHTML = groups.length
+            ? groups.map(groupHtml).join('')
+            : '<div class="nk-assign-dialog-empty">No hay personas que coincidan con «' + escapeHtml(search) + '».</div>';
+        }
+        updateDialogFooter();
+      }
+
+      function updateDialogFooter() {
+        if (!dialog) return;
+        var count = dialog.querySelector('.nk-assign-dialog-count');
+        if (count) {
+          count.textContent = chosen.length
+            ? chosen.length + (chosen.length === 1 ? ' persona seleccionada' : ' personas seleccionadas')
+            : 'Sin personas seleccionadas';
+        }
+        var clear = dialog.querySelector('.nk-assign-dialog-clear');
+        if (clear) clear.disabled = chosen.length === 0;
+      }
+
+      function closeDialog() {
+        if (dialog && dialog.open) dialog.close();
+      }
+
+      function openDialog() {
+        if (activeAssignDialog) {
+          try { activeAssignDialog.close(); } catch (e) { /* ya cerrado */ }
+          activeAssignDialog = null;
+        }
+        var dlg = document.createElement('dialog');
+        dlg.className = 'nk-assign-dialog nk-section';
+        dlg.setAttribute('aria-labelledby', 'nk-assign-dialog-title');
+        dlg.innerHTML =
+          '<div class="nk-assign-dialog-box">' +
+            '<div class="nk-assign-dialog-head">' +
+              '<div class="nk-assign-dialog-title-wrap">' +
+                '<span class="nk-assign-dialog-ico ri-user-shared-line" aria-hidden="true"></span>' +
+                '<div><h5 id="nk-assign-dialog-title">Derivar a</h5>' +
+                  '<p>Elegí una o varias personas. Se agrupan por área y la primera queda como responsable principal.</p></div>' +
+              '</div>' +
+              '<button type="button" class="nk-assign-dialog-x" data-close aria-label="Cerrar"><span class="ri-close-line" aria-hidden="true"></span></button>' +
+            '</div>' +
+            '<div class="nk-assign-dialog-search">' +
+              '<span class="ri-search-line" aria-hidden="true"></span>' +
+              '<input type="search" placeholder="Buscar por nombre o área…" autocomplete="off" aria-label="Buscar persona">' +
+              '<span class="nk-assign-dialog-total"></span>' +
+            '</div>' +
+            '<div class="nk-assign-dialog-body"></div>' +
+            '<div class="nk-assign-dialog-foot">' +
+              '<span class="nk-assign-dialog-count">Sin personas seleccionadas</span>' +
+              '<button type="button" class="nk-assign-dialog-clear">Limpiar</button>' +
+              '<button type="button" class="nk-assign-dialog-done"><span class="ri-check-line me-1" aria-hidden="true"></span>Listo</button>' +
+            '</div>' +
+          '</div>';
+        document.body.appendChild(dlg);
+        dialog = dlg;
+        activeAssignDialog = dlg;
+        document.documentElement.classList.add('nk-assign-open');
+
+        dlg.addEventListener('close', function () {
+          document.documentElement.classList.remove('nk-assign-open');
+          if (activeAssignDialog === dlg) activeAssignDialog = null;
+          if (dialog === dlg) dialog = null;
+          if (dlg.parentNode) dlg.parentNode.removeChild(dlg);
+        });
+        dlg.addEventListener('click', function (e) {
+          if (e.target === dlg) closeDialog();
+        });
+        Array.prototype.forEach.call(dlg.querySelectorAll('[data-close]'), function (btn) {
+          btn.addEventListener('click', closeDialog);
+        });
+        var searchInput = dlg.querySelector('.nk-assign-dialog-search input');
+        searchInput.addEventListener('input', function () {
+          search = searchInput.value;
+          renderDialogBody();
+        });
+        var body = dlg.querySelector('.nk-assign-dialog-body');
+        body.addEventListener('change', function (e) {
+          var input = e.target;
+          if (!input || input.type !== 'checkbox') return;
+          applyChange(Number(input.value), input.checked);
+        });
+        dlg.querySelector('.nk-assign-dialog-clear').addEventListener('click', function () {
+          chosen = [];
+          emit();
+          renderDialogBody();
+          renderInline();
+        });
+        dlg.querySelector('.nk-assign-dialog-done').addEventListener('click', closeDialog);
+
+        renderDialogBody();
+        dlg.showModal();
+        searchInput.focus();
+      }
+
+      function applyChange(id, checked) {
+        if (checked) {
+          if (chosen.indexOf(id) === -1) chosen.push(id);
+        } else {
+          chosen = chosen.filter(function (v) { return v !== id; });
+        }
+        emit();
+        renderInline();
+        if (dialog) {
+          var row = dialog.querySelector('.nk-assign-person[data-user-id="' + id + '"]');
+          if (row) row.classList.toggle('on', checked);
+          updateDialogFooter();
+        }
+      }
+
+      function renderInline() {
         var users = selectedUsers();
         box.innerHTML = '<div class="nk-assign">' +
           '<div class="nk-assign-chips">' + chipsHtml() + '</div>' +
           '<div class="nk-assign-tools">' +
-            '<button type="button" class="nk-assign-toggle' + (open ? ' open' : '') + '" aria-expanded="' + open + '">' +
+            '<button type="button" class="nk-assign-toggle" aria-haspopup="dialog">' +
               '<span class="ri-user-add-line" aria-hidden="true"></span> ' +
               (users.length ? 'Cambiar personas' : 'Elegir personas') +
               (users.length ? ' <span class="nk-assign-count">' + users.length + '</span>' : '') +
@@ -2007,89 +2169,46 @@
               '<button type="button" class="nk-assign-me"><span class="ri-user-follow-line" aria-hidden="true"></span> Asignarme a mí</button>') +
             (users.length ? '<button type="button" class="nk-assign-clear">Limpiar</button>' : '') +
           '</div>' +
-          '<div class="nk-assign-panel"' + (open ? '' : ' hidden') + '>' +
-            '<div class="nk-assign-search">' +
-              '<span class="ri-search-line" aria-hidden="true"></span>' +
-              '<input type="search" placeholder="Buscar persona o área…" autocomplete="off" value="' + escapeHtml(search) + '">' +
-            '</div>' +
-            '<div class="nk-assign-groups">' +
-              (assigneesData.users.length
-                ? (assigneeGroups().map(groupHtml).join('') || '<div class="nk-assign-empty">Sin coincidencias.</div>')
-                : '<div class="nk-assign-empty">Cargando personas…</div>') +
-            '</div>' +
-          '</div>' +
         '</div>';
-        bind();
+        bindInline();
       }
 
-      function bind() {
+      function bindInline() {
         var toggle = box.querySelector('.nk-assign-toggle');
-        if (toggle) toggle.addEventListener('click', function () {
-          open = !open;
-          render();
-          if (open) {
-            var input = box.querySelector('.nk-assign-search input');
-            if (input) input.focus();
-          }
-        });
+        if (toggle) toggle.addEventListener('click', openDialog);
         var meBtn = box.querySelector('.nk-assign-me');
         if (meBtn) meBtn.addEventListener('click', function () {
           if (!assigneesData.me) return;
           if (chosen.indexOf(assigneesData.me) === -1) chosen.push(assigneesData.me);
           emit();
-          render();
+          renderInline();
+          renderDialogBody();
         });
         var clear = box.querySelector('.nk-assign-clear');
         if (clear) clear.addEventListener('click', function () {
           chosen = [];
           emit();
-          render();
+          renderInline();
+          renderDialogBody();
         });
         Array.prototype.forEach.call(box.querySelectorAll('.nk-assign-x'), function (btn) {
           btn.addEventListener('click', function () {
             var id = Number(btn.getAttribute('data-id'));
             chosen = chosen.filter(function (v) { return v !== id; });
             emit();
-            render();
-          });
-        });
-        function applyChange(input) {
-          var id = Number(input.value);
-          if (input.checked) {
-            if (chosen.indexOf(id) === -1) chosen.push(id);
-          } else {
-            chosen = chosen.filter(function (v) { return v !== id; });
-          }
-          emit();
-          // Se repinta el bloque conservando la búsqueda, el foco y el scroll
-          // de la lista para poder seguir eligiendo personas sin saltos.
-          var scroller = box.querySelector('.nk-assign-groups');
-          var scroll = scroller ? scroller.scrollTop : 0;
-          render();
-          if (open) {
-            var field = box.querySelector('.nk-assign-search input');
-            if (field) { field.focus(); field.setSelectionRange(field.value.length, field.value.length); }
-          }
-          var list = box.querySelector('.nk-assign-groups');
-          if (list) list.scrollTop = scroll;
-        }
-        Array.prototype.forEach.call(box.querySelectorAll('.nk-assign-person input'), function (input) {
-          input.addEventListener('change', function () { applyChange(input); });
-        });
-        var searchInput = box.querySelector('.nk-assign-search input');
-        if (searchInput) searchInput.addEventListener('input', function () {
-          search = searchInput.value;
-          var groups = box.querySelector('.nk-assign-groups');
-          if (!groups) return;
-          groups.innerHTML = assigneeGroups().map(groupHtml).join('') || '<div class="nk-assign-empty">Sin coincidencias.</div>';
-          Array.prototype.forEach.call(box.querySelectorAll('.nk-assign-person input'), function (input) {
-            input.addEventListener('change', function () { applyChange(input); });
+            renderInline();
+            renderDialogBody();
           });
         });
       }
 
-      render();
-      loadAssignees().then(function () { render(); }).catch(function () {});
+      renderInline();
+      loadAssignees()
+        .then(function () {
+          renderInline();
+          if (dialog) renderDialogBody();
+        })
+        .catch(function () {});
       return function () { return chosen.slice(); };
     }
 

@@ -1379,6 +1379,8 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
     '/notes/assignees',
     ...auth,
     ah((req, res) => {
+      // La lista cambia cuando cronogramas sincroniza usuarios: nunca reusar caché.
+      res.setHeader('Cache-Control', 'no-store');
       res.json({ me: req.user!.id, users: noteAssignees() });
     }),
   );

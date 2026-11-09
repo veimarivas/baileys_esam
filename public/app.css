@@ -7568,7 +7568,7 @@ html[data-bs-theme="dark"] .chat-ctl.is-agent.is-empty { --ctl: #8fa0b6; }
   border-radius: 8px; font-size: 0.7rem; font-weight: 700; padding: 0.2rem 0.5rem;
   cursor: pointer; display: inline-flex; align-items: center; gap: 0.25rem;
 }
-.nk-assign-toggle.open, .nk-assign-toggle:hover, .nk-assign-me:hover, .nk-assign-clear:hover {
+.nk-assign-toggle:hover, .nk-assign-me:hover, .nk-assign-clear:hover {
   border-color: var(--nk-brand); color: var(--nk-brand); background: var(--nk-brand-soft);
 }
 .nk-assign-count {
@@ -7576,55 +7576,148 @@ html[data-bs-theme="dark"] .chat-ctl.is-agent.is-empty { --ctl: #8fa0b6; }
   font-size: 0.6rem; padding: 0 0.35rem; line-height: 1.4;
 }
 .nk-assign-clear { color: var(--nk-mute); }
-.nk-assign-panel { margin-top: 0.45rem; border-top: 1px solid var(--nk-line); padding-top: 0.45rem; }
-.nk-assign-search {
-  display: flex; align-items: center; gap: 0.35rem;
-  border: 1px solid var(--nk-line); border-radius: 8px; padding: 0.2rem 0.45rem;
+
+/* Diálogo de derivación: amplio, agrupado por área y sin scroll diminuto */
+html.nk-assign-open,
+html.nk-assign-open body { overflow: hidden; }
+.nk-assign-dialog {
+  width: min(600px, calc(100vw - 1.25rem));
+  max-width: 600px;
+  max-height: min(86vh, 720px);
+  margin: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 16px;
+  overflow: hidden;
+  background: var(--nk-surface, #fff);
+  color: var(--nk-ink, #101828);
+  box-shadow: 0 24px 70px rgba(4, 22, 44, 0.35);
+}
+.nk-assign-dialog::backdrop {
+  background: rgba(4, 22, 44, 0.55);
+  backdrop-filter: blur(3px);
+}
+.nk-assign-dialog-box { display: flex; flex-direction: column; max-height: min(86vh, 720px); }
+.nk-assign-dialog-head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 0.8rem;
+  padding: 1rem 1.1rem 0.8rem; border-bottom: 1px solid var(--nk-line);
+  background: linear-gradient(180deg, var(--nk-surface-2), var(--nk-surface));
+}
+.nk-assign-dialog-title-wrap { display: flex; align-items: flex-start; gap: 0.65rem; min-width: 0; }
+.nk-assign-dialog-ico {
+  width: 2.25rem; height: 2.25rem; border-radius: 12px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--nk-brand-soft); color: var(--nk-brand); font-size: 1.1rem;
+}
+.nk-assign-dialog-head h5 { margin: 0; font-size: 1rem; font-weight: 800; letter-spacing: -0.01em; }
+.nk-assign-dialog-head p { margin: 0.15rem 0 0; max-width: 42ch; font-size: 0.72rem; line-height: 1.4; color: var(--nk-mute); }
+.nk-assign-dialog-x {
+  border: 0; background: transparent; color: var(--nk-mute); cursor: pointer;
+  width: 2rem; height: 2rem; border-radius: 50%; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.nk-assign-dialog-x:hover { background: var(--nk-danger-soft); color: var(--nk-danger); }
+.nk-assign-dialog-search {
+  display: flex; align-items: center; gap: 0.45rem;
+  margin: 0.75rem 1.1rem; padding: 0.4rem 0.6rem;
+  border: 1px solid var(--nk-line); border-radius: 10px;
   background: var(--nk-surface-2); color: var(--nk-mute);
 }
-.nk-assign-search input {
+.nk-assign-dialog-search input {
   border: 0; background: transparent; outline: none; flex: 1; min-width: 0;
-  font-size: 0.75rem; color: var(--nk-ink); padding: 0.1rem 0;
+  font-size: 0.82rem; color: var(--nk-ink); padding: 0;
 }
-.nk-assign-groups {
-  display: flex; flex-direction: column; gap: 0.4rem;
-  max-height: 230px; overflow: auto; margin-top: 0.45rem; padding-right: 0.1rem;
+.nk-assign-dialog-total {
+  font-size: 0.62rem; font-weight: 700; color: var(--nk-mute); white-space: nowrap;
 }
+.nk-assign-dialog-body {
+  flex: 1; min-height: 120px; overflow: auto;
+  display: flex; flex-direction: column; gap: 0.55rem;
+  padding: 0 1.1rem 0.9rem;
+}
+.nk-assign-dialog-empty {
+  padding: 1.5rem 0.6rem; text-align: center;
+  font-size: 0.8rem; color: var(--nk-mute);
+}
+/* Sin esto los grupos se encogen dentro del flex y se ve solo el primero. */
+.nk-assign-dialog-body > .nk-assign-group { flex: 0 0 auto; }
+.nk-assign-dialog-foot {
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.75rem 1.1rem; border-top: 1px solid var(--nk-line);
+  background: var(--nk-surface-2);
+}
+.nk-assign-dialog-count {
+  margin-right: auto; font-size: 0.72rem; font-weight: 700; color: var(--nk-ink-soft);
+}
+.nk-assign-dialog-clear {
+  border: 1px solid var(--nk-line); background: var(--nk-surface); color: var(--nk-ink-soft);
+  border-radius: 8px; font-size: 0.72rem; font-weight: 700; padding: 0.3rem 0.6rem; cursor: pointer;
+}
+.nk-assign-dialog-clear:hover:not(:disabled) { border-color: var(--nk-danger); color: var(--nk-danger); background: var(--nk-danger-soft); }
+.nk-assign-dialog-clear:disabled { opacity: 0.45; cursor: not-allowed; }
+.nk-assign-dialog-done {
+  border: 1px solid var(--nk-brand); background: var(--nk-brand); color: #fff;
+  border-radius: 8px; font-size: 0.76rem; font-weight: 700; padding: 0.34rem 0.8rem;
+  cursor: pointer; display: inline-flex; align-items: center;
+}
+.nk-assign-dialog-done:hover { filter: brightness(1.08); }
+.nk-assign-dialog :is(button, input, label):focus-visible {
+  outline: 2px solid var(--nk-brand); outline-offset: 2px;
+}
+
 .nk-assign-group {
-  border: 1px solid var(--nk-line); border-radius: 9px; overflow: hidden;
-  background: var(--nk-surface); align-self: start;
+  border: 1px solid var(--nk-line); border-radius: 12px; overflow: hidden;
+  background: var(--nk-surface);
 }
 .nk-assign-group-head {
-  display: flex; align-items: center; justify-content: space-between; gap: 0.3rem;
-  padding: 0.3rem 0.5rem; background: var(--nk-surface-2);
-  font-size: 0.62rem; font-weight: 800; text-transform: uppercase;
-  letter-spacing: 0.06em; color: var(--nk-mute); position: sticky; top: 0;
+  display: flex; align-items: center; justify-content: space-between; gap: 0.4rem;
+  padding: 0.45rem 0.7rem; background: var(--nk-surface-2);
+  font-size: 0.66rem; font-weight: 800; letter-spacing: 0.045em;
+  text-transform: uppercase; color: var(--nk-ink-soft);
 }
+.nk-assign-group-title { display: inline-flex; align-items: center; gap: 0.4rem; min-width: 0; }
+.nk-assign-group-title [class^="ri-"] { color: var(--nk-brand); font-size: 0.95rem; }
 .nk-assign-group-count {
   background: var(--nk-surface); border: 1px solid var(--nk-line);
-  border-radius: 999px; padding: 0 0.3rem; font-size: 0.58rem;
+  border-radius: 999px; padding: 0.02rem 0.45rem; font-size: 0.6rem; color: var(--nk-mute);
 }
 .nk-assign-people { display: flex; flex-direction: column; }
 .nk-assign-person {
-  position: relative; display: flex; align-items: center; gap: 0.4rem;
-  padding: 0.3rem 0.5rem; cursor: pointer; font-size: 0.75rem; color: var(--nk-ink-soft);
+  position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center; gap: 0.6rem; padding: 0.42rem 0.7rem;
+  cursor: pointer; font-size: 0.8rem; color: var(--nk-ink-soft);
+  border-top: 1px solid color-mix(in srgb, var(--nk-line) 65%, transparent);
 }
+.nk-assign-person:first-child { border-top: 0; }
 .nk-assign-person:hover { background: var(--nk-surface-2); }
-.nk-assign-person.on { color: var(--nk-brand); font-weight: 700; background: var(--nk-brand-soft); }
+.nk-assign-person.on { background: var(--nk-brand-soft); color: var(--nk-ink); }
 .nk-assign-person input { position: absolute; opacity: 0; pointer-events: none; }
+.nk-assign-person .nk-assign-avatar { width: 1.6rem; height: 1.6rem; font-size: 0.62rem; }
+.nk-assign-name { min-width: 0; display: flex; align-items: center; gap: 0.35rem; overflow: hidden; }
+.nk-assign-name b {
+  font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.nk-assign-person.on .nk-assign-name b { color: var(--nk-brand); font-weight: 700; }
+.nk-assign-name em {
+  font-style: normal; font-size: 0.55rem; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--nk-brand); background: var(--nk-brand-soft);
+  border-radius: 999px; padding: 0.05rem 0.3rem; flex: none;
+}
 .nk-assign-check {
-  width: 1rem; height: 1rem; border-radius: 5px; border: 1.5px solid var(--nk-line);
+  width: 1.15rem; height: 1.15rem; border-radius: 6px; border: 1.5px solid var(--nk-line);
   display: inline-flex; align-items: center; justify-content: center;
-  font-size: 0.7rem; color: transparent; flex: none; background: var(--nk-surface);
+  font-size: 0.72rem; color: transparent; flex: none; background: var(--nk-surface);
 }
 .nk-assign-person.on .nk-assign-check { background: var(--nk-brand); border-color: var(--nk-brand); color: #fff; }
-.nk-assign-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.nk-assign-name em {
-  font-style: normal; font-size: 0.58rem; font-weight: 800; text-transform: uppercase;
-  color: var(--nk-brand); margin-left: 0.25rem;
+
+@media (max-width: 575.98px) {
+  .nk-assign-dialog { width: calc(100vw - 0.75rem); max-height: 90vh; border-radius: 14px; }
+  .nk-assign-dialog-box { max-height: 90vh; }
+  .nk-assign-dialog-head { padding: 0.85rem 0.85rem 0.7rem; }
+  .nk-assign-dialog-search { margin: 0.65rem 0.85rem; }
+  .nk-assign-dialog-body { padding: 0 0.85rem 0.75rem; }
+  .nk-assign-dialog-foot { padding: 0.65rem 0.85rem; }
 }
-.nk-assign-empty { grid-column: 1 / -1; font-size: 0.72rem; color: var(--nk-mute); padding: 0.5rem; text-align: center; }
-.nk-assign-picker-sm .nk-assign-groups { max-height: 190px; }
 
 /* Enviar contacto: buscador y resultados */
 .contact-search-wrap {

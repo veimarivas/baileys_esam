@@ -140,7 +140,7 @@ describe('listDirectory', () => {
     assert.equal(person.chat, null);
   });
 
-  it('encuentra contactos que solo existen en las conversaciones (enviar contacto)', () => {
+  it('el directorio registrado no mezcla contactos sueltos de WhatsApp', () => {
     const at = nowIso();
     run(
       `INSERT INTO contacts (session_id, chat_id, name, phone, created_at, updated_at)
@@ -148,18 +148,25 @@ describe('listDirectory', () => {
       at,
       at,
     );
-    const byName = listDirectory({ q: 'carlos mamaní' });
+    // La pestaña «Contactos registrados» no lo muestra: no vino de cronogramas
+    // ni tiene un nombre cargado a mano.
+    assert.equal(listDirectory({ q: 'carlos mamaní' }).total, 0);
+    assert.equal(listDirectory({ q: '711 100 09' }).total, 0);
+  });
+
+  it('encuentra contactos de conversaciones solo en el buscador de envío', () => {
+    const byName = listDirectory({ q: 'carlos mamaní', includeContacts: true });
     assert.deepEqual(byName.people.map((p) => p.phone_key), ['59171110009']);
     assert.equal(byName.people[0].full_name, 'Carlos Mamani');
     assert.equal(byName.people[0].name_source, 'whatsapp');
     assert.equal(byName.people[0].phone, '59171110009');
 
     // También por número, aunque se escriba con espacios.
-    const byPhone = listDirectory({ q: '711 100 09' });
+    const byPhone = listDirectory({ q: '711 100 09', includeContacts: true });
     assert.deepEqual(byPhone.people.map((p) => p.phone_key), ['59171110009']);
   });
 
-  it('no muestra grupos ni estados al buscar un contacto para enviar', () => {
+  it('no muestra grupos ni estados ni siquiera en el buscador de envío', () => {
     const at = nowIso();
     run(
       `INSERT INTO contacts (session_id, chat_id, name, phone, created_at, updated_at)
@@ -174,7 +181,8 @@ describe('listDirectory', () => {
       at,
     );
     assert.equal(listDirectory({ q: 'Grupo Ventas' }).total, 0);
-    assert.equal(listDirectory({ q: '59171110010' }).total, 0);
-    assert.equal(listDirectory({ q: '59171110011' }).total, 0);
+    assert.equal(listDirectory({ q: 'Grupo Ventas', includeContacts: true }).total, 0);
+    assert.equal(listDirectory({ q: '59171110010', includeContacts: true }).total, 0);
+    assert.equal(listDirectory({ q: '59171110011', includeContacts: true }).total, 0);
   });
 });

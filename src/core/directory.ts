@@ -68,31 +68,40 @@ export function listDirectory(opts: {
   sessionIds?: string[] | null;
   limit?: number;
   offset?: number;
+  /**
+   * Incluye contactos de WhatsApp que no están en el directorio (personas con
+   * conversación pero sin nombre/programa de cronogramas). Se usa solo en el
+   * buscador de «Enviar contacto»; la pestaña «Contactos registrados» debe
+   * seguir mostrando únicamente a quienes registró el sistema.
+   */
+  includeContacts?: boolean;
 } = {}): DirectoryResult {
   const q = (opts.q ?? '').trim();
   const programa = (opts.programa ?? '').trim();
   const limit = Math.min(Math.max(opts.limit ?? 800, 1), 2000);
   const offset = Math.max(opts.offset ?? 0, 0);
+  const includeContacts = opts.includeContacts === true;
 
-  // Una fila por persona (número). El nombre manual, el de cronogramas y el que
-  // muestra WhatsApp en las conversaciones se resuelven después, quedándose con
-  // la mejor fuente disponible. Incluir los contactos del inbox es clave para el
-  // buscador de «Enviar contacto»: antes solo encontraba a quien había llegado
-  // por cronogramas o tenía un nombre cargado a mano.
-  const cte = `WITH people AS (
-      SELECT phone_key, full_name, programa, last_at, 0 AS manual
-        FROM person_programs
-      UNION ALL
-      SELECT phone_key, full_name, NULL AS programa, updated_at AS last_at, 1 AS manual
-        FROM person_names
-      UNION ALL
+  // Una fila por persona (número). El nombre manual y el de cronogramas se
+  // resuelven después, quedándose con el más reciente. Los contactos crudos del
+  // inbox solo se agregan cuando se buscan para enviar una tarjeta de contacto.
+  const contactsCte = includeContacts
+    ? `UNION ALL
       SELECT ct.phone_key, NULLIF(TRIM(ct.name), '') AS full_name, NULL AS programa,
              ct.updated_at AS last_at, 0 AS manual
         FROM contacts ct
        WHERE ct.phone_key IS NOT NULL
          AND ct.chat_id NOT LIKE '%@g.us'
          AND ct.chat_id NOT LIKE '%@broadcast'
-         AND ct.chat_id NOT LIKE '%@newsletter'
+         AND ct.chat_id NOT LIKE '%@newsletter'`
+    : '';
+  const cte = `WITH people AS (
+      SELECT phone_key, full_name, programa, last_at, 0 AS manual
+        FROM person_programs
+      UNION ALL
+      SELECT phone_key, full_name, NULL AS programa, updated_at AS last_at, 1 AS manual
+        FROM person_names
+      ${contactsCte}
     ),
     grouped AS (
       SELECT phone_key, MAX(last_at) AS last_at
@@ -160,18 +169,21 @@ export function listDirectory(opts: {
       WHERE pn.phone_key IN (${inList})`,
     ...keys,
   );
-  // Nombre que muestra WhatsApp en la conversación (pushname).
-  const contactRows = all<{ phone_key: string; name: string; updated_at: string }>(
-    `SELECT ct.phone_key, TRIM(ct.name) AS name, ct.updated_at
-       FROM contacts ct
-      WHERE ct.phone_key IN (${inList})
-        AND NULLIF(TRIM(ct.name), '') IS NOT NULL
-        AND ct.chat_id NOT LIKE '%@g.us'
-        AND ct.chat_id NOT LIKE '%@broadcast'
-        AND ct.chat_id NOT LIKE '%@newsletter'
-      ORDER BY ct.updated_at DESC`,
-    ...keys,
-  );
+  // Nombre que muestra WhatsApp en la conversación (pushname). Solo aplica al
+  // buscador de envío; el directorio registrado no mezcla nombres de WhatsApp.
+  const contactRows = includeContacts
+    ? all<{ phone_key: string; name: string; updated_at: string }>(
+        `SELECT ct.phone_key, TRIM(ct.name) AS name, ct.updated_at
+           FROM contacts ct
+          WHERE ct.phone_key IN (${inList})
+            AND NULLIF(TRIM(ct.name), '') IS NOT NULL
+            AND ct.chat_id NOT LIKE '%@g.us'
+            AND ct.chat_id NOT LIKE '%@broadcast'
+            AND ct.chat_id NOT LIKE '%@newsletter'
+          ORDER BY ct.updated_at DESC`,
+        ...keys,
+      )
+    : [];
 
   interface Built {
     programas: string[];

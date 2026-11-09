@@ -5076,7 +5076,7 @@
         lastQuery = q;
         if (q.length < 2) { clearResults(); hint.textContent = 'Escribí al menos 2 caracteres.'; return; }
         hint.textContent = 'Buscando…';
-        api('/inbox/directory?q=' + encodeURIComponent(q) + '&limit=12')
+        api('/inbox/directory?q=' + encodeURIComponent(q) + '&limit=12&include_contacts=1')
           .then(function (d) {
             if (lastQuery !== q) return;
             hint.textContent = 'Se busca en el directorio y en las conversaciones de todas tus líneas.';

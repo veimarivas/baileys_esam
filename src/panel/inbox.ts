@@ -434,6 +434,9 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
           programa: programa || null,
           sessionIds: sessionScopeFor(req.user!),
           limit: Number(req.query.limit ?? 800) || 800,
+          // Solo el buscador de «Enviar contacto» incluye contactos de WhatsApp
+          // que no están registrados por cronogramas.
+          includeContacts: String(req.query.include_contacts ?? '') === '1',
         }),
       );
     }),

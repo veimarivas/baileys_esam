@@ -29,7 +29,7 @@ export interface AgendaBoard {
   notes: number;
 }
 
-const STAGE_COLORS = ['#64748b', '#045474', '#b45309', '#0f7b55', '#7c3aed', '#be123c', '#0369a1', '#4d7c0f'];
+const STAGE_COLORS = ['#64748b', '#045474', '#b45309', '#0f7b55', '#2e90b5', '#9a5b00', '#3f6212', '#475467'];
 
 function colorFor(index: number): string {
   return STAGE_COLORS[index % STAGE_COLORS.length];

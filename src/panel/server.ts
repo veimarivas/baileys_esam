@@ -156,24 +156,13 @@ const INBOX_WHERE = `chat_id NOT LIKE '%@broadcast' AND chat_id NOT LIKE '%@news
  */
 export function renderAgendaPage(): string {
   return `<div class="agenda-page" id="agenda-page">
-    <div class="agenda-hero">
-      <div class="agenda-hero-main">
-        <span class="agenda-eyebrow"><span class="ri-lock-line" aria-hidden="true"></span> Espacio privado</span>
-        <h5>Tus anotaciones y procesos en curso</h5>
-        <p>Registrá lo que estás gestionando con cada participante. Solo vos ves esta agenda y podés mover cada proceso por sus etapas.</p>
-      </div>
-      <button type="button" class="btn btn-primary agenda-new" id="agenda-new">
-        <span class="ri-add-line" aria-hidden="true"></span> Nueva nota
-      </button>
-    </div>
     <div class="agenda-boards" id="agenda-boards" aria-label="Sub-agendas"></div>
-    <div class="agenda-stats" id="agenda-stats" aria-live="polite"></div>
-    <div class="agenda-toolbar">
+    <div class="agenda-workbar">
       <label class="agenda-search" for="agenda-search">
         <span class="ri-search-line" aria-hidden="true"></span>
-        <input type="search" id="agenda-search" placeholder="Buscar en mi agenda por nota, contacto o número…" autocomplete="off" />
+        <input type="search" id="agenda-search" placeholder="Buscar por nota, contacto o número…" autocomplete="off" />
       </label>
-      <span class="agenda-private-hint"><span class="ri-eye-off-line" aria-hidden="true"></span> Las notas de esta agenda son privadas.</span>
+      <div class="agenda-summary" id="agenda-stats" aria-live="polite"></div>
     </div>
     <div class="agenda-board" id="agenda-board" aria-live="polite">
       <div class="agenda-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Cargando tu agenda…</div>
@@ -1785,8 +1774,10 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
   // «Mi agenda»: notas privadas y pipeline personal de cada usuario.
   app.get('/agenda', requireUser, requireSection('conversations'), (req: AuthedRequest, res: Response) => {
     sendPage(req, res, 'Mi agenda', 'conversations', renderAgendaPage(), {
-      subtitle: 'Tus notas privadas y el seguimiento de los procesos con cada participante.',
+      subtitle: 'Tus notas privadas y el seguimiento de cada proceso. Solo vos ves este espacio.',
       activeHref: '/agenda',
+      actions: '<button type="button" class="btn btn-primary btn-sm" id="agenda-new">' +
+        '<span class="ri-add-line me-1" aria-hidden="true"></span>Nueva nota</button>',
     });
   });
 

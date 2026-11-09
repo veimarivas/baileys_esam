@@ -7929,7 +7929,6 @@ html[data-bs-theme="dark"] .agenda-page {
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .ag-card:hover { border-color: color-mix(in srgb, var(--ag-tone, var(--esam-line)) 40%, var(--esam-line)); box-shadow: 0 3px 10px rgba(14, 26, 43, 0.08); }
-.ag-card.is-overdue { border-left: 3px solid var(--ag-danger); }
 .ag-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.35rem; }
 .ag-contact { display: flex; align-items: center; gap: 0.45rem; min-width: 0; text-decoration: none; color: inherit; }
 .ag-contact:hover .ag-contact-body b { color: var(--brand); }
@@ -7987,7 +7986,8 @@ html.nk-assign-open .agenda-dialog { pointer-events: auto; }
 .ag-field { display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; }
 .ag-label { font-size: 0.64rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; color: var(--nk-mute); }
 .ag-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
-.ag-check { display: flex; align-items: center; gap: 0.4rem; font-size: 0.76rem; color: var(--nk-ink-soft); }
+.ag-check { display: flex; align-items: center; gap: 0.4rem; min-height: 1.9rem; font-size: 0.76rem; color: var(--esam-ink-soft); }
+.ag-check .form-check-input { margin: 0; flex: none; }
 .ag-contact-search {
   display: flex; align-items: center; gap: 0.4rem; padding: 0.4rem 0.6rem;
   border: 1px solid var(--nk-line); border-radius: 9px; background: var(--nk-surface-2); color: var(--nk-mute);
@@ -8075,6 +8075,232 @@ html.nk-assign-open .agenda-dialog { pointer-events: auto; }
 .ag-stage-row .form-control { font-size: 0.78rem; }
 .ag-stage-rows { margin-bottom: 0.35rem; }
 .agenda-dialog .ag-board-btn { align-self: flex-start; }
+
+/* =============================================================================
+   Mi agenda · refinamiento visual (superficie de trabajo, sin decoración)
+   ============================================================================= */
+.agenda-boards {
+  display: flex; align-items: flex-end; justify-content: space-between; gap: 0.75rem;
+  margin: 0.15rem 0 0.4rem; padding: 0; border-bottom: 0;
+}
+.ag-board-tabs {
+  display: flex; align-items: flex-end; gap: 0; overflow-x: auto; min-width: 0;
+  flex: 1; border-bottom: 1px solid var(--esam-line);
+}
+.ag-board-tab {
+  display: inline-flex; align-items: center; gap: 0.38rem; white-space: nowrap;
+  border: 0; border-bottom: 2px solid transparent; border-radius: 0;
+  background: transparent; color: var(--esam-muted);
+  font-size: 0.76rem; font-weight: 600; line-height: 1;
+  padding: 0.62rem 0.15rem; margin-right: 1.15rem; cursor: pointer;
+}
+.ag-board-tab [class^="ri-"] { font-size: 0.82rem; opacity: 0.75; }
+.ag-board-tab:hover { color: var(--esam-ink); }
+.ag-board-tab.on {
+  color: var(--esam-ink); font-weight: 700;
+  border-bottom-color: var(--brand); background: transparent; box-shadow: none;
+}
+.ag-board-tab.on [class^="ri-"] { color: var(--brand); opacity: 1; }
+.ag-board-count {
+  font-size: 0.6rem; font-weight: 700; color: var(--esam-muted);
+  background: var(--esam-surface-2); border-radius: 999px;
+  padding: 0.08rem 0.34rem; line-height: 1.3;
+}
+.ag-board-tab.on .ag-board-count { color: var(--brand); background: var(--brand-soft); }
+.ag-board-actions { display: flex; align-items: center; gap: 0.2rem; flex: none; padding-bottom: 0.25rem; }
+.ag-board-btn {
+  border: 0; background: transparent; color: var(--esam-muted);
+  border-radius: 7px; font-size: 0.7rem; font-weight: 600;
+  padding: 0.32rem 0.45rem; display: inline-flex; align-items: center; gap: 0.28rem; cursor: pointer;
+}
+.ag-board-btn:hover { color: var(--esam-ink); background: var(--esam-surface-2); }
+.ag-board-btn.is-primary { color: var(--brand); background: var(--brand-soft); }
+
+.agenda-workbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
+  margin: 0.55rem 0 0.65rem;
+}
+.agenda-search {
+  display: flex; align-items: center; gap: 0.4rem;
+  flex: 1; max-width: 360px; padding: 0.34rem 0.55rem;
+  border: 1px solid var(--esam-line); border-radius: 8px;
+  background: var(--esam-surface); color: var(--esam-muted);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.agenda-search:focus-within { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
+.agenda-search input {
+  border: 0; outline: none; background: transparent; flex: 1; min-width: 0;
+  font-size: 0.8rem; color: var(--esam-ink);
+}
+.agenda-summary {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 0.35rem;
+  font-size: 0.68rem; color: var(--esam-muted); white-space: nowrap;
+}
+.ag-sum-item { display: inline-flex; align-items: center; gap: 0.28rem; }
+.ag-sum-item b { color: var(--esam-ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+.ag-sum-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--esam-muted); opacity: 0.65; }
+.ag-sum-item.is-open .ag-sum-dot { background: var(--brand); opacity: 1; }
+.ag-sum-item.is-overdue .ag-sum-dot { background: var(--esam-danger, #bb3b3b); opacity: 1; }
+.ag-sum-item.is-done .ag-sum-dot { background: var(--esam-success, #0f7b55); opacity: 1; }
+.ag-sum-sep { width: 1px; height: 0.75rem; background: var(--esam-line); }
+
+.ag-columns {
+  display: grid; grid-auto-flow: column; grid-auto-columns: minmax(248px, 1fr);
+  gap: 0.6rem; align-items: start; overflow-x: auto; padding-bottom: 0.3rem;
+}
+.ag-col {
+  min-width: 0; border: 1px solid var(--esam-line); border-radius: 12px;
+  background: var(--esam-surface-2); overflow: hidden;
+}
+.ag-col-head {
+  display: flex; align-items: center; gap: 0.45rem;
+  padding: 0.52rem 0.62rem; border-bottom: 1px solid var(--esam-line);
+  background: color-mix(in srgb, var(--ag-tone) 5%, var(--esam-surface));
+}
+.ag-stage-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ag-tone); flex: none; }
+.ag-col-title { min-width: 0; flex: 1; }
+.ag-col-title b {
+  display: block; font-size: 0.76rem; font-weight: 700; color: var(--esam-ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ag-col-done { color: var(--ag-tone); font-size: 0.78rem; flex: none; }
+.ag-col-count {
+  font-size: 0.62rem; font-weight: 700; color: var(--esam-muted);
+  background: var(--esam-surface); border: 1px solid var(--esam-line);
+  border-radius: 999px; padding: 0.03rem 0.4rem; flex: none;
+}
+.ag-col-body { display: flex; flex-direction: column; gap: 0.42rem; padding: 0.48rem; min-height: 74px; }
+.ag-col-empty {
+  padding: 0.85rem 0.4rem; text-align: center; font-size: 0.7rem; color: var(--esam-muted);
+  border: 1px dashed var(--esam-line); border-radius: 8px; background: transparent;
+}
+.ag-col-add {
+  margin-top: 0.05rem; border: 1px dashed var(--esam-line); border-radius: 8px;
+  background: transparent; color: var(--esam-muted); font-size: 0.66rem; font-weight: 600;
+  padding: 0.32rem 0.4rem; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 0.25rem;
+}
+.ag-col-add:hover { border-color: var(--brand); color: var(--brand); background: var(--brand-soft); }
+
+.ag-card {
+  border: 1px solid var(--esam-line); border-radius: 12px;
+  background: var(--esam-surface); padding: 0.52rem 0.58rem 0.48rem;
+  box-shadow: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.ag-card:hover { border-color: color-mix(in srgb, var(--ag-tone) 28%, var(--esam-line)); box-shadow: 0 3px 10px rgba(16, 24, 40, 0.07); }
+.ag-card.is-overdue { border-left: 1px solid var(--esam-line); border-color: color-mix(in srgb, var(--esam-danger) 28%, var(--esam-line)); }
+.ag-card.is-done { opacity: 0.68; }
+.ag-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.35rem; }
+.ag-contact { display: flex; align-items: center; gap: 0.42rem; min-width: 0; text-decoration: none; color: inherit; }
+.ag-contact:hover .ag-contact-body b { color: var(--brand); }
+.ag-avatar {
+  width: 1.55rem; height: 1.55rem; border-radius: 50%; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 0.6rem; font-weight: 700; color: var(--brand); background: var(--brand-soft);
+}
+.ag-contact-body { min-width: 0; }
+.ag-contact-body b {
+  display: block; font-size: 0.74rem; font-weight: 700; color: var(--esam-ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ag-contact-body small { display: block; font-size: 0.62rem; color: var(--esam-muted); }
+.ag-pin { color: var(--nk-pin, #9a5b00); font-size: 0.7rem; margin-top: 0.12rem; }
+.ag-text {
+  margin: 0.4rem 0 0; font-size: 0.76rem; line-height: 1.48; color: var(--esam-ink-soft);
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.ag-text.is-muted { font-style: italic; color: var(--esam-muted); }
+.ag-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem; margin-top: 0.35rem; }
+.ag-due {
+  display: inline-flex; align-items: center; gap: 0.22rem; font-size: 0.62rem; font-weight: 600;
+  border-radius: 999px; padding: 0.06rem 0.4rem;
+  color: var(--esam-muted); background: var(--esam-surface-2);
+}
+.ag-due.is-overdue { color: var(--esam-danger, #bb3b3b); background: rgba(187, 59, 59, 0.09); }
+.ag-due.is-today { color: #b45309; background: rgba(180, 83, 9, 0.1); }
+.ag-due.is-valid { color: var(--brand); background: var(--brand-soft); }
+.ag-due.is-done { color: var(--esam-success, #0f7b55); background: rgba(15, 123, 85, 0.09); }
+.ag-card-foot {
+  display: flex; align-items: center; gap: 0.2rem;
+  margin-top: 0.45rem; padding-top: 0.4rem; border-top: 1px solid var(--esam-line);
+}
+.ag-stage {
+  flex: 1; min-width: 0; max-width: none; height: 1.75rem; padding-top: 0.1rem; padding-bottom: 0.1rem;
+  font-size: 0.66rem; font-weight: 600; color: var(--esam-ink-soft);
+  border: 1px solid transparent; background-color: var(--esam-surface-2); border-radius: 7px;
+}
+.ag-stage:hover { border-color: var(--esam-line-strong, var(--esam-line)); }
+.ag-icon-btn {
+  border: 0; background: transparent; color: var(--esam-muted); cursor: pointer;
+  width: 1.65rem; height: 1.65rem; border-radius: 6px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center; font-size: 0.82rem;
+  text-decoration: none;
+}
+.ag-icon-btn:hover { background: var(--esam-surface-2); color: var(--esam-ink); }
+.ag-open { color: var(--esam-muted); }
+.ag-open:hover { color: var(--brand); }
+.ag-board-empty-hint {
+  display: flex; align-items: center; gap: 0.35rem; margin-bottom: 0.55rem;
+  padding: 0.42rem 0.55rem; border-radius: 8px;
+  border: 1px dashed var(--esam-line); background: transparent;
+  color: var(--esam-muted); font-size: 0.7rem;
+}
+
+/* Formularios de agenda: etiquetas legibles, sin mayúsculas forzadas */
+.agenda-dialog .ag-label,
+.agenda-dialog .nk-field-label {
+  font-size: 0.72rem; font-weight: 600; text-transform: none;
+  letter-spacing: 0; color: var(--esam-ink-soft); margin: 0 0 0.15rem;
+}
+.agenda-dialog .ag-field { gap: 0.22rem; }
+.agenda-dialog .form-control,
+.agenda-dialog .form-select { font-size: 0.8rem; }
+.agenda-dialog-head h5 { font-size: 0.98rem; letter-spacing: -0.01em; }
+.agenda-dialog-head p { font-size: 0.72rem; color: var(--esam-muted); }
+.agenda-dialog-box { border-radius: 16px; }
+.agenda-dialog-head { padding: 0.9rem 1rem 0.75rem; }
+.agenda-dialog-body { padding: 0.85rem 1rem; gap: 0.7rem; }
+.agenda-dialog-foot { padding: 0.65rem 1rem; }
+.ag-stage-row {
+  grid-template-columns: 1.2rem minmax(0, 1fr) 1.9rem repeat(3, 1.7rem);
+  gap: 0.25rem; padding: 0.2rem 0; border-bottom: 1px solid var(--esam-line);
+}
+.ag-stage-row:last-child { border-bottom: 0; }
+.ag-stage-num { font-size: 0.58rem; color: var(--esam-muted); }
+.ag-stage-color { width: 1.9rem; height: 1.7rem; padding: 0.08rem; border-radius: 6px; }
+.ag-stage-row .form-control { font-size: 0.76rem; }
+.ag-stage-row .ag-icon-btn { width: 1.7rem; height: 1.7rem; }
+.ag-stage-rows { margin-bottom: 0.25rem; }
+.agenda-dialog .ag-board-btn { border: 1px solid var(--esam-line); border-radius: 8px; margin-top: 0.35rem; }
+.agenda-page :is(button, a, select, input, textarea):focus-visible,
+.agenda-dialog :is(button, a, select, input, textarea):focus-visible {
+  outline: 2px solid var(--brand); outline-offset: 2px;
+}
+.ag-board-tab:focus-visible { outline-offset: -2px; }
+.ag-card:focus-within { border-color: color-mix(in srgb, var(--ag-tone) 35%, var(--esam-line)); }
+
+html[data-bs-theme="dark"] .ag-due.is-overdue { color: #f08484; background: rgba(240, 132, 132, 0.13); }
+html[data-bs-theme="dark"] .ag-due.is-today { color: #f3b25f; background: rgba(243, 178, 95, 0.13); }
+html[data-bs-theme="dark"] .ag-due.is-valid { color: #6cc3e3; background: rgba(108, 195, 227, 0.13); }
+html[data-bs-theme="dark"] .ag-due.is-done { color: #5fd3a6; background: rgba(95, 211, 166, 0.13); }
+html[data-bs-theme="dark"] .ag-pin { color: #f5c25b; }
+html[data-bs-theme="dark"] .ag-sum-item.is-overdue .ag-sum-dot { background: #f08484; }
+html[data-bs-theme="dark"] .ag-sum-item.is-done .ag-sum-dot { background: #5fd3a6; }
+html[data-bs-theme="dark"] .ag-card.is-overdue { border-color: rgba(240, 132, 132, 0.32); }
+
+@media (max-width: 991.98px) {
+  .agenda-boards { align-items: flex-start; flex-direction: column; gap: 0.35rem; }
+  .ag-board-actions { padding-bottom: 0; }
+  .agenda-workbar { align-items: stretch; flex-direction: column; gap: 0.45rem; }
+  .agenda-search { max-width: none; }
+  .agenda-summary { white-space: normal; }
+}
+@media (max-width: 767.98px) {
+  .ag-columns { grid-auto-flow: row; grid-auto-columns: auto; grid-template-columns: 1fr; overflow-x: visible; }
+  .agenda-summary { font-size: 0.64rem; }
+}
 
 @media (max-width: 1199.98px) {
   .agenda-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }

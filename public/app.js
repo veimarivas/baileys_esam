@@ -8165,7 +8165,8 @@
           '</select>' +
           '<button type="button" class="ag-icon-btn ag-move" data-id="' + n.id + '" title="Mover a otra sub-agenda" aria-label="Mover a otra sub-agenda">' +
             '<span class="ri-folder-transfer-line" aria-hidden="true"></span></button>' +
-          '<a class="ag-open" href="' + chatUrl + '">Abrir <span class="ri-arrow-right-line" aria-hidden="true"></span></a>' +
+          '<a class="ag-icon-btn ag-open" href="' + chatUrl + '" title="Abrir la conversación" aria-label="Abrir la conversación">' +
+            '<span class="ri-arrow-right-up-line" aria-hidden="true"></span></a>' +
         '</div>' +
       '</article>';
     }
@@ -8187,14 +8188,15 @@
       if (!els.stats) return;
       var c = counts();
       var items = [
-        { key: 'total', label: 'En esta sub-agenda', value: c.total, icon: 'ri-folder-3-line' },
-        { key: 'doing', label: 'En curso', value: c.open, icon: 'ri-progress-4-line' },
-        { key: 'overdue', label: 'Vencidas', value: c.overdue, icon: 'ri-alarm-warning-line' },
-        { key: 'done', label: 'Resueltas', value: c.done, icon: 'ri-check-double-line' },
+        { key: 'total', label: 'en total', value: c.total },
+        { key: 'open', label: 'en curso', value: c.open },
+        { key: 'overdue', label: c.overdue === 1 ? 'vencida' : 'vencidas', value: c.overdue },
+        { key: 'done', label: c.done === 1 ? 'resuelta' : 'resueltas', value: c.done },
       ];
-      els.stats.innerHTML = items.map(function (it) {
-        return '<div class="ag-stat is-' + it.key + '"><span class="ag-stat-ico ' + it.icon + '" aria-hidden="true"></span>' +
-          '<div><b>' + it.value + '</b><span>' + it.label + '</span></div></div>';
+      els.stats.innerHTML = items.map(function (it, index) {
+        return (index ? '<span class="ag-sum-sep" aria-hidden="true"></span>' : '') +
+          '<span class="ag-sum-item is-' + it.key + '"><span class="ag-sum-dot" aria-hidden="true"></span>' +
+          '<b>' + it.value + '</b> ' + it.label + '</span>';
       }).join('');
     }
 
@@ -8216,7 +8218,7 @@
         '<div class="ag-board-actions">' +
           '<button type="button" class="ag-board-btn" id="ag-board-settings" title="Editar nombre y columnas de esta sub-agenda">' +
             '<span class="ri-settings-3-line" aria-hidden="true"></span> Columnas</button>' +
-          '<button type="button" class="ag-board-btn is-primary" id="ag-board-new">' +
+          '<button type="button" class="ag-board-btn" id="ag-board-new">' +
             '<span class="ri-add-line" aria-hidden="true"></span> Nueva sub-agenda</button>' +
         '</div>';
       bindBoards();
@@ -8277,16 +8279,16 @@
           return !!s && s.id === stage.id;
         });
         var tone = stage.color || '#64748b';
-        return '<section class="ag-col" style="--ag-tone:' + escapeHtml(tone) + ';--ag-tone-soft:color-mix(in srgb, ' + escapeHtml(tone) + ' 13%, transparent)">' +
+        return '<section class="ag-col" aria-label="' + escapeHtml(stage.name) + '" style="--ag-tone:' + escapeHtml(tone) + ';--ag-tone-soft:color-mix(in srgb, ' + escapeHtml(tone) + ' 12%, transparent)">' +
           '<header class="ag-col-head">' +
-            '<span class="ag-col-ico ' + (stage.is_done ? 'ri-check-double-line' : 'ri-progress-4-line') + '" aria-hidden="true"></span>' +
-            '<div class="ag-col-title"><b>' + escapeHtml(stage.name) + '</b><small>' +
-              (stage.is_done ? 'Procesos resueltos' : 'Procesos en esta etapa') + '</small></div>' +
+            '<span class="ag-stage-dot" aria-hidden="true"></span>' +
+            '<div class="ag-col-title"><b>' + escapeHtml(stage.name) + '</b></div>' +
+            (stage.is_done ? '<span class="ag-col-done ri-check-line" title="Columna final del proceso" aria-label="Columna final"></span>' : '') +
             '<span class="ag-col-count">' + listNotes.length + '</span>' +
           '</header>' +
           '<div class="ag-col-body">' +
-            (listNotes.length ? listNotes.map(cardHtml).join('') : '<div class="ag-col-empty"><span class="ri-inbox-line" aria-hidden="true"></span><span>Sin notas</span></div>') +
-            '<button type="button" class="ag-col-add" data-stage="' + stage.id + '"><span class="ri-add-line" aria-hidden="true"></span> Nueva nota</button>' +
+            (listNotes.length ? listNotes.map(cardHtml).join('') : '<div class="ag-col-empty">Sin notas</div>') +
+            '<button type="button" class="ag-col-add" data-stage="' + stage.id + '"><span class="ri-add-line" aria-hidden="true"></span> Agregar nota</button>' +
           '</div></section>';
       }).join('') + '</div>';
       bindBoardCards();
@@ -8454,8 +8456,8 @@
       var dlg = document.createElement('dialog');
       dlg.className = 'agenda-dialog nk-section';
       dlg.innerHTML = '<div class="agenda-dialog-box">' +
-        '<div class="agenda-dialog-head"><div><h5>Nueva nota para mí</h5>' +
-          '<p>Elegí la sub-agenda y el contacto, escribí la anotación y, si querés, ponele fecha. Queda solo en tu agenda.</p></div>' +
+        '<div class="agenda-dialog-head"><div><h5>Nueva nota</h5>' +
+          '<p>Se guarda solo en tu agenda. Elegí la sub-agenda, el contacto y la columna.</p></div>' +
           '<button type="button" class="agenda-dialog-x" data-close aria-label="Cerrar"><span class="ri-close-line"></span></button></div>' +
         '<div class="agenda-dialog-body">' +
           '<div class="ag-grid2">' +
@@ -8474,9 +8476,9 @@
             '<textarea class="form-control" id="ag-note-text" rows="4" maxlength="4000" ' +
               'placeholder="Ej.: Quedó en enviar los documentos el lunes. Hacer seguimiento por la tarde."></textarea></div>' +
           '<div class="ag-grid2">' +
-            '<div class="ag-field"><label class="ag-label">Fecha de seguimiento</label><div class="ag-due-wrap"></div></div>' +
+            '<div class="ag-field"><label class="ag-label">Fecha de seguimiento</label><div class="nk-due-wrap"></div></div>' +
             '<div class="ag-field"><label class="ag-label">Importante</label>' +
-              '<label class="ag-check"><input type="checkbox" id="ag-pinned"> Marcar como importante</label></div>' +
+              '<label class="ag-check"><input class="form-check-input" type="checkbox" id="ag-pinned"> <span>Marcar como importante</span></label></div>' +
           '</div>' +
         '</div>' +
         '<div class="agenda-dialog-foot"><button type="button" class="btn btn-light btn-sm" data-close>Cancelar</button>' +

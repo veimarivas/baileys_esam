@@ -1269,11 +1269,44 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       const ownerId = admin ? null : user.id;
       const ownerArea = esamSupervisaArea(user);
       const listScope = admin ? scope : null;
+      const notes = listAllNotes({ tagId, status: ids.length ? 'all' : status, q, orderBy, authorId, assignedTo, ids, viewerId: user.id, sessionIds: listScope, ownerId, ownerArea })
+        .map((n) => withPermissions(user, n));
+      // Vínculo con la copia privada en Mi agenda (si el usuario ya la agregó).
+      if (notes.length) {
+        const noteIds = notes.map((n) => n.id);
+        const links = all<{
+          source_id: number;
+          note_id: number;
+          agenda_board_id: number | null;
+          agenda_stage_id: number | null;
+          board_name: string | null;
+        }>(
+          `SELECT n.agenda_source_note_id AS source_id, n.id AS note_id, n.agenda_board_id, n.agenda_stage_id,
+                  b.name AS board_name
+             FROM contact_notes n
+             LEFT JOIN agenda_boards b ON b.id = n.agenda_board_id
+            WHERE n.user_id = ? AND n.personal = 1 AND n.deleted_at IS NULL
+              AND n.agenda_source_note_id IN (${noteIds.map(() => '?').join(',')})`,
+          user.id,
+          ...noteIds,
+        );
+        const bySource = new Map(links.map((l) => [l.source_id, l]));
+        for (const note of notes) {
+          const link = bySource.get(note.id);
+          if (link) {
+            Object.assign(note, {
+              agenda_note_id: link.note_id,
+              agenda_board_id: link.agenda_board_id,
+              agenda_stage_id: link.agenda_stage_id,
+              agenda_board_name: link.board_name,
+            });
+          }
+        }
+      }
       res.json({
         supervisor: admin,
         supervisor_area: ownerArea,
-        notes: listAllNotes({ tagId, status: ids.length ? 'all' : status, q, orderBy, authorId, assignedTo, ids, viewerId: user.id, sessionIds: listScope, ownerId, ownerArea })
-          .map((n) => withPermissions(user, n)),
+        notes,
         stats: noteStats({ sessionIds: listScope, authorId, assignedTo, viewerId: user.id, ownerId, ownerArea }),
       });
     }),
@@ -1422,6 +1455,36 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       }
       publishNoteChange(noteId, 'edited', user.id);
       res.json(withPermissions(user, noteDTO(noteId)!));
+    }),
+  );
+
+  // Copia una nota de equipo asignada al usuario a su agenda privada.
+  app.post(
+    '/inbox/notes/:id/agenda',
+    ...auth,
+    ah((req, res) => {
+      const note = accessibleNote(req, res);
+      if (!note) return;
+      if (note.personal) return res.status(422).json({ error: 'La nota ya es personal.' });
+      if (!isNoteAssignee(note.id, req.user!.id) && !esamEsAdmin(req.user!)) {
+        return res.status(403).json({ error: 'Solo podés agregar a tu agenda las notas que te asignaron.' });
+      }
+      try {
+        const result = agenda.copyTeamNoteToAgenda(
+          req.user!.id,
+          note.id,
+          Number(req.body?.board_id) || null,
+          Number(req.body?.stage_id) || null,
+        );
+        publishNoteChange(result.note.id, result.created ? 'created' : 'edited', req.user!.id);
+        res.json({
+          ok: true,
+          created: result.created,
+          note: withPermissions(req.user!, result.note),
+        });
+      } catch (err) {
+        res.status(422).json({ error: (err as Error).message });
+      }
     }),
   );
 

@@ -163,6 +163,11 @@ export function migrate(): void {
   // Sub-agenda y columna pipeline propias de una nota personal.
   addColumnIfMissing('contact_notes', 'agenda_board_id', 'INTEGER');
   addColumnIfMissing('contact_notes', 'agenda_stage_id', 'INTEGER');
+  // Vínculo entre una nota de equipo y su copia privada en Mi agenda.
+  addColumnIfMissing('contact_notes', 'agenda_source_note_id', 'INTEGER');
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_contact_notes_agenda_source
+    ON contact_notes(user_id, agenda_source_note_id)
+    WHERE agenda_source_note_id IS NOT NULL`);
   addColumnIfMissing('contact_notes', 'source_message_id', 'INTEGER');
   db.exec('CREATE INDEX IF NOT EXISTS idx_contact_notes_assigned ON contact_notes(assigned_to, done_at)');
   // Hora del recordatorio (HH:MM, con `due_at`) y cuándo se avisó.

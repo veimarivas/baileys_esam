@@ -1,5 +1,6 @@
 import { all, get, run } from '../db/index.js';
 import { nowIso } from '../util/async.js';
+import { addNote, getNote, noteDTO, type ContactNoteWithAuthor } from './contacts.js';
 
 /**
  * Sub-agendas de «Mi agenda». Cada usuario puede crear varios tableros (p. ej.
@@ -313,6 +314,64 @@ export function deleteBoard(userId: number, boardId: number): void {
     boardId,
   );
   run('DELETE FROM agenda_boards WHERE id = ? AND user_id = ?', boardId, userId);
+}
+
+/** Lleva una nota a una columna (y tablero, si corresponde). */
+export interface AgendaCopyResult {
+  note: ContactNoteWithAuthor;
+  created: boolean;
+}
+
+/**
+ * Copia una nota de equipo a Mi agenda (privada). Si ya existe una copia para
+ * ese usuario y esa nota, la mueve al tablero/columna elegidos. Así el usuario
+ * puede agrupar por sub-agenda sin perder la nota original ni duplicarla.
+ */
+export function copyTeamNoteToAgenda(
+  userId: number,
+  sourceNoteId: number,
+  boardId?: number | null,
+  stageId?: number | null,
+): AgendaCopyResult {
+  const source = getNote(sourceNoteId);
+  if (!source || source.personal) throw new Error('La nota no está disponible para enviar a la agenda.');
+  const placement = resolvePlacement(userId, boardId, stageId);
+  const existing = get<{ id: number; deleted_at: string | null }>(
+    `SELECT id, deleted_at FROM contact_notes
+      WHERE user_id = ? AND personal = 1 AND agenda_source_note_id = ?
+      ORDER BY id DESC LIMIT 1`,
+    userId,
+    sourceNoteId,
+  );
+  if (existing) {
+    if (existing.deleted_at) {
+      run('UPDATE contact_notes SET deleted_at = NULL, deleted_by = NULL, updated_at = ? WHERE id = ?', nowIso(), existing.id);
+    }
+    moveNote(userId, existing.id, placement.boardId, placement.stageId);
+    return { note: noteDTO(existing.id)!, created: false };
+  }
+  const tagIds = all<{ tag_id: number }>(
+    'SELECT tag_id FROM contact_note_tags WHERE note_id = ?',
+    sourceNoteId,
+  ).map((r) => r.tag_id);
+  const note = addNote(
+    source.contact_id,
+    userId,
+    source.note_text,
+    source.audio_path,
+    source.due_at,
+    tagIds,
+    source.pinned === 1,
+    {
+      personal: true,
+      agendaBoardId: placement.boardId,
+      agendaStageId: placement.stageId,
+      agendaSourceNoteId: sourceNoteId,
+      pipelineStage: source.pipeline_stage ?? 'todo',
+      dueTime: source.due_time,
+    },
+  );
+  return { note, created: true };
 }
 
 /** Lleva una nota a una columna (y tablero, si corresponde). */

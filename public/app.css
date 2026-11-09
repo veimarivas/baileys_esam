@@ -8342,6 +8342,42 @@ html[data-bs-theme="dark"] .ag-pin { color: #f5c25b; }
 .ag-list-head b { color: var(--esam-ink); font-weight: 700; }
 .ag-list-head .ag-col-count { margin-left: auto; }
 .ag-list-cards { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.6rem; }
+
+/* Vínculo entre Notas y tareas y Mi agenda */
+.nk-agenda-badge {
+  display: inline-flex; align-items: center; gap: 0.25rem;
+  font-size: 0.68rem; font-weight: 700; padding: 0.1rem 0.5rem; border-radius: 999px;
+  color: var(--nk-brand); background: var(--nk-brand-soft);
+}
+.nk-icon.nk-agenda.on { color: var(--nk-brand); background: var(--nk-brand-soft); }
+.pl-agenda {
+  border: 0; background: transparent; color: var(--nk-mute); cursor: pointer;
+  width: 1.3rem; height: 1.3rem; padding: 0; border-radius: 5px;
+  display: inline-flex; align-items: center; justify-content: center; font-size: 0.84rem;
+}
+.pl-agenda:hover { color: var(--nk-brand); background: var(--nk-brand-soft); }
+.pl-agenda.on { color: var(--nk-brand); background: var(--nk-brand-soft); }
+.pl-agenda:focus-visible { outline: 2px solid var(--nk-brand); outline-offset: 1px; }
+.ag-copy-note {
+  padding: 0.6rem 0.7rem; border: 1px solid var(--nk-line); border-radius: 10px;
+  background: var(--nk-surface-2);
+}
+.ag-copy-contact {
+  display: flex; align-items: center; gap: 0.3rem;
+  font-size: 0.74rem; font-weight: 700; color: var(--nk-ink);
+}
+.ag-copy-contact [class^="ri-"] { color: var(--nk-brand); }
+.ag-copy-note p {
+  margin: 0.35rem 0 0; max-height: 4.8rem; overflow: auto;
+  font-size: 0.76rem; line-height: 1.45; color: var(--nk-ink-soft); white-space: pre-wrap;
+}
+.ag-source {
+  display: inline-flex; align-items: center; gap: 0.2rem;
+  font-size: 0.62rem; font-weight: 600; color: var(--brand);
+  text-decoration: none;
+}
+.ag-source:hover { text-decoration: underline; }
+.ag-audio { width: 100%; height: 30px; margin-top: 0.35rem; }
 html[data-bs-theme="dark"] .ag-sum-item.is-overdue .ag-sum-dot { background: #f08484; }
 html[data-bs-theme="dark"] .ag-sum-item.is-done .ag-sum-dot { background: #5fd3a6; }
 html[data-bs-theme="dark"] .ag-card.is-overdue { border-color: rgba(240, 132, 132, 0.32); }

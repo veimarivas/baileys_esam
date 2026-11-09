@@ -2245,6 +2245,11 @@
         pinBadge += '<span class="nk-personal-badge" title="Nota privada: solo la ves vos en Mi agenda">' +
           '<span class="ri-lock-line" aria-hidden="true"></span>Solo para mí</span>';
       }
+      if (opts.showAgenda && n.agenda_note_id) {
+        var agendaBadgeTitle = 'Agregada a Mi agenda' + (n.agenda_board_name ? ' · ' + n.agenda_board_name : '');
+        pinBadge += '<span class="nk-agenda-badge" title="' + escapeHtml(agendaBadgeTitle) + '">' +
+          '<span class="ri-calendar-check-line" aria-hidden="true"></span>En mi agenda</span>';
+      }
       var noteAssignees = Array.isArray(n.assignees) && n.assignees.length
         ? n.assignees
         : (n.assigned_to ? [{ id: n.assigned_to, name: n.assigned_name, area_label: n.assigned_area }] : []);
@@ -2276,8 +2281,14 @@
         (n.done_at ? '<span class="nk-meta-item nk-done-by"><span class="ri-check-double-line" aria-hidden="true"></span>Hecho por ' + escapeHtml(n.done_by_name || 'el equipo') + ' ' + escapeHtml(relTime(n.done_at)) + '</span>' : '');
       var pinTitle = n.pinned ? 'Quitar de importantes' : 'Marcar como importante (se fija arriba del chat en todas las líneas)';
       if (n.deleted_at) return trashCardHtml(n, opts, contact);
+      var agendaAction = (opts.showAgenda && n.assigned_to_me && !n.personal)
+        ? '<button type="button" class="nk-icon nk-agenda' + (n.agenda_note_id ? ' on' : '') + '" title="' +
+            (n.agenda_note_id ? 'Cambiar sub-agenda en Mi agenda' : 'Agregar a Mi agenda') + '" aria-label="' +
+            (n.agenda_note_id ? 'Cambiar sub-agenda en Mi agenda' : 'Agregar a Mi agenda') + '">' +
+            '<span class="' + (n.agenda_note_id ? 'ri-calendar-check-line' : 'ri-calendar-todo-line') + '"></span></button>'
+        : '';
       var actions = '<button type="button" class="nk-icon nk-hist" title="Ver historial de cambios" aria-label="Ver historial de cambios" aria-expanded="false">' +
-          '<span class="ri-history-line"></span></button>' +
+          '<span class="ri-history-line"></span></button>' + agendaAction +
         '<button type="button" class="nk-icon nk-pin' + (n.pinned ? ' on' : '') + '" title="' + pinTitle + '" aria-label="' + pinTitle + '" aria-pressed="' + !!n.pinned + '">' +
           '<span class="' + (n.pinned ? 'ri-pushpin-2-fill' : 'ri-pushpin-2-line') + '"></span></button>' +
         (n.can_edit
@@ -2545,6 +2556,11 @@
               opts.onChanged(updated, id);
             })
             .catch(function (e) { pinBtn.disabled = false; toast(e.message, true); });
+        });
+
+        var agendaBtn = card.querySelector('.nk-agenda');
+        if (agendaBtn) agendaBtn.addEventListener('click', function () {
+          if (opts.onAgenda) opts.onAgenda(note);
         });
 
         var editBtn = card.querySelector('.nk-edit');
@@ -7298,6 +7314,106 @@
 
     function refresh() { return loadNotes().then(loadTags); }
 
+    // Copia una nota asignada a Mi agenda, eligiendo sub-agenda y columna.
+    var agendaBoardsCache = null;
+    function loadAgendaBoards(force) {
+      if (!force && agendaBoardsCache) return Promise.resolve(agendaBoardsCache);
+      return api('/agenda/boards').then(function (d) {
+        agendaBoardsCache = d;
+        return d;
+      });
+    }
+
+    function openAgendaCopyDialog(note) {
+      loadAgendaBoards(true).then(function (data) {
+        var boards = (data && data.boards) || [];
+        if (!boards.length) {
+          toast('Primero creá una sub-agenda en Mi agenda.', true);
+          return;
+        }
+        var currentBoard = boards.filter(function (b) { return b.id === note.agenda_board_id; })[0] || boards[0];
+        var currentStage = (currentBoard.stages || []).filter(function (s) { return s.id === note.agenda_stage_id; })[0]
+          || (currentBoard.stages || [])[0] || null;
+        var contact = note.contact_name || (note.contact_phone ? '+' + note.contact_phone : String(note.chat_id || '').split('@')[0]);
+        var preview = (note.note_text || (note.audio_path ? 'Nota de voz' : '')).replace(/\s+/g, ' ');
+        var dlg = document.createElement('dialog');
+        dlg.className = 'agenda-dialog nk-section';
+        dlg.innerHTML = '<div class="agenda-dialog-box agenda-dialog-sm">' +
+          '<div class="agenda-dialog-head"><div>' +
+            '<h5>' + (note.agenda_note_id ? 'En Mi agenda' : 'Agregar a Mi agenda') + '</h5>' +
+            '<p>' + (note.agenda_note_id
+              ? 'Ya está en tu agenda. Podés moverla a otra sub-agenda o columna.'
+              : 'Se guarda una copia privada para tu seguimiento. Elegí dónde agruparla.') + '</p></div>' +
+            '<button type="button" class="agenda-dialog-x" data-close aria-label="Cerrar"><span class="ri-close-line"></span></button></div>' +
+          '<div class="agenda-dialog-body">' +
+            '<div class="ag-copy-note">' +
+              '<div class="ag-copy-contact"><span class="ri-user-3-line" aria-hidden="true"></span> ' + escapeHtml(contact) + '</div>' +
+              '<p>' + escapeHtml(preview.slice(0, 260)) + '</p>' +
+            '</div>' +
+            '<div class="ag-grid2">' +
+              '<div class="ag-field"><label class="ag-label" for="ag-copy-board">Sub-agenda</label>' +
+                '<select class="form-select form-select-sm" id="ag-copy-board">' +
+                  boards.map(function (b) {
+                    return '<option value="' + b.id + '"' + (b.id === currentBoard.id ? ' selected' : '') + '>' + escapeHtml(b.name) + '</option>';
+                  }).join('') +
+                '</select></div>' +
+              '<div class="ag-field"><label class="ag-label" for="ag-copy-stage">Columna</label>' +
+                '<select class="form-select form-select-sm" id="ag-copy-stage"></select></div>' +
+            '</div>' +
+          '</div>' +
+          '<div class="agenda-dialog-foot">' +
+            '<button type="button" class="btn btn-light btn-sm" data-close>Cancelar</button>' +
+            '<button type="button" class="btn btn-primary btn-sm" id="ag-copy-save">' +
+              (note.agenda_note_id ? 'Guardar en Mi agenda' : 'Agregar a Mi agenda') + '</button>' +
+          '</div>' +
+        '</div>';
+        document.body.appendChild(dlg);
+        document.documentElement.classList.add('nk-assign-open');
+        var boardSel = dlg.querySelector('#ag-copy-board');
+        var stageSel = dlg.querySelector('#ag-copy-stage');
+        var save = dlg.querySelector('#ag-copy-save');
+        function fillStages(boardId, selected) {
+          var b = boards.filter(function (x) { return x.id === Number(boardId); })[0];
+          var stages = (b && b.stages) || [];
+          stageSel.innerHTML = stages.map(function (s) {
+            return '<option value="' + s.id + '"' + (s.id === Number(selected) ? ' selected' : '') + '>' + escapeHtml(s.name) + '</option>';
+          }).join('');
+          save.disabled = !stages.length;
+        }
+        fillStages(currentBoard.id, currentStage ? currentStage.id : null);
+        boardSel.addEventListener('change', function () { fillStages(boardSel.value, null); });
+        var close = function () {
+          document.documentElement.classList.remove('nk-assign-open');
+          if (dlg.open) dlg.close();
+          if (dlg.parentNode) dlg.parentNode.removeChild(dlg);
+        };
+        dlg.addEventListener('close', function () {
+          document.documentElement.classList.remove('nk-assign-open');
+          if (dlg.parentNode) dlg.parentNode.removeChild(dlg);
+        });
+        dlg.addEventListener('click', function (e) { if (e.target === dlg) close(); });
+        Array.prototype.forEach.call(dlg.querySelectorAll('[data-close]'), function (b) { b.addEventListener('click', close); });
+        save.addEventListener('click', function () {
+          var boardId = Number(boardSel.value);
+          var stageId = Number(stageSel.value);
+          if (!boardId || !stageId) { toast('Elegí una columna.', true); return; }
+          save.disabled = true;
+          jsonApi('/inbox/notes/' + note.id + '/agenda', 'POST', { board_id: boardId, stage_id: stageId })
+            .then(function (res) {
+              close();
+              agendaBoardsCache = null;
+              toast(res.created ? 'Nota agregada a Mi agenda.' : 'Sub-agenda actualizada.');
+              loadNotes();
+            })
+            .catch(function (e) { save.disabled = false; toast(e.message, true); });
+        });
+        dlg.showModal();
+        save.focus();
+      }).catch(function (e) {
+        toast(e.message || 'No se pudieron cargar las sub-agendas.', true);
+      });
+    }
+
     // Lo que tengo derivado y estoy viendo en la lista queda «visto»; la nota de
     // una notificación, además, deja sus avisos leídos.
     function markSeen() {
@@ -7518,7 +7634,7 @@
         return '<section class="np-group np-group-' + (info ? 'custom' : byDue ? k : 'time') + '">' + title +
           '<div class="np-cards">' + list.map(function (n) {
             return NoteKit.cardHtml(n, {
-              showContact: true, areaBadge: (st.area === 'all' || st.area === 'admin') ? areaBadge : null, showAdvisor: showAdvisor(),
+              showContact: true, showAgenda: true, areaBadge: (st.area === 'all' || st.area === 'admin') ? areaBadge : null, showAdvisor: showAdvisor(),
               area: areaInfo(areaOf(n)), stage: n.deleted_at ? null : stageTag(n), vigencia: !n.deleted_at,
             });
           }).join('') + '</div>' +
@@ -7534,6 +7650,7 @@
         find: function (id) { return st.notes.filter(function (n) { return n.id === id; })[0]; },
         tags: function () { return st.tags; },
         onChanged: function () { refresh(); },
+        onAgenda: openAgendaCopyDialog,
       });
     }
 
@@ -7642,6 +7759,12 @@
           '<a class="pl-contact" href="/conversations/' + encodeURIComponent(n.chat_id) + '" title="Abrir la conversación">' +
             '<span class="ri-whatsapp-line" aria-hidden="true"></span>' + escapeHtml(contact) + '</a>' +
           '<span class="pl-tools">' +
+            (n.assigned_to_me && !n.personal
+              ? '<button type="button" class="pl-agenda' + (n.agenda_note_id ? ' on' : '') + '" data-id="' + n.id + '" title="' +
+                  (n.agenda_note_id ? 'Cambiar sub-agenda en Mi agenda' : 'Agregar a Mi agenda') + '" aria-label="' +
+                  (n.agenda_note_id ? 'Cambiar sub-agenda en Mi agenda' : 'Agregar a Mi agenda') + '">' +
+                  '<span class="' + (n.agenda_note_id ? 'ri-calendar-check-line' : 'ri-calendar-todo-line') + '"></span></button>'
+              : '') +
             (NoteKit.isPinned(n) && !n.done_at ? '<span class="pl-pin ri-pushpin-2-fill" title="Importante"></span>' : '') +
             (movable ? '<span class="pl-grip ri-draggable" title="Arrastrá la tarjeta para moverla de etapa" aria-hidden="true"></span>' : '') +
           '</span>' +
@@ -7848,6 +7971,14 @@
 
     function bindBoard(token) {
       bindMoveButtons();
+      Array.prototype.forEach.call(els.board.querySelectorAll('.pl-agenda'), function (btn) {
+        btn.addEventListener('click', function (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          var note = st.notes.filter(function (n) { return n.id === Number(btn.getAttribute('data-id')); })[0];
+          if (note) openAgendaCopyDialog(note);
+        });
+      });
       if (st.area === 'marketing') return;
       if (window.Sortable) { bindSortableBoard(); return; }
       loadSortable().then(function (ok) {
@@ -8160,7 +8291,13 @@
           (n.pinned ? '<span class="ag-pin ri-pushpin-2-fill" title="Importante" aria-hidden="true"></span>' : '') +
         '</div>' +
         (n.note_text ? '<p class="ag-text">' + linkifyHtml(escapeHtml(n.note_text)) + '</p>' : '<p class="ag-text is-muted">Nota de voz</p>') +
-        '<div class="ag-meta">' + dueHtml(n) + tagList(n) + '</div>' +
+        (n.audio_path ? '<audio class="ag-audio" controls preload="none" src="/inbox/notes/' + n.id + '/audio"></audio>' : '') +
+        '<div class="ag-meta">' + dueHtml(n) + tagList(n) +
+          (n.agenda_source_note_id
+            ? '<a class="ag-source" href="/notes/' + n.agenda_source_note_id + '" title="Abrir la nota original en Notas y tareas">' +
+                '<span class="ri-links-line" aria-hidden="true"></span>Desde Notas</a>'
+            : '') +
+        '</div>' +
         '<div class="ag-card-foot">' +
           '<select class="form-select form-select-sm ag-stage" data-id="' + n.id + '" aria-label="Mover a otra columna">' +
             stages().map(function (s) {

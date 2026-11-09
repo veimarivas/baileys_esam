@@ -171,6 +171,8 @@ export interface ContactNoteRow {
   agenda_board_id?: number | null;
   /** Columna pipeline de la sub-agenda. */
   agenda_stage_id?: number | null;
+  /** Nota de equipo de la que se copió esta nota personal, si aplica. */
+  agenda_source_note_id?: number | null;
   /** Mensaje del chat desde el que se registró (si se guardó desde una burbuja). */
   source_message_id: number | null;
   updated_at: string | null;

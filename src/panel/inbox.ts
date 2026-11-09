@@ -21,6 +21,8 @@ import {
   markContacted,
   markFromTemplate,
   myDay,
+  isNoteAssignee,
+  noteAssigneeIds,
   noteAssignees,
   personLines,
   noteDTO,
@@ -144,27 +146,62 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
     return teamTagFor(key);
   }
 
-  function withPermissions<T extends { user_id: number | null; assigned_to?: number | null }>(
+  function withPermissions<T extends {
+    id: number;
+    user_id: number | null;
+    assigned_to?: number | null;
+    assignees?: Array<{ id: number }>;
+  }>(
     user: UserRow,
     note: T,
   ): T & { can_edit: boolean; can_delete: boolean; assigned_to_me: boolean; supervisor: boolean; team: TeamTag | null } {
     const team = teamForNote(note as { contact_phone?: string | null; chat_id?: string | null; contact_id?: number | null });
+    const ids = note.assignees?.length
+      ? note.assignees.map((a) => a.id)
+      : note.assigned_to
+        ? [note.assigned_to]
+        : [];
     return {
       ...note,
       can_edit: canEditNote(user, note),
       // Las notas de Administración (comunicación interna) solo las elimina el Super Admin.
       can_delete: team ? esamEsAdmin(user) : canEditNote(user, note),
-      assigned_to_me: !!note.assigned_to && note.assigned_to === user.id,
+      assigned_to_me: ids.includes(user.id),
       supervisor: esamEsAdmin(user),
       team,
     };
   }
 
-  /** Responsable válido (usuario habilitado) o null. */
-  function parseAssignee(raw: unknown): number | null {
-    const id = Number(raw);
-    if (!Number.isFinite(id) || id <= 0) return null;
-    return noteAssignees().some((u) => u.id === id) ? id : null;
+  /**
+   * Personas válidas a las que derivar. Acepta un id, un arreglo, una lista
+   * separada por comas o su JSON (los formularios de audio envían el JSON como
+   * texto). Ignora ids que no existan o usuarios deshabilitados.
+   */
+  function parseAssigneeIds(raw: unknown): number[] {
+    let list: unknown[] = [];
+    if (Array.isArray(raw)) {
+      list = raw;
+    } else if (typeof raw === 'string') {
+      const text = raw.trim();
+      if (!text) return [];
+      if (text.startsWith('[')) {
+        try {
+          const parsed = JSON.parse(text);
+          list = Array.isArray(parsed) ? parsed : [parsed];
+        } catch {
+          list = text.split(',');
+        }
+      } else {
+        list = text.split(',');
+      }
+    } else if (raw !== undefined && raw !== null) {
+      list = [raw];
+    }
+    const allowed = new Set(noteAssignees().map((u) => u.id));
+    const ids = list
+      .map((value) => Number(value))
+      .filter((id) => Number.isFinite(id) && id > 0 && allowed.has(id));
+    return [...new Set(ids)];
   }
 
   /**
@@ -203,15 +240,15 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
    */
   function publishNoteChange(noteId: number, action: string, actorId: number | null = null): void {
     const chats = personChatsForNote(noteId);
-    const assignedTo = getNote(noteId)?.assigned_to ?? null;
-    if (!chats.length && !assignedTo) return;
+    const assigneeIds = noteAssigneeIds(noteId);
+    if (!chats.length && !assigneeIds.length) return;
     panelBus.publish('note', {
       noteId,
       action,
       actorId,
-      assignedTo,
-      // El responsable recibe el aviso aunque la persona no esté en su línea.
-      userIds: assignedTo ? [assignedTo] : [],
+      assignedTo: assigneeIds[0] ?? null,
+      // Todos los responsables reciben el aviso aunque la persona no esté en su línea.
+      userIds: assigneeIds,
       sessionIds: [...new Set(chats.map((c) => c.session_id))],
       chats: chats.map((c) => ({ sessionId: c.session_id, chatId: c.chat_id })),
     });
@@ -248,17 +285,35 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
     const send = (ids: Array<number | null>, kind: NotificationKind, title: string, body: string) =>
       notify(ids, { kind, noteId, actorId: actor.id, title, body, link });
 
+    const assigneeIds = (n.assignees ?? []).map((a) => a.id);
+    const assigneeNames = (n.assignees ?? []).map((a) => a.name);
     if (event === 'created' || event === 'reassigned') {
-      if (n.assigned_to && n.assigned_to !== actor.id) {
-        send([n.assigned_to], 'derived_to_you', `${who} te derivó a ${contact}`, `${phone ? `${phone} · ` : ''}${text}`);
-        send(supervisors.filter((id) => id !== n.assigned_to), 'derived', `${who} derivó a ${contact} con ${n.assigned_name ?? 'otra persona'}`, text);
+      const targets = assigneeIds.filter((id) => id !== actor.id);
+      if (targets.length) {
+        send(targets, 'derived_to_you', `${who} te derivó a ${contact}`, `${phone ? `${phone} · ` : ''}${text}`);
+        send(
+          supervisors.filter((id) => !assigneeIds.includes(id)),
+          'derived',
+          `${who} derivó a ${contact} con ${assigneeNames.join(', ') || 'otra persona'}`,
+          text,
+        );
       } else if (event === 'created') {
         send(supervisors, 'note_created', `${who} ${kindLabel} · ${contact}`, text);
       }
     } else if (event === 'contacted') {
-      send([n.assigned_by, n.user_id, ...supervisors], 'contacted', `${who} se comunicó con ${contact}`, n.contact_result ?? 'Contacto confirmado.');
+      send(
+        [...new Set([n.assigned_by, n.user_id, ...assigneeIds, ...supervisors])],
+        'contacted',
+        `${who} se comunicó con ${contact}`,
+        n.contact_result ?? 'Contacto confirmado.',
+      );
     } else if (event === 'resolved') {
-      send([n.assigned_by, n.user_id, ...supervisors], 'resolved', `${who} resolvió la tarea de ${contact}`, text);
+      send(
+        [...new Set([n.assigned_by, n.user_id, ...assigneeIds, ...supervisors])],
+        'resolved',
+        `${who} resolvió la tarea de ${contact}`,
+        text,
+      );
     }
   }
 
@@ -1082,6 +1137,9 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       if (file) {
         audioPath = storeNoteAudio(file.buffer, file.mimetype, file.originalname || 'nota-voz.ogg');
       }
+      const assignedIds = parseAssigneeIds(
+        req.body?.assigned_to_ids !== undefined ? req.body.assigned_to_ids : req.body?.assigned_to,
+      );
       const note = addNote(
         contact.id,
         req.user!.id,
@@ -1091,12 +1149,13 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
         parseTagIds(req.body?.tag_ids),
         parseFlag(req.body?.pinned),
         {
-          assignedTo: parseAssignee(req.body?.assigned_to),
+          assigneeIds: assignedIds,
           dueTime: parseTime(req.body?.due_time),
           sourceMessageId: sourceId && conversations.messageInChat(sourceId, resolved.session.id, resolved.chatId) ? sourceId : null,
         },
       );
-      publishNoteChange(note.id, note.assigned_to && note.assigned_to !== req.user!.id ? 'assigned' : 'created', req.user!.id);
+      const derived = (note.assignees ?? []).some((a) => a.id !== req.user!.id);
+      publishNoteChange(note.id, derived ? 'assigned' : 'created', req.user!.id);
       announce(note.id, 'created', req.user!);
       res.status(201).json(withPermissions(req.user!, note));
     }),
@@ -1278,18 +1337,21 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       const template = noteTemplates.getTemplate(Number(req.body?.template_id));
       if (!template) return res.status(404).json({ error: 'Plantilla no encontrada.' });
       const contact = getOrCreateContact(resolved.session.id, resolved.chatId);
-      const assignedTo = parseAssignee(req.body?.assigned_to);
+      const assignedIds = parseAssigneeIds(
+        req.body?.assigned_to_ids !== undefined ? req.body.assigned_to_ids : req.body?.assigned_to,
+      );
       const created = template.items.map((item) => {
         const due = item.due_days === null ? null : localYmd(new Date(Date.now() + item.due_days * 86_400_000));
         const note = addNote(contact.id, req.user!.id, item.text, null, due, [], item.pinned, {
-          assignedTo,
+          assigneeIds: assignedIds,
           dueTime: due ? item.due_time : null,
         });
         markFromTemplate(note.id, req.user!.id, template.name);
         return note;
       });
       if (created.length) {
-        publishNoteChange(created[0].id, assignedTo && assignedTo !== req.user!.id ? 'assigned' : 'created', req.user!.id);
+        const derived = assignedIds.some((id) => id !== req.user!.id);
+        publishNoteChange(created[0].id, derived ? 'assigned' : 'created', req.user!.id);
         announce(created[0].id, 'created', req.user!, { templateName: template.name, count: created.length });
       }
       res.status(201).json({ created: created.length });
@@ -1335,6 +1397,11 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       if (text !== undefined && text.length > 4000) {
         return res.status(422).json({ error: 'La nota es demasiado larga (máx. 4000 caracteres).' });
       }
+      const assigneesProvided = req.body?.assigned_to_ids !== undefined || req.body?.assigned_to !== undefined;
+      const nextAssignees = assigneesProvided
+        ? parseAssigneeIds(req.body?.assigned_to_ids !== undefined ? req.body.assigned_to_ids : req.body.assigned_to)
+        : undefined;
+      const beforeAssignees = noteAssigneeIds(note.id);
       try {
         updateNote(note.id, {
           noteText: text === undefined ? undefined : text || null,
@@ -1342,13 +1409,14 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
           dueTime: req.body?.due_time !== undefined ? parseTime(req.body.due_time) : undefined,
           tagIds: req.body?.tag_ids !== undefined ? parseTagIds(req.body.tag_ids) : undefined,
           pinned: req.body?.pinned !== undefined ? parseFlag(req.body.pinned) : undefined,
-          assignedTo: req.body?.assigned_to !== undefined ? parseAssignee(req.body.assigned_to) : undefined,
+          assignedToIds: nextAssignees,
         }, req.user!.id);
       } catch (err) {
         return res.status(422).json({ error: (err as Error).message });
       }
-      const after = getNote(note.id);
-      const reassigned = !!after?.assigned_to && after.assigned_to !== note.assigned_to && after.assigned_to !== req.user!.id;
+      const afterAssignees = noteAssigneeIds(note.id);
+      const added = afterAssignees.filter((id) => !beforeAssignees.includes(id));
+      const reassigned = added.length > 0 && added.some((id) => id !== req.user!.id);
       publishNoteChange(note.id, reassigned ? 'assigned' : 'edited', req.user!.id);
       if (reassigned) announce(note.id, 'reassigned', req.user!);
       res.json(withPermissions(req.user!, noteDTO(note.id)!));
@@ -1365,7 +1433,7 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       const done = req.body?.done !== false && String(req.body?.done) !== '0';
       setNoteDone(note.id, req.user!.id, done);
       publishNoteChange(note.id, done ? 'done' : 'reopened', req.user!.id);
-      if (done && note.assigned_to) announce(note.id, 'resolved', req.user!);
+      if (done && noteAssigneeIds(note.id).length) announce(note.id, 'resolved', req.user!);
       res.json(withPermissions(req.user!, noteDTO(note.id)!));
     }),
   );
@@ -1391,8 +1459,8 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
     ah((req, res) => {
       const note = accessibleNote(req, res);
       if (!note) return;
-      if (note.assigned_to !== req.user!.id && !esamEsAdmin(req.user!)) {
-        return res.status(403).json({ error: 'Solo la persona a la que se derivó puede confirmar el contacto.' });
+      if (!isNoteAssignee(note.id, req.user!.id) && !esamEsAdmin(req.user!)) {
+        return res.status(403).json({ error: 'Solo una de las personas a las que se derivó puede confirmar el contacto.' });
       }
       const result = String(req.body?.result ?? '').trim().slice(0, 1000);
       if (result.length < 3) {
@@ -1413,9 +1481,9 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       const note = accessibleNote(req, res);
       if (!note) return;
       const user = req.user!;
-      // La mueve quien la escribió, quien la tiene asignada o el Super Admin.
-      if (!canEditNote(user, note) && note.assigned_to !== user.id) {
-        return res.status(403).json({ error: 'Solo quien registró la nota o su responsable puede moverla.' });
+      // La mueve quien la escribió, cualquiera de sus responsables o el Super Admin.
+      if (!canEditNote(user, note) && !isNoteAssignee(note.id, user.id)) {
+        return res.status(403).json({ error: 'Solo quien registró la nota o una persona derivada puede moverla.' });
       }
       const stage = String(req.body?.stage ?? '') as PipelineStage;
       if (!['todo', 'doing', 'contacted', 'done'].includes(stage)) return res.status(422).json({ error: 'Etapa inválida.' });
@@ -1426,7 +1494,7 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       setNoteStage(note.id, stage, user.id, result);
       publishNoteChange(note.id, `stage:${stage}`, user.id);
       if (stage === 'contacted') announce(note.id, 'contacted', user);
-      if (stage === 'done' && note.assigned_to) announce(note.id, 'resolved', user);
+      if (stage === 'done' && noteAssigneeIds(note.id).length) announce(note.id, 'resolved', user);
       res.json(withPermissions(user, noteDTO(note.id)!));
     }),
   );

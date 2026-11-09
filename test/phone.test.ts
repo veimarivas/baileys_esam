@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+  buildContactVCard,
   chatIdFor,
   digits,
   extractInviteCode,
@@ -101,6 +102,31 @@ describe('typeForMime', () => {
     assert.equal(typeForMime('audio/ogg; codecs=opus'), 'audio');
     assert.equal(typeForMime('application/pdf'), 'document');
     assert.equal(typeForMime('text/plain'), 'document');
+  });
+});
+
+describe('buildContactVCard', () => {
+  it('normaliza un móvil de 8 dígitos y arma una tarjeta válida', () => {
+    const card = buildContactVCard('Ana Gómez', '7123 4567');
+    assert.equal(card.name, 'Ana Gómez');
+    assert.equal(card.phone, '59171234567');
+    assert.match(card.vcard, /^BEGIN:VCARD\nVERSION:3\.0\n/);
+    assert.match(card.vcard, /FN:Ana Gómez/);
+    assert.match(card.vcard, /TEL;type=CELL;type=VOICE;waid=59171234567:\+59171234567/);
+    assert.match(card.vcard, /END:VCARD$/);
+  });
+
+  it('escapa comas, punto y coma, barras y saltos de línea del nombre', () => {
+    const card = buildContactVCard('Pérez, Juan; Área\\Ventas\nLínea 2', '+591 700 00001');
+    assert.equal(card.phone, '59170000001');
+    assert.match(card.vcard, /FN:Pérez\\, Juan\\; Área\\\\Ventas Línea 2/);
+    assert.doesNotMatch(card.vcard, /\nLínea 2/);
+  });
+
+  it('usa un nombre por defecto si viene vacío', () => {
+    const card = buildContactVCard('  ', '59170000002');
+    assert.equal(card.name, 'Contacto');
+    assert.match(card.vcard, /FN:Contacto/);
   });
 });
 

@@ -22,11 +22,11 @@ export interface DirectoryChat {
 
 export interface DirectoryPerson {
   phone_key: string;
-  /** Nombre completo más reciente (cronogramas o registrado a mano). */
+  /** Nombre completo más reciente (cronogramas, registrado a mano o de WhatsApp). */
   full_name: string | null;
   /** Número listo para abrir el chat. */
   phone: string;
-  name_source: 'cronogramas' | 'manual' | null;
+  name_source: 'cronogramas' | 'manual' | 'whatsapp' | null;
   name_by: string | null;
   /** Programas, del más reciente al más antiguo. */
   programas: string[];
@@ -74,14 +74,25 @@ export function listDirectory(opts: {
   const limit = Math.min(Math.max(opts.limit ?? 800, 1), 2000);
   const offset = Math.max(opts.offset ?? 0, 0);
 
-  // Una fila por persona (número). El nombre manual y el de cronogramas se
-  // resuelven después, quedándose con el más reciente.
+  // Una fila por persona (número). El nombre manual, el de cronogramas y el que
+  // muestra WhatsApp en las conversaciones se resuelven después, quedándose con
+  // la mejor fuente disponible. Incluir los contactos del inbox es clave para el
+  // buscador de «Enviar contacto»: antes solo encontraba a quien había llegado
+  // por cronogramas o tenía un nombre cargado a mano.
   const cte = `WITH people AS (
       SELECT phone_key, full_name, programa, last_at, 0 AS manual
         FROM person_programs
       UNION ALL
       SELECT phone_key, full_name, NULL AS programa, updated_at AS last_at, 1 AS manual
         FROM person_names
+      UNION ALL
+      SELECT ct.phone_key, NULLIF(TRIM(ct.name), '') AS full_name, NULL AS programa,
+             ct.updated_at AS last_at, 0 AS manual
+        FROM contacts ct
+       WHERE ct.phone_key IS NOT NULL
+         AND ct.chat_id NOT LIKE '%@g.us'
+         AND ct.chat_id NOT LIKE '%@broadcast'
+         AND ct.chat_id NOT LIKE '%@newsletter'
     ),
     grouped AS (
       SELECT phone_key, MAX(last_at) AS last_at
@@ -149,6 +160,18 @@ export function listDirectory(opts: {
       WHERE pn.phone_key IN (${inList})`,
     ...keys,
   );
+  // Nombre que muestra WhatsApp en la conversación (pushname).
+  const contactRows = all<{ phone_key: string; name: string; updated_at: string }>(
+    `SELECT ct.phone_key, TRIM(ct.name) AS name, ct.updated_at
+       FROM contacts ct
+      WHERE ct.phone_key IN (${inList})
+        AND NULLIF(TRIM(ct.name), '') IS NOT NULL
+        AND ct.chat_id NOT LIKE '%@g.us'
+        AND ct.chat_id NOT LIKE '%@broadcast'
+        AND ct.chat_id NOT LIKE '%@newsletter'
+      ORDER BY ct.updated_at DESC`,
+    ...keys,
+  );
 
   interface Built {
     programas: string[];
@@ -157,12 +180,16 @@ export function listDirectory(opts: {
     manualName: string | null;
     manualAt: string | null;
     manualBy: string | null;
+    contactName: string | null;
   }
   const built = new Map<string, Built>();
   const getBuilt = (key: string): Built => {
     let item = built.get(key);
     if (!item) {
-      item = { programas: [], cronName: null, cronAt: null, manualName: null, manualAt: null, manualBy: null };
+      item = {
+        programas: [], cronName: null, cronAt: null, manualName: null, manualAt: null, manualBy: null,
+        contactName: null,
+      };
       built.set(key, item);
     }
     return item;
@@ -181,20 +208,32 @@ export function listDirectory(opts: {
     item.manualAt = r.updated_at;
     item.manualBy = r.by_name;
   }
+  for (const r of contactRows) {
+    const item = getBuilt(r.phone_key);
+    if (!item.contactName) item.contactName = r.name;
+  }
 
   const chats = chatsFor(keys, opts.sessionIds ?? null, inList);
 
   const people: DirectoryPerson[] = rows.map((row) => {
     const item = getBuilt(row.phone_key);
     // Igual que en `personTagsByKeys`: gana el nombre más reciente, sea de
-    // cronogramas o registrado a mano en el panel.
+    // cronogramas o registrado a mano en el panel. Si no hay ninguno de esos
+    // dos, se usa el nombre que muestra WhatsApp en la conversación.
     const manualWins = !!item.manualName && (!item.cronName || (item.manualAt ?? '') >= (item.cronAt ?? ''));
-    const fullName = manualWins ? item.manualName : item.cronName;
+    const fullName = manualWins ? item.manualName : (item.cronName || item.contactName);
+    const nameSource: DirectoryPerson['name_source'] = !fullName
+      ? null
+      : manualWins
+        ? 'manual'
+        : item.cronName
+          ? 'cronogramas'
+          : 'whatsapp';
     return {
       phone_key: row.phone_key,
       full_name: fullName,
       phone: row.phone_key,
-      name_source: fullName ? (manualWins ? 'manual' : 'cronogramas') : null,
+      name_source: nameSource,
       name_by: manualWins ? item.manualBy : null,
       programas: item.programas,
       last_at: row.last_at,

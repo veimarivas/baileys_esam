@@ -23,6 +23,39 @@ export function chatIdFor(phone: string): string {
   return `${digits(phone)}@c.us`;
 }
 
+export interface ContactVCard {
+  /** Nombre visible (recortado y sin saltos de línea). */
+  name: string;
+  /** Número normalizado, solo dígitos. */
+  phone: string;
+  /** Contenido vCard 3.0 listo para enviar. */
+  vcard: string;
+}
+
+/**
+ * Arma la tarjeta de contacto (vCard 3.0) que comparte WhatsApp.
+ * Los caracteres `\`, salto de línea, `,` y `;` se escapan según el estándar;
+ * un nombre con esos caracteres rompía la tarjeta en algunos clientes.
+ */
+export function buildContactVCard(displayName: string | null | undefined, phone: string | null | undefined): ContactVCard {
+  const name = (String(displayName ?? '').replace(/[\r\n]+/g, ' ').trim() || 'Contacto').slice(0, 120);
+  const normalized = normalizePhone(phone);
+  const safe = name
+    .replace(/\\/g, '\\\\')
+    .replace(/\n/g, '\\n')
+    .replace(/,/g, '\\,')
+    .replace(/;/g, '\\;');
+  const vcard = [
+    'BEGIN:VCARD',
+    'VERSION:3.0',
+    `FN:${safe}`,
+    `N:${safe};;;;`,
+    `TEL;type=CELL;type=VOICE;waid=${normalized}:+${normalized}`,
+    'END:VCARD',
+  ].join('\n');
+  return { name, phone: normalized, vcard };
+}
+
 /** `true` si el JID es un grupo. */
 export function isGroupJid(jid: string | null | undefined): boolean {
   return !!jid && jid.endsWith('@g.us');

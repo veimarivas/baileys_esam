@@ -1893,13 +1893,13 @@
       if (me) opts += '<option value="' + me + '"' + (selected === me ? ' selected' : '') + '>Yo</option>';
       assigneesData.users.forEach(function (u) {
         if (u.id === me) return;
-        var area = u.area ? ' · ' + u.area.charAt(0).toUpperCase() + u.area.slice(1) : '';
+        var area = u.area_label ? ' · ' + u.area_label : '';
         opts += '<option value="' + u.id + '"' + (selected === u.id ? ' selected' : '') + '>' + escapeHtml((u.name || ('Usuario ' + u.id)) + area) + '</option>';
       });
       return opts;
     }
 
-    // Llena un <select> de responsables cuando llega la lista.
+    // Llena un <select> de responsables cuando llega la lista (uso simple: chat).
     function bindAssignee(select, selected, onChange) {
       if (!select) return function () { return null; };
       var value = selected || null;
@@ -1907,6 +1907,190 @@
       loadAssignees().then(function () { select.innerHTML = assigneeOptions(value); });
       select.addEventListener('change', function () { value = Number(select.value) || null; if (onChange) onChange(value); });
       return function () { return value; };
+    }
+
+    /** Personas agrupadas por área, en orden alfabético. */
+    function assigneeGroups() {
+      var groups = {};
+      assigneesData.users.forEach(function (u) {
+        var label = u.area_label || 'Sin área';
+        if (!groups[label]) groups[label] = [];
+        groups[label].push(u);
+      });
+      return Object.keys(groups)
+        .sort(function (a, b) { return a.localeCompare(b, 'es'); })
+        .map(function (label) { return { label: label, users: groups[label] }; });
+    }
+
+    /**
+     * Selector de varias personas para derivar una nota, agrupado por área.
+     * Devuelve una función que entrega los ids elegidos (el primero es el
+     * responsable principal). Mantiene el orden de selección.
+     */
+    function bindAssignees(box, selected, onChange) {
+      if (!box) return function () { return []; };
+      var chosen = [];
+      var search = '';
+      var open = false;
+      (selected || []).forEach(function (id) {
+        id = Number(id);
+        if (id > 0 && chosen.indexOf(id) === -1) chosen.push(id);
+      });
+
+      function personById(id) {
+        for (var i = 0; i < assigneesData.users.length; i++) {
+          if (assigneesData.users[i].id === id) return assigneesData.users[i];
+        }
+        return null;
+      }
+
+      function selectedUsers() {
+        return chosen.map(personById).filter(function (u) { return !!u; });
+      }
+
+      function emit() {
+        if (onChange) onChange(chosen.slice());
+      }
+
+      function chipHtml(u) {
+        return '<span class="nk-assign-chip" data-id="' + u.id + '">' +
+          '<span class="nk-assign-avatar" aria-hidden="true">' + escapeHtml(initials(u.name || 'U')) + '</span>' +
+          '<span class="nk-assign-chip-body"><b>' + escapeHtml(u.name || 'Usuario') + '</b>' +
+            '<small>' + escapeHtml(u.area_label || 'Sin área') + '</small></span>' +
+          '<button type="button" class="nk-assign-x" data-id="' + u.id + '" title="Quitar" aria-label="Quitar a ' + escapeHtml(u.name || 'la persona') + '">' +
+            '<span class="ri-close-line" aria-hidden="true"></span></button>' +
+        '</span>';
+      }
+
+      function groupHtml(group) {
+        var q = search.trim().toLowerCase();
+        var users = group.users.filter(function (u) {
+          if (!q) return true;
+          return String(u.name || '').toLowerCase().indexOf(q) !== -1 ||
+            String(u.area_label || '').toLowerCase().indexOf(q) !== -1;
+        });
+        if (!users.length) return '';
+        return '<div class="nk-assign-group">' +
+          '<div class="nk-assign-group-head"><span>' + escapeHtml(group.label) + '</span>' +
+            '<span class="nk-assign-group-count">' + users.length + '</span></div>' +
+          '<div class="nk-assign-people">' + users.map(function (u) {
+            var on = chosen.indexOf(u.id) !== -1;
+            return '<label class="nk-assign-person' + (on ? ' on' : '') + '">' +
+              '<input type="checkbox" value="' + u.id + '"' + (on ? ' checked' : '') + '>' +
+              '<span class="nk-assign-check" aria-hidden="true"><span class="ri-check-line"></span></span>' +
+              '<span class="nk-assign-name">' + escapeHtml(u.name || ('Usuario ' + u.id)) +
+                (u.id === assigneesData.me ? ' <em>Yo</em>' : '') + '</span>' +
+            '</label>';
+          }).join('') + '</div></div>';
+      }
+
+      function chipsHtml() {
+        var users = selectedUsers();
+        if (!users.length) {
+          return '<span class="nk-assign-none"><span class="ri-user-shared-line" aria-hidden="true"></span>' +
+            'Sin derivar: la tarea queda para quien la registra.</span>';
+        }
+        return users.map(chipHtml).join('');
+      }
+
+      function render() {
+        var users = selectedUsers();
+        box.innerHTML = '<div class="nk-assign">' +
+          '<div class="nk-assign-chips">' + chipsHtml() + '</div>' +
+          '<div class="nk-assign-tools">' +
+            '<button type="button" class="nk-assign-toggle' + (open ? ' open' : '') + '" aria-expanded="' + open + '">' +
+              '<span class="ri-user-add-line" aria-hidden="true"></span> ' +
+              (users.length ? 'Cambiar personas' : 'Elegir personas') +
+              (users.length ? ' <span class="nk-assign-count">' + users.length + '</span>' : '') +
+            '</button>' +
+            (assigneesData.me && users.some(function (u) { return u.id === assigneesData.me; }) ? '' :
+              '<button type="button" class="nk-assign-me"><span class="ri-user-follow-line" aria-hidden="true"></span> Asignarme a mí</button>') +
+            (users.length ? '<button type="button" class="nk-assign-clear">Limpiar</button>' : '') +
+          '</div>' +
+          '<div class="nk-assign-panel"' + (open ? '' : ' hidden') + '>' +
+            '<div class="nk-assign-search">' +
+              '<span class="ri-search-line" aria-hidden="true"></span>' +
+              '<input type="search" placeholder="Buscar persona o área…" autocomplete="off" value="' + escapeHtml(search) + '">' +
+            '</div>' +
+            '<div class="nk-assign-groups">' +
+              (assigneesData.users.length
+                ? (assigneeGroups().map(groupHtml).join('') || '<div class="nk-assign-empty">Sin coincidencias.</div>')
+                : '<div class="nk-assign-empty">Cargando personas…</div>') +
+            '</div>' +
+          '</div>' +
+        '</div>';
+        bind();
+      }
+
+      function bind() {
+        var toggle = box.querySelector('.nk-assign-toggle');
+        if (toggle) toggle.addEventListener('click', function () {
+          open = !open;
+          render();
+          if (open) {
+            var input = box.querySelector('.nk-assign-search input');
+            if (input) input.focus();
+          }
+        });
+        var meBtn = box.querySelector('.nk-assign-me');
+        if (meBtn) meBtn.addEventListener('click', function () {
+          if (!assigneesData.me) return;
+          if (chosen.indexOf(assigneesData.me) === -1) chosen.push(assigneesData.me);
+          emit();
+          render();
+        });
+        var clear = box.querySelector('.nk-assign-clear');
+        if (clear) clear.addEventListener('click', function () {
+          chosen = [];
+          emit();
+          render();
+        });
+        Array.prototype.forEach.call(box.querySelectorAll('.nk-assign-x'), function (btn) {
+          btn.addEventListener('click', function () {
+            var id = Number(btn.getAttribute('data-id'));
+            chosen = chosen.filter(function (v) { return v !== id; });
+            emit();
+            render();
+          });
+        });
+        function applyChange(input) {
+          var id = Number(input.value);
+          if (input.checked) {
+            if (chosen.indexOf(id) === -1) chosen.push(id);
+          } else {
+            chosen = chosen.filter(function (v) { return v !== id; });
+          }
+          emit();
+          // Se repinta el bloque conservando la búsqueda, el foco y el scroll
+          // de la lista para poder seguir eligiendo personas sin saltos.
+          var scroller = box.querySelector('.nk-assign-groups');
+          var scroll = scroller ? scroller.scrollTop : 0;
+          render();
+          if (open) {
+            var field = box.querySelector('.nk-assign-search input');
+            if (field) { field.focus(); field.setSelectionRange(field.value.length, field.value.length); }
+          }
+          var list = box.querySelector('.nk-assign-groups');
+          if (list) list.scrollTop = scroll;
+        }
+        Array.prototype.forEach.call(box.querySelectorAll('.nk-assign-person input'), function (input) {
+          input.addEventListener('change', function () { applyChange(input); });
+        });
+        var searchInput = box.querySelector('.nk-assign-search input');
+        if (searchInput) searchInput.addEventListener('input', function () {
+          search = searchInput.value;
+          var groups = box.querySelector('.nk-assign-groups');
+          if (!groups) return;
+          groups.innerHTML = assigneeGroups().map(groupHtml).join('') || '<div class="nk-assign-empty">Sin coincidencias.</div>';
+          Array.prototype.forEach.call(box.querySelectorAll('.nk-assign-person input'), function (input) {
+            input.addEventListener('change', function () { applyChange(input); });
+          });
+        });
+      }
+
+      render();
+      loadAssignees().then(function () { render(); }).catch(function () {});
+      return function () { return chosen.slice(); };
     }
 
     function cardHtml(n, opts) {
@@ -1938,10 +2122,23 @@
         ? '<span class="nk-pin-badge"><span class="ri-pushpin-2-fill" aria-hidden="true"></span>Importante</span>'
         : '';
       pinBadge += prospectBadge(n, !!opts.showAdvisor);
-      if (n.assigned_to) {
-        pinBadge += '<span class="nk-assignee' + (n.assigned_to_me ? ' me' : '') + '" title="Responsable de la tarea">' +
-          '<span class="ri-user-received-2-line" aria-hidden="true"></span>' +
-          (n.assigned_to_me ? 'Para vos' : escapeHtml(n.assigned_name || 'Asignada')) + '</span>';
+      var noteAssignees = Array.isArray(n.assignees) && n.assignees.length
+        ? n.assignees
+        : (n.assigned_to ? [{ id: n.assigned_to, name: n.assigned_name, area_label: n.assigned_area }] : []);
+      if (noteAssignees.length) {
+        var shown = noteAssignees.slice(0, 3);
+        var allNames = noteAssignees.map(function (a) { return a.name || 'Asignada'; }).join(', ');
+        pinBadge += shown.map(function (a) {
+          var mine = n.assigned_to_me && assigneesData.me && a.id === assigneesData.me;
+          return '<span class="nk-assignee' + (mine ? ' me' : '') + '" title="' +
+            escapeHtml((a.area_label ? a.area_label + ' · ' : '') + 'Responsable de la tarea') + '">' +
+            '<span class="ri-user-received-2-line" aria-hidden="true"></span>' +
+            (mine ? 'Para vos' : escapeHtml(a.name || 'Asignada')) + '</span>';
+        }).join('');
+        if (noteAssignees.length > shown.length) {
+          pinBadge += '<span class="nk-assignee nk-assignee-more" title="' + escapeHtml(allNames) + '">+' +
+            (noteAssignees.length - shown.length) + '</span>';
+        }
       }
       var canGoto = n.source_message_id && opts.onGotoMessage && n.session_id === opts.currentSession;
       var gotoLink = canGoto
@@ -2075,8 +2272,20 @@
 
     // Derivación: quién derivó a quién y en qué quedó (vista, contacto, resuelta).
     function derivationHtml(n) {
-      if (!n.assigned_to || n.deleted_at) return '';
-      var area = n.assigned_area ? ' · ' + n.assigned_area.charAt(0).toUpperCase() + n.assigned_area.slice(1) : '';
+      var list = Array.isArray(n.assignees) && n.assignees.length
+        ? n.assignees
+        : (n.assigned_to ? [{ id: n.assigned_to, name: n.assigned_name, area_label: n.assigned_area }] : []);
+      if (!list.length || n.deleted_at) return '';
+      var areas = [];
+      list.forEach(function (a) {
+        if (a.area_label && areas.indexOf(a.area_label) === -1) areas.push(a.area_label);
+      });
+      var area = areas.length ? ' · ' + areas.join(' / ') : '';
+      var targets = list.map(function (a) {
+        return n.assigned_to_me && assigneesData.me && a.id === assigneesData.me
+          ? 'vos'
+          : (a.name || 'otra persona');
+      }).join(', ');
       var step = function (state, icon, label, detail) {
         return '<li class="nk-step is-' + state + '"><span class="' + icon + '" aria-hidden="true"></span><div><b>' + label + '</b>' +
           (detail ? '<span>' + detail + '</span>' : '') + '</div></li>';
@@ -2108,7 +2317,7 @@
       return '<div class="nk-deriv' + (mine ? ' is-mine' : '') + '">' +
         '<div class="nk-deriv-head"><span class="ri-share-forward-line" aria-hidden="true"></span>' +
           '<span><b>' + escapeHtml(n.assigned_by_name || n.author_name || 'Alguien') + '</b> derivó a <b>' +
-          (n.assigned_to_me ? 'vos' : escapeHtml(n.assigned_name || 'otra persona')) + '</b>' + escapeHtml(n.assigned_to_me ? '' : area) +
+          escapeHtml(targets) + '</b>' + escapeHtml(area) +
           ' · ' + escapeHtml(relTime(n.assigned_at || n.created_at)) + '</span></div>' +
         '<ol class="nk-steps">' + seen + contacted + done + '</ol>' + actions +
       '</div>';
@@ -2118,7 +2327,8 @@
       return '<textarea class="form-control nk-textarea nk-edit-text" rows="3" maxlength="4000">' + escapeHtml(n.note_text || '') + '</textarea>' +
         '<div class="nk-field-label">Etiquetas</div><div class="nk-tag-picker"></div>' +
         '<div class="nk-field-label">Seguimiento</div><div class="nk-due-wrap"></div>' +
-        '<div class="nk-field-label">Responsable</div><select class="form-select form-select-sm nk-assignee-select" aria-label="Responsable"></select>' +
+        '<div class="nk-field-label">Derivar a <span class="nk-field-hint">· varias personas por área</span></div>' +
+        '<div class="nk-assign-picker nk-assign-picker-sm"></div>' +
         '<div class="nk-editor-foot">' +
           '<span class="nk-hint">Ctrl + Enter para guardar · Esc para cancelar</span>' +
           '<button type="button" class="btn btn-sm btn-light nk-edit-cancel">Cancelar</button>' +
@@ -2212,7 +2422,10 @@
         if (editBtn) editBtn.addEventListener('click', function () {
           editor.innerHTML = editorHtml(note);
           var pickers = bindPickers(editor, opts.tags(), (note.tags || []).map(function (t) { return t.id; }), note.due_at, null, note.due_time);
-          var assignee = bindAssignee(editor.querySelector('.nk-assignee-select'), note.assigned_to);
+          var initialAssignees = note.assignees && note.assignees.length
+            ? note.assignees.map(function (a) { return a.id; })
+            : (note.assigned_to ? [note.assigned_to] : []);
+          var assignees = bindAssignees(editor.querySelector('.nk-assign-picker'), initialAssignees);
           var ta = editor.querySelector('.nk-edit-text');
           var close = function () { editor.hidden = true; editor.innerHTML = ''; view.hidden = false; card.classList.remove('editing'); };
           var save = function () {
@@ -2220,7 +2433,7 @@
             if (!text && !note.audio_path) { toast('La nota no puede quedar vacía', true); ta.focus(); return; }
             var saveBtn = editor.querySelector('.nk-edit-save');
             saveBtn.disabled = true;
-            jsonApi('/inbox/notes/' + id, 'PUT', { text: text, due_at: pickers.due(), due_time: pickers.time(), tag_ids: pickers.tags(), assigned_to: assignee() })
+            jsonApi('/inbox/notes/' + id, 'PUT', { text: text, due_at: pickers.due(), due_time: pickers.time(), tag_ids: pickers.tags(), assigned_to: assignees() })
               .then(function (updated) { toast('Nota actualizada'); opts.onChanged(updated, id); })
               .catch(function (e) { saveBtn.disabled = false; toast(e.message, true); });
           };
@@ -2274,6 +2487,7 @@
       lineLabel: lineLabel,
       loadAssignees: loadAssignees,
       bindAssignee: bindAssignee,
+      bindAssignees: bindAssignees,
       relTime: relTime,
       fmtDay: fmtDay,
       daysFromToday: daysFromToday,
@@ -4630,14 +4844,24 @@
       wrap.className = 'pl-dialog-backdrop';
       wrap.innerHTML = '<div class="pl-dialog contact-dialog" role="dialog" aria-modal="true" aria-labelledby="contact-dlg-title">' +
         '<h6 id="contact-dlg-title"><span class="ri-user-shared-line"></span> Enviar contacto</h6>' +
-        '<p class="pl-dialog-sub">Compartí el nombre y el número de WhatsApp del contacto.</p>' +
-        '<label class="poll-label" for="contact-search">Buscar contacto registrado</label>' +
-        '<input id="contact-search" class="form-control" placeholder="Nombre o número…" autocomplete="off">' +
-        '<div class="contact-results"></div>' +
-        '<label class="poll-label" for="contact-name">Nombre</label>' +
-        '<input id="contact-name" class="form-control" maxlength="120" placeholder="Nombre del contacto">' +
-        '<label class="poll-label" for="contact-phone">Número de WhatsApp</label>' +
-        '<input id="contact-phone" class="form-control" inputmode="tel" placeholder="591XXXXXXXX">' +
+        '<p class="pl-dialog-sub">Buscá a la persona en tus conversaciones y en el directorio, o escribí su nombre y número.</p>' +
+        '<label class="poll-label" for="contact-search">Buscar contacto</label>' +
+        '<div class="contact-search-wrap">' +
+          '<span class="ri-search-line" aria-hidden="true"></span>' +
+          '<input id="contact-search" class="form-control" placeholder="Nombre, apellido o número…" autocomplete="off" aria-describedby="contact-search-hint">' +
+        '</div>' +
+        '<div class="contact-results" role="listbox" aria-label="Resultados de la búsqueda"></div>' +
+        '<p class="contact-search-hint" id="contact-search-hint">Se busca en el directorio y en las conversaciones de todas tus líneas.</p>' +
+        '<div class="contact-fields">' +
+          '<div>' +
+            '<label class="poll-label" for="contact-name">Nombre</label>' +
+            '<input id="contact-name" class="form-control" maxlength="120" placeholder="Nombre del contacto">' +
+          '</div>' +
+          '<div>' +
+            '<label class="poll-label" for="contact-phone">Número de WhatsApp</label>' +
+            '<input id="contact-phone" class="form-control" inputmode="tel" placeholder="591XXXXXXXX" autocomplete="off">' +
+          '</div>' +
+        '</div>' +
         '<div class="pl-dialog-actions">' +
           '<button type="button" class="btn btn-light btn-sm" data-act="cancel">Cancelar</button>' +
           '<button type="button" class="btn btn-primary btn-sm" data-act="ok">Enviar contacto</button>' +
@@ -4645,51 +4869,137 @@
       document.body.appendChild(wrap);
       var search = wrap.querySelector('#contact-search');
       var results = wrap.querySelector('.contact-results');
+      var hint = wrap.querySelector('#contact-search-hint');
       var nameInput = wrap.querySelector('#contact-name');
       var phoneInput = wrap.querySelector('#contact-phone');
       var ok = wrap.querySelector('[data-act="ok"]');
       var timer = null;
+      var lastQuery = '';
+      var active = -1;
+      var currentPeople = [];
       var close = function () { if (timer) clearTimeout(timer); wrap.remove(); };
       wrap.addEventListener('click', function (e) { if (e.target === wrap) close(); });
       wrap.querySelector('[data-act="cancel"]').addEventListener('click', close);
+      wrap.addEventListener('keydown', function (e) { if (e.key === 'Escape') close(); });
+
+      function clearResults() {
+        currentPeople = [];
+        active = -1;
+        results.innerHTML = '';
+        results.hidden = false;
+      }
+
+      function pick(person) {
+        var name = person.full_name || fmtPhone(person.phone || '') || 'Contacto';
+        nameInput.value = name;
+        phoneInput.value = person.phone || '';
+        search.value = '';
+        clearResults();
+        hint.textContent = 'Contacto seleccionado: ' + name;
+        nameInput.focus();
+        nameInput.select();
+      }
+
+      function markActive() {
+        Array.prototype.forEach.call(results.querySelectorAll('.contact-result'), function (b, i) {
+          b.classList.toggle('active', i === active);
+          b.setAttribute('aria-selected', i === active ? 'true' : 'false');
+        });
+        var current = results.querySelector('.contact-result.active');
+        if (current) current.scrollIntoView({ block: 'nearest' });
+      }
+
+      function renderPeople(people, q) {
+        currentPeople = people;
+        active = -1;
+        if (!people.length) {
+          var digits = q.replace(/\D+/g, '');
+          var usable = digits.length === 8 ? '591' + digits : digits;
+          results.innerHTML = '<div class="contact-none"><span class="ri-user-search-line" aria-hidden="true"></span>' +
+            '<p>No encontramos «' + escapeHtml(q) + '» en el directorio ni en tus conversaciones.</p>' +
+            (digits.length >= 8
+              ? '<button type="button" class="contact-use-number" data-phone="' + escapeHtml(usable) + '">Usar el número +' + escapeHtml(usable) + '</button>'
+              : '<small>Probá con otro nombre o escribí el número completo.</small>') +
+            '</div>';
+          var use = results.querySelector('.contact-use-number');
+          if (use) use.addEventListener('click', function () {
+            phoneInput.value = use.getAttribute('data-phone') || '';
+            if (!nameInput.value.trim()) nameInput.value = fmtPhone(phoneInput.value) || '';
+            search.value = '';
+            clearResults();
+            hint.textContent = 'Número cargado. Revisá el nombre antes de enviar.';
+            nameInput.focus();
+          });
+          return;
+        }
+        results.innerHTML = people.map(function (p, i) {
+          var nm = p.full_name || fmtPhone(p.phone || '') || 'Contacto';
+          var meta = p.chat ? 'En conversación' : 'Directorio';
+          var extra = p.programas && p.programas.length ? p.programas[0] : '';
+          return '<button type="button" class="contact-result" role="option" aria-selected="false" data-index="' + i + '">' +
+            '<span class="contact-result-avatar" aria-hidden="true">' + escapeHtml(initials(nm)) + '</span>' +
+            '<span class="contact-result-body"><b>' + escapeHtml(nm) + '</b>' +
+              '<small>' + escapeHtml(fmtPhone(p.phone || '')) + (extra ? ' · ' + escapeHtml(extra) : '') + '</small></span>' +
+            '<span class="contact-result-tag' + (p.chat ? ' on' : '') + '">' + escapeHtml(meta) + '</span></button>';
+        }).join('');
+        Array.prototype.forEach.call(results.querySelectorAll('.contact-result'), function (btn) {
+          btn.addEventListener('click', function () { pick(currentPeople[Number(btn.getAttribute('data-index'))]); });
+          btn.addEventListener('mousemove', function () {
+            var i = Number(btn.getAttribute('data-index'));
+            if (i !== active) { active = i; markActive(); }
+          });
+        });
+      }
+
+      function runSearch() {
+        var q = search.value.trim();
+        if (q === lastQuery) return;
+        lastQuery = q;
+        if (q.length < 2) { clearResults(); hint.textContent = 'Escribí al menos 2 caracteres.'; return; }
+        hint.textContent = 'Buscando…';
+        api('/inbox/directory?q=' + encodeURIComponent(q) + '&limit=12')
+          .then(function (d) {
+            if (lastQuery !== q) return;
+            hint.textContent = 'Se busca en el directorio y en las conversaciones de todas tus líneas.';
+            renderPeople((d && d.people) || [], q);
+          })
+          .catch(function () {
+            hint.textContent = 'No se pudo buscar. Podés escribir el nombre y el número a mano.';
+            clearResults();
+          });
+      }
 
       search.addEventListener('input', function () {
-        var q = search.value.trim();
         if (timer) clearTimeout(timer);
-        if (q.length < 2) { results.innerHTML = ''; return; }
-        timer = setTimeout(function () {
-          api('/inbox/directory?q=' + encodeURIComponent(q) + '&limit=8')
-            .then(function (d) {
-              var people = (d && d.people) || [];
-              if (!people.length) { results.innerHTML = '<div class="contact-none">Sin coincidencias</div>'; return; }
-              results.innerHTML = people.map(function (p) {
-                var nm = p.full_name || p.phone || 'Contacto';
-                return '<button type="button" class="contact-result" data-name="' + escapeHtml(nm) + '" data-phone="' + escapeHtml(p.phone || '') + '">' +
-                  '<span class="ri-user-line" aria-hidden="true"></span><span><b>' + escapeHtml(nm) + '</b><small>' + escapeHtml(fmtPhone(p.phone || '')) + '</small></span></button>';
-              }).join('');
-              Array.prototype.forEach.call(results.querySelectorAll('.contact-result'), function (b) {
-                b.addEventListener('click', function () {
-                  nameInput.value = b.getAttribute('data-name') || '';
-                  phoneInput.value = b.getAttribute('data-phone') || '';
-                  results.innerHTML = '';
-                  search.value = '';
-                  nameInput.focus();
-                });
-              });
-            })
-            .catch(function () { results.innerHTML = '<div class="contact-none">No se pudo buscar.</div>'; });
-        }, 250);
+        timer = setTimeout(runSearch, 220);
       });
 
-      ok.addEventListener('click', function () {
+      search.addEventListener('keydown', function (e) {
+        if (!currentPeople.length) return;
+        if (e.key === 'ArrowDown') { e.preventDefault(); active = Math.min(active + 1, currentPeople.length - 1); markActive(); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); active = Math.max(active - 1, 0); markActive(); }
+        else if (e.key === 'Enter') {
+          e.preventDefault();
+          var person = currentPeople[active >= 0 ? active : 0];
+          if (person) pick(person);
+        }
+      });
+
+      phoneInput.addEventListener('input', function () {
+        // Solo dígitos, +, espacios y guiones: evita pegar texto con formato raro.
+        phoneInput.value = phoneInput.value.replace(/[^\d+\s()-]/g, '');
+      });
+
+      function finish() {
         var name = nameInput.value.trim();
-        var phone = phoneInput.value.trim();
+        var digits = phoneInput.value.replace(/\D+/g, '');
         if (!name) { toast('Escribí el nombre del contacto.', true); nameInput.focus(); return; }
-        if (String(phone).replace(/\D+/g, '').length < 8) { toast('Escribí un número de WhatsApp válido.', true); phoneInput.focus(); return; }
+        if (digits.length < 8) { toast('Escribí un número de WhatsApp válido (mínimo 8 dígitos).', true); phoneInput.focus(); return; }
+        if (digits.length > 15) { toast('El número es demasiado largo.', true); phoneInput.focus(); return; }
         ok.disabled = true;
         jsonApi('/inbox/' + encodeURIComponent(state.selectedSession) + '/' + encodeURIComponent(state.selectedChat) + '/contact', 'POST', {
           name: name,
-          phone: phone,
+          phone: digits,
           reply_to_wa_id: state.replyTo ? state.replyTo.wa_message_id : null,
         })
           .then(function () {
@@ -4701,8 +5011,13 @@
             renderPane();
           })
           .catch(function (e) { ok.disabled = false; toast(e.message, true); });
+      }
+
+      ok.addEventListener('click', finish);
+      wrap.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); finish(); }
       });
-      nameInput.focus();
+      search.focus();
     }
 
     // Diálogo para crear una encuesta con pregunta, opciones y modo de respuesta.
@@ -4942,7 +5257,7 @@
     }
 
     function emptyNoteDraft() {
-      return { open: false, text: '', tags: [], due: '', time: '', pinned: false, assignedTo: null, sourceMessageId: null, sourceLabel: '' };
+      return { open: false, text: '', tags: [], due: '', time: '', pinned: false, assignedTo: [], sourceMessageId: null, sourceLabel: '' };
     }
 
     function notesSectionHtml() {
@@ -4993,10 +5308,16 @@
           '<span class="nk-pin-text"><b><span class="ri-pushpin-2-line" aria-hidden="true"></span> Importante</b>' +
             '<small>Se muestra fijada arriba del chat para quien atienda a esta persona.</small></span>' +
         '</label>' +
-        '<div class="nk-field-label">¿Es una tarea? Fecha de seguimiento</div><div class="nk-due-wrap"></div>' +
-        '<div class="nk-field-label">Derivar a <span class="nk-field-hint">· otra persona o área; le llega una notificación con el detalle</span></div>' +
-        '<select class="form-select form-select-sm nk-assignee-select" aria-label="Responsable de la tarea"></select>' +
-        '<div class="nk-field-label">Etiquetas</div><div class="nk-tag-picker"></div>' +
+        '<div class="nk-compose-options">' +
+          '<div class="nk-compose-col">' +
+            '<div class="nk-field-label">¿Es una tarea? Fecha de seguimiento</div><div class="nk-due-wrap"></div>' +
+            '<div class="nk-field-label">Etiquetas</div><div class="nk-tag-picker"></div>' +
+          '</div>' +
+          '<div class="nk-compose-col">' +
+            '<div class="nk-field-label">Derivar a <span class="nk-field-hint">· una o varias personas, agrupadas por área</span></div>' +
+            '<div class="nk-assign-picker"></div>' +
+          '</div>' +
+        '</div>' +
         '<div class="nk-composer-foot">' +
           '<span class="nk-rec" title="Grabar una nota de voz"></span>' +
           '<span class="nk-hint">Ctrl + Enter</span>' +
@@ -5008,7 +5329,7 @@
       var ta = form.querySelector('textarea');
       ta.value = d.text;
       ta.addEventListener('input', function () { d.text = ta.value; });
-      var assignee = NoteKit.bindAssignee(form.querySelector('.nk-assignee-select'), d.assignedTo, function (v) { d.assignedTo = v; });
+      var assignees = NoteKit.bindAssignees(form.querySelector('.nk-assign-picker'), d.assignedTo, function (v) { d.assignedTo = v; });
       var sourceX = form.querySelector('.nk-source-x');
       if (sourceX) sourceX.addEventListener('click', function () { d.sourceMessageId = null; d.sourceLabel = ''; renderNoteComposer(); });
       var pinInput = form.querySelector('.nk-pin-input');
@@ -5039,7 +5360,7 @@
         btn.disabled = true;
         jsonApi(notesUrl, 'POST', {
           text: text, due_at: pickers.due(), due_time: pickers.time(), tag_ids: pickers.tags(), pinned: d.pinned,
-          assigned_to: assignee(), source_message_id: d.sourceMessageId,
+          assigned_to: assignees(), source_message_id: d.sourceMessageId,
         })
           .then(done)
           .catch(function (e) { btn.disabled = false; toast(e.message, true); });
@@ -5061,7 +5382,7 @@
         if (pickers.time()) fd.append('due_time', pickers.time());
         fd.append('tag_ids', JSON.stringify(pickers.tags()));
         if (d.pinned) fd.append('pinned', '1');
-        if (assignee()) fd.append('assigned_to', String(assignee()));
+        if (assignees().length) fd.append('assigned_to', JSON.stringify(assignees()));
         if (d.sourceMessageId) fd.append('source_message_id', String(d.sourceMessageId));
         fetch(notesUrl, { method: 'POST', body: fd, headers: { 'Accept': 'application/json' }, credentials: 'same-origin' })
           .then(function (r) { if (!r.ok) throw new Error('No se pudo guardar la nota de voz'); done(); })
@@ -5102,7 +5423,8 @@
             return '<option value="' + t.id + '">' + escapeHtml(t.name) + (match ? ' · sugerida para ' + escapeHtml(t.programa) : '') + '</option>';
           }).join('') + '</select>' +
           '<ol class="nk-tpl-steps"></ol>' +
-          '<div class="nk-field-label">Responsable</div><select class="form-select form-select-sm nk-assignee-select" aria-label="Responsable de las tareas"></select>' +
+          '<div class="nk-field-label">Derivar las tareas a <span class="nk-field-hint">· una o varias personas</span></div>' +
+          '<div class="nk-assign-picker"></div>' +
           '<div class="nk-composer-foot">' +
             '<button type="button" class="btn btn-sm btn-light nk-tpl-cancel">Cancelar</button>' +
             '<button type="button" class="btn btn-sm btn-primary nk-tpl-apply"></button>' +
@@ -5110,7 +5432,7 @@
         var select = pick.querySelector('#nk-tpl-select');
         var steps = pick.querySelector('.nk-tpl-steps');
         var apply = pick.querySelector('.nk-tpl-apply');
-        var assignee = NoteKit.bindAssignee(pick.querySelector('.nk-assignee-select'), null);
+        var assignees = NoteKit.bindAssignees(pick.querySelector('.nk-assign-picker'), []);
         var current = function () { return list.filter(function (t) { return String(t.id) === select.value; })[0]; };
         var when = function (i) {
           if (i.due_days === null || i.due_days === undefined) return 'sin fecha';
@@ -5132,7 +5454,7 @@
         apply.addEventListener('click', function () {
           apply.disabled = true;
           jsonApi('/inbox/' + encodeURIComponent(state.selectedSession) + '/' + encodeURIComponent(state.selectedChat) + '/notes/template', 'POST',
-            { template_id: Number(select.value), assigned_to: assignee() })
+            { template_id: Number(select.value), assigned_to: assignees() })
             .then(function (r) {
               if (token !== state.chatToken) return;
               pick.hidden = true;
@@ -5993,9 +6315,11 @@
     /* ── SSE + polling ── */
     // «Te asignaron una tarea»: solo al responsable y si no se la asignó él mismo.
     function notifyAssignment(d) {
-      if (!d || d.action !== 'assigned' || !d.assignedTo) return;
+      if (!d || d.action !== 'assigned') return;
+      var ids = Array.isArray(d.userIds) ? d.userIds : (d.assignedTo ? [d.assignedTo] : []);
+      if (!ids.length) return;
       NoteKit.loadAssignees().then(function (a) {
-        if (!a.me || d.assignedTo !== a.me || d.actorId === a.me) return;
+        if (!a.me || ids.indexOf(a.me) === -1 || d.actorId === a.me) return;
         toast('Te asignaron una tarea nueva', false, { label: 'Ver', run: function () { location.href = '/notes#asignadas'; } });
       });
     }

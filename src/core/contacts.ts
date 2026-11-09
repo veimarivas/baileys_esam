@@ -1,5 +1,6 @@
 import { all, foldText, get, run } from '../db/index.js';
 import { nowIso } from '../util/async.js';
+import { esamAreaName } from '../auth/users.js';
 import { displayPhoneNumber } from './lid.js';
 import type { ContactNoteRow, ContactRow } from '../types.js';
 
@@ -109,6 +110,16 @@ export interface NoteTagLite {
   color: string;
 }
 
+/** Persona a la que se derivó una nota. */
+export interface NoteAssigneeLite {
+  id: number;
+  name: string;
+  area: string | null;
+  area_label: string;
+  /** Es el responsable principal (`contact_notes.assigned_to`). */
+  primary: boolean;
+}
+
 export interface ContactNoteWithAuthor extends ContactNoteRow {
   author_name: string | null;
   done_by_name: string | null;
@@ -123,6 +134,8 @@ export interface ContactNoteWithAuthor extends ContactNoteRow {
   session_name: string | null;
   session_phone: string | null;
   tags: NoteTagLite[];
+  /** Todas las personas a las que se derivó (la primera es la principal). */
+  assignees: NoteAssigneeLite[];
 }
 
 /** Columnas comunes de una nota con su autor, quién la completó y su línea de origen. */
@@ -173,9 +186,142 @@ function tagsByNote(noteIds: number[]): Map<number, NoteTagLite[]> {
   return map;
 }
 
-function withTags<T extends { id: number }>(rows: T[]): Array<T & { tags: NoteTagLite[] }> {
-  const tags = tagsByNote(rows.map((r) => r.id));
-  return rows.map((r) => ({ ...r, tags: tags.get(r.id) ?? [] }));
+/**
+ * Personas derivadas de varias notas, agrupadas por id. Incluye las notas
+ * antiguas que solo tienen `assigned_to` (sin filas en la tabla nueva).
+ */
+function assigneesByNote(noteIds: number[]): Map<number, NoteAssigneeLite[]> {
+  const map = new Map<number, NoteAssigneeLite[]>();
+  if (!noteIds.length) return map;
+  const placeholders = noteIds.map(() => '?').join(',');
+  const rows = all<{ note_id: number; id: number; name: string | null; area: string | null; is_primary: number }>(
+    `SELECT x.note_id, x.id, x.name, x.area, x.is_primary
+       FROM (
+         SELECT na.note_id, u.id,
+                COALESCE(NULLIF(u.name, ''), NULLIF(u.username, ''), u.email, 'Usuario ' || u.id) AS name,
+                u.esam_area AS area,
+                CASE WHEN n.assigned_to = u.id THEN 1 ELSE 0 END AS is_primary,
+                na.created_at
+           FROM contact_note_assignees na
+           JOIN users u ON u.id = na.user_id
+           JOIN contact_notes n ON n.id = na.note_id
+          WHERE na.note_id IN (${placeholders})
+         UNION ALL
+         SELECT n.id AS note_id, u.id,
+                COALESCE(NULLIF(u.name, ''), NULLIF(u.username, ''), u.email, 'Usuario ' || u.id) AS name,
+                u.esam_area AS area, 1 AS is_primary, n.created_at
+           FROM contact_notes n JOIN users u ON u.id = n.assigned_to
+          WHERE n.id IN (${placeholders})
+            AND NOT EXISTS (SELECT 1 FROM contact_note_assignees x WHERE x.note_id = n.id)
+       ) x
+      ORDER BY x.note_id, x.is_primary DESC, x.name COLLATE NOCASE`,
+    ...noteIds,
+    ...noteIds,
+  );
+  for (const r of rows) {
+    const list = map.get(r.note_id) ?? [];
+    list.push({
+      id: r.id,
+      name: r.name ?? `Usuario ${r.id}`,
+      area: r.area,
+      area_label: esamAreaName(r.area),
+      primary: !!r.is_primary,
+    });
+    map.set(r.note_id, list);
+  }
+  return map;
+}
+
+function withTags<T extends { id: number }>(rows: T[]): Array<T & { tags: NoteTagLite[]; assignees: NoteAssigneeLite[] }> {
+  const ids = rows.map((r) => r.id);
+  const tags = tagsByNote(ids);
+  const assignees = assigneesByNote(ids);
+  return rows.map((r) => ({
+    ...r,
+    tags: tags.get(r.id) ?? [],
+    assignees: assignees.get(r.id) ?? [],
+  }));
+}
+
+/** Ids de las personas a las que está derivada una nota (principal primero). */
+export function noteAssigneeIds(noteId: number): number[] {
+  const rows = all<{ user_id: number; is_primary: number }>(
+    `SELECT na.user_id, CASE WHEN n.assigned_to = na.user_id THEN 1 ELSE 0 END AS is_primary
+       FROM contact_note_assignees na JOIN contact_notes n ON n.id = na.note_id
+      WHERE na.note_id = ?
+      ORDER BY is_primary DESC, na.created_at, na.user_id`,
+    noteId,
+  );
+  if (rows.length) return rows.map((r) => r.user_id);
+  const primary = getNote(noteId)?.assigned_to;
+  return primary ? [primary] : [];
+}
+
+/** ¿La nota está derivada a esta persona? */
+export function isNoteAssignee(noteId: number, userId: number): boolean {
+  return !!get(
+    `SELECT 1 FROM contact_notes n
+      WHERE n.id = ? AND (n.assigned_to = ? OR EXISTS (
+        SELECT 1 FROM contact_note_assignees na WHERE na.note_id = n.id AND na.user_id = ?))`,
+    noteId,
+    userId,
+    userId,
+  );
+}
+
+/**
+ * Reemplaza las personas derivadas de una nota. La primera de `userIds` queda
+ * como responsable principal (`assigned_to`) para las vistas que ya lo usaban.
+ * Devuelve `true` si la derivación cambió.
+ */
+export function setNoteAssignees(
+  noteId: number,
+  userIds: number[],
+  assignedBy: number | null,
+  opts: { log?: boolean } = {},
+): boolean {
+  const note = getNote(noteId);
+  if (!note) return false;
+  const valid = [...new Set(userIds.map(Number).filter((id) => Number.isFinite(id) && id > 0))];
+  const current = noteAssigneeIds(noteId);
+  const primary = valid[0] ?? null;
+  const changed = !sameIds(valid, current) || primary !== (note.assigned_to ?? null);
+  if (!changed) return false;
+
+  const now = nowIso();
+  run('DELETE FROM contact_note_assignees WHERE note_id = ?', noteId);
+  for (const id of valid) {
+    run(
+      'INSERT OR IGNORE INTO contact_note_assignees (note_id, user_id, created_at) VALUES (?, ?, ?)',
+      noteId,
+      id,
+      now,
+    );
+  }
+  // Solo se reinicia el estado de la derivación cuando cambia el responsable
+  // principal (o se quita la derivación): agregar una persona más no borra la
+  // confirmación de contacto que ya había hecho el equipo.
+  if (primary !== (note.assigned_to ?? null) || !valid.length) {
+    run(
+      `UPDATE contact_notes SET assigned_to = ?, assigned_by = ?, assigned_at = ?,
+              seen_at = NULL, contacted_at = NULL, contacted_by = NULL, contact_result = NULL,
+              updated_at = ?
+        WHERE id = ?`,
+      primary,
+      primary ? assignedBy : null,
+      primary ? now : null,
+      now,
+      noteId,
+    );
+  } else {
+    run('UPDATE contact_notes SET assigned_to = ?, updated_at = ? WHERE id = ?', primary, now, noteId);
+  }
+
+  if (opts.log !== false) {
+    const names = valid.map((id) => userName(id)).filter((name): name is string => !!name);
+    logNoteEvent(noteId, assignedBy, 'assigned', undefined, names.length ? names.join(', ') : null);
+  }
+  return true;
 }
 
 export function setNoteTags(noteId: number, tagIds: number[]): void {
@@ -271,7 +417,7 @@ export function getNote(id: number): ContactNoteRow | undefined {
  */
 export function noteVisibleIn(id: number, sessionIds: string[] | null, viewerId: number | null = null): boolean {
   if (sessionIds === null) return !!getNote(id);
-  if (viewerId && getNote(id)?.assigned_to === viewerId) return true;
+  if (viewerId && isNoteAssignee(id, viewerId)) return true;
   if (!sessionIds.length) return false;
   const inList = sessionIds.map(() => '?').join(',');
   return !!get(
@@ -293,8 +439,22 @@ export function addNote(
   dueAt: string | null = null,
   tagIds: number[] = [],
   pinned = false,
-  extra: { assignedTo?: number | null; sourceMessageId?: number | null; dueTime?: string | null } = {},
+  extra: {
+    assignedTo?: number | null;
+    assigneeIds?: number[];
+    sourceMessageId?: number | null;
+    dueTime?: string | null;
+  } = {},
 ): ContactNoteWithAuthor {
+  const assigneeIds = [
+    ...new Set(
+      (extra.assigneeIds ?? (extra.assignedTo ? [extra.assignedTo] : []))
+        .map(Number)
+        .filter((id) => Number.isFinite(id) && id > 0),
+    ),
+  ];
+  const primary = assigneeIds[0] ?? null;
+  const now = nowIso();
   const created = run(
     `INSERT INTO contact_notes (contact_id, user_id, note_text, audio_path, due_at, due_time, pinned, assigned_to,
        assigned_by, assigned_at, source_message_id, created_at)
@@ -306,15 +466,26 @@ export function addNote(
     dueAt || null,
     dueAt ? extra.dueTime || null : null,
     pinned ? 1 : 0,
-    extra.assignedTo ?? null,
-    extra.assignedTo ? userId : null,
-    extra.assignedTo ? nowIso() : null,
+    primary,
+    primary ? userId : null,
+    primary ? now : null,
     extra.sourceMessageId ?? null,
-    nowIso(),
+    now,
   );
   setNoteTags(created.lastInsertRowid, tagIds);
-  if (extra.assignedTo && extra.assignedTo !== userId) {
-    logNoteEvent(created.lastInsertRowid, userId, 'assigned', undefined, userName(extra.assignedTo));
+  if (assigneeIds.length) {
+    for (const id of assigneeIds) {
+      run(
+        'INSERT OR IGNORE INTO contact_note_assignees (note_id, user_id, created_at) VALUES (?, ?, ?)',
+        created.lastInsertRowid,
+        id,
+        now,
+      );
+    }
+    if (assigneeIds.some((id) => id !== userId)) {
+      const names = assigneeIds.map((id) => userName(id)).filter((name): name is string => !!name);
+      logNoteEvent(created.lastInsertRowid, userId, 'assigned', undefined, names.join(', ') || null);
+    }
   }
   return noteDTO(created.lastInsertRowid)!;
 }
@@ -327,7 +498,10 @@ export function updateNote(
     dueTime?: string | null;
     tagIds?: number[];
     pinned?: boolean;
+    /** Compatibilidad: un solo responsable. */
     assignedTo?: number | null;
+    /** Varias personas derivadas (la primera queda como principal). */
+    assignedToIds?: number[];
   },
   userId: number | null = null,
 ): void {
@@ -344,43 +518,37 @@ export function updateNote(
     logNoteEvent(noteId, userId, 'edited', { text: current.note_text, due: current.due_at, tags: prevTags });
   }
   if (pinned !== current.pinned) logNoteEvent(noteId, userId, pinned ? 'pinned' : 'unpinned');
-  const assignedTo = patch.assignedTo !== undefined ? patch.assignedTo : current.assigned_to;
-  if (assignedTo !== current.assigned_to) {
-    logNoteEvent(noteId, userId, 'assigned', undefined, assignedTo ? userName(assignedTo) : null);
-  }
   run(
-    `UPDATE contact_notes SET note_text = ?, due_at = ?, due_time = ?, pinned = ?, assigned_to = ?, updated_at = ?,
+    `UPDATE contact_notes SET note_text = ?, due_at = ?, due_time = ?, pinned = ?, updated_at = ?,
             reminded_at = CASE WHEN due_at IS ? AND due_time IS ? THEN reminded_at ELSE NULL END
       WHERE id = ?`,
     text,
     due,
     dueTime,
     pinned,
-    assignedTo,
     nowIso(),
     due,
     dueTime,
     noteId,
   );
   if (patch.tagIds) setNoteTags(noteId, patch.tagIds);
-  if (assignedTo !== current.assigned_to) {
-    // Nueva derivación: empieza de cero (vista y contacto son del nuevo responsable).
-    run(
-      `UPDATE contact_notes SET assigned_by = ?, assigned_at = ?, seen_at = NULL,
-              contacted_at = NULL, contacted_by = NULL, contact_result = NULL WHERE id = ?`,
-      assignedTo ? userId : null,
-      assignedTo ? nowIso() : null,
-      noteId,
-    );
-  }
+  const nextIds = patch.assignedToIds !== undefined
+    ? patch.assignedToIds
+    : patch.assignedTo !== undefined
+      ? (patch.assignedTo ? [patch.assignedTo] : [])
+      : undefined;
+  if (nextIds !== undefined) setNoteAssignees(noteId, nextIds, userId);
 }
 
 /** El responsable abrió la derivación: queda registrado una sola vez. */
 export function markAssignmentSeen(noteId: number, userId: number): boolean {
   const changed = run(
-    'UPDATE contact_notes SET seen_at = ? WHERE id = ? AND assigned_to = ? AND seen_at IS NULL',
+    `UPDATE contact_notes SET seen_at = ? WHERE id = ? AND seen_at IS NULL
+       AND (assigned_to = ? OR EXISTS (
+         SELECT 1 FROM contact_note_assignees na WHERE na.note_id = contact_notes.id AND na.user_id = ?))`,
     nowIso(),
     noteId,
+    userId,
     userId,
   ).changes;
   if (changed) logNoteEvent(noteId, userId, 'seen');
@@ -618,13 +786,21 @@ export interface MyDay {
   items: Array<{ id: number; note_text: string | null; due_at: string; due_time: string | null; contact: string; chat_id: string; session_id: string }>;
 }
 
+/** Condición SQL: la nota está derivada al usuario (principal o adicional). */
+function assignedToUserClause(alias: string): string {
+  return `(${alias}.assigned_to = ? OR EXISTS (
+    SELECT 1 FROM contact_note_assignees cna WHERE cna.note_id = ${alias}.id AND cna.user_id = ?))`;
+}
+
 /** Resumen del día de un usuario: sus tareas (asignadas o propias sin responsable). */
 export function myDay(userId: number): MyDay {
-  const mine = '(n.assigned_to = ? OR (n.assigned_to IS NULL AND n.user_id = ?)) AND n.done_at IS NULL AND n.deleted_at IS NULL';
+  const mine = `(${assignedToUserClause('n')} OR (n.assigned_to IS NULL AND n.user_id = ?))
+    AND n.done_at IS NULL AND n.deleted_at IS NULL`;
   const counts = get<{ overdue: number | null; today: number | null }>(
     `SELECT SUM(CASE WHEN n.due_at < ${TODAY} THEN 1 ELSE 0 END) AS overdue,
             SUM(CASE WHEN n.due_at = ${TODAY} THEN 1 ELSE 0 END) AS today
        FROM contact_notes n WHERE ${mine}`,
+    userId,
     userId,
     userId,
   );
@@ -637,18 +813,26 @@ export function myDay(userId: number): MyDay {
       LIMIT 6`,
     userId,
     userId,
+    userId,
   );
   return { overdue: Number(counts?.overdue ?? 0), today: Number(counts?.today ?? 0), items };
 }
 
-/** Personas a las que se puede asignar una tarea (de cualquier línea). */
-export function noteAssignees(): Array<{ id: number; name: string; area: string | null }> {
-  return all<{ id: number; name: string; area: string | null }>(
-    `SELECT id, COALESCE(NULLIF(name, ''), username, email) AS name, esam_area AS area
+/** Personas a las que se puede asignar una tarea (de cualquier línea), con su área. */
+export function noteAssignees(): Array<{ id: number; name: string; area: string | null; area_label: string }> {
+  const rows = all<{ id: number; name: string | null; area: string | null }>(
+    `SELECT id, COALESCE(NULLIF(name, ''), NULLIF(username, ''), email, 'Usuario ' || id) AS name, esam_area AS area
        FROM users
-      WHERE esam_autorizado = 1 OR source = 'local'
-      ORDER BY name COLLATE NOCASE`,
+      WHERE esam_autorizado = 1 OR source = 'local'`,
   );
+  return rows
+    .map((u) => ({
+      id: u.id,
+      name: u.name ?? `Usuario ${u.id}`,
+      area: u.area,
+      area_label: esamAreaName(u.area),
+    }))
+    .sort((a, b) => a.area_label.localeCompare(b.area_label, 'es') || a.name.localeCompare(b.name, 'es'));
 }
 
 /** Historial de una nota, del más antiguo al más reciente (la creación la da la propia nota). */
@@ -702,7 +886,8 @@ function statusClause(status: NoteStatus): string | null {
     case 'pinned':
       return 'n.done_at IS NULL AND n.pinned = 1';
     case 'derived':
-      return 'n.done_at IS NULL AND n.assigned_to IS NOT NULL';
+      return `n.done_at IS NULL AND (n.assigned_to IS NOT NULL OR EXISTS (
+        SELECT 1 FROM contact_note_assignees na WHERE na.note_id = n.id))`;
     case 'done':
       return 'n.done_at IS NOT NULL';
     default:
@@ -723,23 +908,28 @@ function scopeClause(
 ): boolean {
   if (sessionIds === null || sessionIds === undefined) return true;
   // Las tareas asignadas al usuario se ven siempre, sean de la línea que sean.
-  const mine = viewerId ? ' OR n.assigned_to = ?' : '';
+  const mine = viewerId ? ` OR ${assignedToUserClause('n')}` : '';
   if (!sessionIds.length) {
     if (!viewerId) return false;
-    where.push('n.assigned_to = ?');
-    params.push(viewerId);
+    where.push(assignedToUserClause('n'));
+    params.push(viewerId, viewerId);
     return true;
   }
   const inList = sessionIds.map(() => '?').join(',');
   where.push(`(ct.session_id IN (${inList}) OR (ct.phone_key IS NOT NULL AND EXISTS (
     SELECT 1 FROM contacts o WHERE o.phone_key = ct.phone_key AND o.session_id IN (${inList})))${mine})`);
   params.push(...sessionIds, ...sessionIds);
-  if (viewerId) params.push(viewerId);
+  if (viewerId) params.push(viewerId, viewerId);
   return true;
 }
 
-/** Área de la nota: la de su responsable o, si no está derivada, la de quien la registró. */
-const NOTE_AREA_SQL = `LOWER(COALESCE((SELECT ua.esam_area FROM users ua WHERE ua.id = n.assigned_to),
+/** Área de la nota: la de su responsable principal (o de la primera derivada) o la de quien la registró. */
+const NOTE_AREA_SQL = `LOWER(COALESCE(
+  (SELECT ua.esam_area FROM users ua WHERE ua.id = n.assigned_to),
+  (SELECT ua2.esam_area FROM contact_note_assignees na
+     JOIN users ua2 ON ua2.id = na.user_id
+    WHERE na.note_id = n.id AND NULLIF(ua2.esam_area, '') IS NOT NULL
+    ORDER BY na.created_at, na.user_id LIMIT 1),
   (SELECT uu.esam_area FROM users uu WHERE uu.id = n.user_id), ''))`;
 
 /**
@@ -750,12 +940,12 @@ const NOTE_AREA_SQL = `LOWER(COALESCE((SELECT ua.esam_area FROM users ua WHERE u
 function ownerClause(ownerId: number | null | undefined, where: string[], params: unknown[], alsoArea?: string | null): void {
   if (!ownerId) return;
   if (alsoArea) {
-    where.push(`(n.user_id = ? OR n.assigned_to = ? OR n.assigned_by = ? OR ${NOTE_AREA_SQL} = ?)`);
-    params.push(ownerId, ownerId, ownerId, alsoArea);
+    where.push(`(n.user_id = ? OR ${assignedToUserClause('n')} OR n.assigned_by = ? OR ${NOTE_AREA_SQL} = ?)`);
+    params.push(ownerId, ownerId, ownerId, ownerId, alsoArea);
     return;
   }
-  where.push('(n.user_id = ? OR n.assigned_to = ? OR n.assigned_by = ?)');
-  params.push(ownerId, ownerId, ownerId);
+  where.push(`(n.user_id = ? OR ${assignedToUserClause('n')} OR n.assigned_by = ?)`);
+  params.push(ownerId, ownerId, ownerId, ownerId);
 }
 
 /** ¿La nota es de esta área? (para dar acceso a la supervisión del área). */
@@ -787,11 +977,13 @@ export function listAllNotes(opts: {
 } = {}): GlobalNote[] {
   const where: string[] = [];
   const params: unknown[] = [];
-  if (!scopeClause(opts.sessionIds, where, params, opts.viewerId ?? null)) return [];
+  // Quien consulta sus tareas asignadas las ve aunque el alcance de sesiones
+  // esté vacío (p. ej. una línea propia sin conversaciones todavía).
+  if (!scopeClause(opts.sessionIds, where, params, opts.viewerId ?? opts.assignedTo ?? null)) return [];
   ownerClause(opts.ownerId, where, params, opts.ownerArea);
   if (opts.assignedTo) {
-    where.push('n.assigned_to = ?');
-    params.push(opts.assignedTo);
+    where.push(assignedToUserClause('n'));
+    params.push(opts.assignedTo, opts.assignedTo);
   }
   if (opts.ids?.length) {
     where.push(`n.id IN (${opts.ids.map(() => '?').join(',')})`);
@@ -816,9 +1008,11 @@ export function listAllNotes(opts: {
     const f = (col: string) => `fold(${col}) LIKE ? ESCAPE '!'`;
     where.push(`(${f("COALESCE(n.note_text,'')")} OR ${f("COALESCE(ct.name,'')")} OR ${f("COALESCE(ct.phone,'')")}
       OR ${f('ct.chat_id')} OR ${f("COALESCE(a.name,'')")}
+      OR EXISTS (SELECT 1 FROM contact_note_assignees qa JOIN users qau ON qau.id = qa.user_id
+                  WHERE qa.note_id = n.id AND ${f('qau.name')})
       OR EXISTS (SELECT 1 FROM contact_note_tags qt JOIN note_tags t ON t.id = qt.tag_id
                   WHERE qt.note_id = n.id AND ${f('t.name')}))`);
-    params.push(like, like, like, like, like, like);
+    params.push(like, like, like, like, like, like, like);
   }
 
   const limit = Math.min(Math.max(opts.limit ?? 500, 1), 1000);
@@ -889,11 +1083,11 @@ export function noteStats(opts: {
     pending: 0, overdue: 0, today: 0, week: 0, pinned: 0, done: 0, all: 0, trash: 0,
     derived: 0, derived_unseen: 0, derived_no_contact: 0, derived_contacted: 0,
   };
-  if (!scopeClause(opts.sessionIds, where, params, opts.viewerId ?? null)) return empty;
+  if (!scopeClause(opts.sessionIds, where, params, opts.viewerId ?? opts.assignedTo ?? null)) return empty;
   ownerClause(opts.ownerId, where, params, opts.ownerArea);
   if (opts.assignedTo) {
-    where.push('n.assigned_to = ?');
-    params.push(opts.assignedTo);
+    where.push(assignedToUserClause('n'));
+    params.push(opts.assignedTo, opts.assignedTo);
   }
   if (opts.authorId) {
     where.push('n.user_id = ?');
@@ -901,14 +1095,15 @@ export function noteStats(opts: {
   }
   const sum = (status: NoteStatus) =>
     `SUM(CASE WHEN n.deleted_at IS NULL${statusClause(status) ? ` AND ${statusClause(status)}` : ''} THEN 1 ELSE 0 END)`;
+  const derived = '(n.assigned_to IS NOT NULL OR EXISTS (SELECT 1 FROM contact_note_assignees dna WHERE dna.note_id = n.id))';
   const row = get<Record<keyof NoteStats, number | null>>(
     `SELECT ${sum('pending')} AS pending, ${sum('overdue')} AS overdue, ${sum('today')} AS today,
             ${sum('week')} AS week, ${sum('pinned')} AS pinned, ${sum('done')} AS done, ${sum('all')} AS "all",
             SUM(CASE WHEN n.deleted_at IS NOT NULL THEN 1 ELSE 0 END) AS trash,
             ${sum('derived')} AS derived,
-            SUM(CASE WHEN n.deleted_at IS NULL AND n.done_at IS NULL AND n.assigned_to IS NOT NULL AND n.seen_at IS NULL AND n.contacted_at IS NULL THEN 1 ELSE 0 END) AS derived_unseen,
-            SUM(CASE WHEN n.deleted_at IS NULL AND n.done_at IS NULL AND n.assigned_to IS NOT NULL AND n.seen_at IS NOT NULL AND n.contacted_at IS NULL THEN 1 ELSE 0 END) AS derived_no_contact,
-            SUM(CASE WHEN n.deleted_at IS NULL AND n.done_at IS NULL AND n.assigned_to IS NOT NULL AND n.contacted_at IS NOT NULL THEN 1 ELSE 0 END) AS derived_contacted
+            SUM(CASE WHEN n.deleted_at IS NULL AND n.done_at IS NULL AND ${derived} AND n.seen_at IS NULL AND n.contacted_at IS NULL THEN 1 ELSE 0 END) AS derived_unseen,
+            SUM(CASE WHEN n.deleted_at IS NULL AND n.done_at IS NULL AND ${derived} AND n.seen_at IS NOT NULL AND n.contacted_at IS NULL THEN 1 ELSE 0 END) AS derived_no_contact,
+            SUM(CASE WHEN n.deleted_at IS NULL AND n.done_at IS NULL AND ${derived} AND n.contacted_at IS NOT NULL THEN 1 ELSE 0 END) AS derived_contacted
        FROM contact_notes n JOIN contacts ct ON ct.id = n.contact_id
       ${where.length ? 'WHERE ' + where.join(' AND ') : ''}`,
     ...params,

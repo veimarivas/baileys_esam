@@ -7504,3 +7504,173 @@ html[data-bs-theme="dark"] .chat-ctl.is-agent.is-empty { --ctl: #8fa0b6; }
 .ab-fails time { color: var(--esam-muted); font-size: 0.72rem; white-space: nowrap; }
 .ab-resume { display: flex; align-items: center; gap: 0.4rem; font-size: 0.82rem; margin: 0.6rem 0; }
 .ab-t-mute { color: var(--ab-mute); }
+
+/* =============================================================================
+   Notas · derivación múltiple agrupada por área (ficha del contacto y /notes)
+   ============================================================================= */
+
+.nk-compose-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  margin-top: 0.65rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--nk-line);
+  border-radius: 10px;
+  background: var(--nk-surface-2);
+}
+.nk-compose-col { min-width: 0; }
+.nk-compose-col + .nk-compose-col {
+  padding-top: 0.55rem;
+  border-top: 1px dashed var(--nk-line);
+}
+.nk-compose-col .nk-field-label:first-child { margin-top: 0; }
+
+.nk-assign {
+  border: 1px solid var(--nk-line);
+  border-radius: 10px;
+  background: var(--nk-surface);
+  padding: 0.45rem 0.5rem;
+}
+.nk-assign-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.nk-assign-none {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  font-size: 0.72rem; color: var(--nk-mute);
+}
+.nk-assign-chip {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  padding: 0.2rem 0.3rem 0.2rem 0.22rem;
+  border: 1px solid var(--nk-line); border-radius: 999px;
+  background: var(--nk-surface-2); max-width: 100%;
+}
+.nk-assign-avatar {
+  width: 1.35rem; height: 1.35rem; border-radius: 50%;
+  background: var(--nk-brand-soft); color: var(--nk-brand);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 0.6rem; font-weight: 800; flex: none;
+}
+.nk-assign-chip-body { display: flex; flex-direction: column; line-height: 1.12; min-width: 0; }
+.nk-assign-chip-body b { font-size: 0.72rem; color: var(--nk-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nk-assign-chip-body small { font-size: 0.6rem; color: var(--nk-mute); }
+.nk-assign-x {
+  border: 0; background: transparent; color: var(--nk-mute); cursor: pointer;
+  width: 1.15rem; height: 1.15rem; border-radius: 50%; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+}
+.nk-assign-x:hover { background: var(--nk-danger-soft); color: var(--nk-danger); }
+.nk-assign-x:focus-visible, .nk-assign-toggle:focus-visible, .nk-assign-me:focus-visible,
+.nk-assign-clear:focus-visible, .nk-assign-person:focus-within {
+  outline: 2px solid var(--nk-brand); outline-offset: 2px;
+}
+.nk-assign-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; margin-top: 0.4rem; }
+.nk-assign-toggle, .nk-assign-me, .nk-assign-clear {
+  border: 1px solid var(--nk-line); background: var(--nk-surface); color: var(--nk-ink-soft);
+  border-radius: 8px; font-size: 0.7rem; font-weight: 700; padding: 0.2rem 0.5rem;
+  cursor: pointer; display: inline-flex; align-items: center; gap: 0.25rem;
+}
+.nk-assign-toggle.open, .nk-assign-toggle:hover, .nk-assign-me:hover, .nk-assign-clear:hover {
+  border-color: var(--nk-brand); color: var(--nk-brand); background: var(--nk-brand-soft);
+}
+.nk-assign-count {
+  background: var(--nk-brand); color: #fff; border-radius: 999px;
+  font-size: 0.6rem; padding: 0 0.35rem; line-height: 1.4;
+}
+.nk-assign-clear { color: var(--nk-mute); }
+.nk-assign-panel { margin-top: 0.45rem; border-top: 1px solid var(--nk-line); padding-top: 0.45rem; }
+.nk-assign-search {
+  display: flex; align-items: center; gap: 0.35rem;
+  border: 1px solid var(--nk-line); border-radius: 8px; padding: 0.2rem 0.45rem;
+  background: var(--nk-surface-2); color: var(--nk-mute);
+}
+.nk-assign-search input {
+  border: 0; background: transparent; outline: none; flex: 1; min-width: 0;
+  font-size: 0.75rem; color: var(--nk-ink); padding: 0.1rem 0;
+}
+.nk-assign-groups {
+  display: flex; flex-direction: column; gap: 0.4rem;
+  max-height: 230px; overflow: auto; margin-top: 0.45rem; padding-right: 0.1rem;
+}
+.nk-assign-group {
+  border: 1px solid var(--nk-line); border-radius: 9px; overflow: hidden;
+  background: var(--nk-surface); align-self: start;
+}
+.nk-assign-group-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.3rem;
+  padding: 0.3rem 0.5rem; background: var(--nk-surface-2);
+  font-size: 0.62rem; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--nk-mute); position: sticky; top: 0;
+}
+.nk-assign-group-count {
+  background: var(--nk-surface); border: 1px solid var(--nk-line);
+  border-radius: 999px; padding: 0 0.3rem; font-size: 0.58rem;
+}
+.nk-assign-people { display: flex; flex-direction: column; }
+.nk-assign-person {
+  position: relative; display: flex; align-items: center; gap: 0.4rem;
+  padding: 0.3rem 0.5rem; cursor: pointer; font-size: 0.75rem; color: var(--nk-ink-soft);
+}
+.nk-assign-person:hover { background: var(--nk-surface-2); }
+.nk-assign-person.on { color: var(--nk-brand); font-weight: 700; background: var(--nk-brand-soft); }
+.nk-assign-person input { position: absolute; opacity: 0; pointer-events: none; }
+.nk-assign-check {
+  width: 1rem; height: 1rem; border-radius: 5px; border: 1.5px solid var(--nk-line);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 0.7rem; color: transparent; flex: none; background: var(--nk-surface);
+}
+.nk-assign-person.on .nk-assign-check { background: var(--nk-brand); border-color: var(--nk-brand); color: #fff; }
+.nk-assign-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nk-assign-name em {
+  font-style: normal; font-size: 0.58rem; font-weight: 800; text-transform: uppercase;
+  color: var(--nk-brand); margin-left: 0.25rem;
+}
+.nk-assign-empty { grid-column: 1 / -1; font-size: 0.72rem; color: var(--nk-mute); padding: 0.5rem; text-align: center; }
+.nk-assign-picker-sm .nk-assign-groups { max-height: 190px; }
+
+/* Enviar contacto: buscador y resultados */
+.contact-search-wrap {
+  display: flex; align-items: center; gap: 0.4rem;
+  border: 1px solid var(--esam-line-strong); border-radius: 10px;
+  background: var(--esam-surface-2); padding: 0.15rem 0.55rem;
+}
+.contact-search-wrap > .ri-search-line { color: var(--esam-muted); }
+.contact-search-wrap .form-control {
+  border: 0; background: transparent; box-shadow: none; padding-left: 0;
+}
+.contact-search-wrap .form-control:focus { box-shadow: none; background: transparent; }
+.contact-search-hint { margin: 0.3rem 0 0; font-size: 0.66rem; color: var(--esam-muted); }
+.contact-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 0.55rem; }
+@media (max-width: 520px) { .contact-fields { grid-template-columns: 1fr; } }
+.contact-results { max-height: 230px; }
+.contact-result { align-items: center; gap: 0.55rem; }
+.contact-result.active, .contact-result:focus-visible {
+  border-color: var(--brand); background: var(--esam-surface); outline: none; box-shadow: var(--esam-ring);
+}
+.contact-result-avatar {
+  width: 2rem; height: 2rem; border-radius: 50%; flex: none;
+  background: var(--brand-soft, rgba(4, 84, 116, 0.1)); color: var(--brand);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 0.72rem; font-weight: 800;
+}
+.contact-result-body { min-width: 0; flex: 1; }
+.contact-result-body b, .contact-result-body small {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.contact-result-tag {
+  font-size: 0.58rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--esam-muted); border: 1px solid var(--esam-line);
+  border-radius: 999px; padding: 0.05rem 0.4rem; white-space: nowrap;
+}
+.contact-result-tag.on { color: var(--brand); border-color: currentColor; background: var(--brand-soft); }
+.contact-none {
+  display: flex; flex-direction: column; align-items: center; gap: 0.2rem;
+  text-align: center; padding: 0.65rem 0.5rem;
+}
+.contact-none > .ri-user-search-line { font-size: 1.4rem; opacity: 0.6; }
+.contact-none p { margin: 0; font-size: 0.75rem; color: var(--esam-ink-soft); }
+.contact-none small { font-size: 0.68rem; color: var(--esam-muted); }
+.contact-use-number {
+  margin-top: 0.3rem; border: 1px solid var(--brand); background: var(--brand-soft);
+  color: var(--brand); border-radius: 8px; font-size: 0.72rem; font-weight: 700;
+  padding: 0.25rem 0.6rem; cursor: pointer;
+}
+.contact-use-number:hover { background: var(--brand); color: #fff; }

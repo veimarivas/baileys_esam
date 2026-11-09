@@ -112,18 +112,27 @@ export function esamHome(user: UserRow): string {
   return '/reports';
 }
 
-export function esamAreaLabel(user: UserRow): string {
-  if (user.source !== 'cronogramas') return 'Administrador local';
-  if (esamEsAdmin(user)) return 'Super Admin';
-  const areas = esamAreas(user);
+/** Nombre visible de un área interna (`marketing` -> «Marketing»). */
+export function esamAreaName(area: string | null | undefined): string {
+  const key = String(area ?? '').trim().toLowerCase();
+  if (!key) return 'Sin área';
   const nombres: Record<string, string> = {
     contabilidad: 'Contabilidad',
     academico: 'Académico',
     marketing: 'Marketing',
     consulta: 'Consulta',
     admin: 'Administrador',
+    administracion: 'Administración',
+    general: 'General',
   };
-  return areas.length ? (nombres[areas[0]] ?? areas[0]) : 'Sin rol';
+  return nombres[key] ?? key.charAt(0).toUpperCase() + key.slice(1);
+}
+
+export function esamAreaLabel(user: UserRow): string {
+  if (user.source !== 'cronogramas') return 'Administrador local';
+  if (esamEsAdmin(user)) return 'Super Admin';
+  const areas = esamAreas(user);
+  return areas.length ? esamAreaName(areas[0]) : 'Sin rol';
 }
 
 /**

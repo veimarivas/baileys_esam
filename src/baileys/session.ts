@@ -18,7 +18,7 @@ import QRCode from 'qrcode';
 import { config } from '../config.js';
 import { logger, baileysLogger } from '../logger.js';
 import { delay, randInt } from '../util/async.js';
-import { phoneFromJid } from '../core/phone.js';
+import { buildContactVCard, phoneFromJid } from '../core/phone.js';
 import { rememberLid, resolveChatId, phoneForLid } from '../core/lid.js';
 import { phoneKeyOf } from '../core/person.js';
 import {
@@ -1131,27 +1131,13 @@ export class WaSession extends EventEmitter {
     phone: string,
     quoted?: QuotedRef | null,
   ): Promise<{ messageId?: string; timestamp?: number }> {
-    const name = displayName.slice(0, 120);
-    const digits = String(phone).replace(/\D+/g, '');
-    const safe = name
-      .replace(/\\/g, '\\\\')
-      .replace(/\n/g, '\\n')
-      .replace(/,/g, '\\,')
-      .replace(/;/g, '\\;');
-    const vcard = [
-      'BEGIN:VCARD',
-      'VERSION:3.0',
-      `FN:${safe}`,
-      `N:${safe};;;;`,
-      `TEL;type=CELL;type=VOICE;waid=${digits}:+${digits}`,
-      'END:VCARD',
-    ].join('\n');
+    const card = buildContactVCard(displayName, phone);
     return this.doSend(
       chatId,
       {
         contacts: {
-          displayName: name,
-          contacts: [{ displayName: name, vcard }],
+          displayName: card.name,
+          contacts: [{ displayName: card.name, vcard: card.vcard }],
         },
       },
       quoted,

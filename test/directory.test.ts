@@ -139,4 +139,42 @@ describe('listDirectory', () => {
     const person = listDirectory({ q: '59171110003' }).people[0];
     assert.equal(person.chat, null);
   });
+
+  it('encuentra contactos que solo existen en las conversaciones (enviar contacto)', () => {
+    const at = nowIso();
+    run(
+      `INSERT INTO contacts (session_id, chat_id, name, phone, created_at, updated_at)
+       VALUES ('s-a', '59171110009@c.us', 'Carlos Mamani', '59171110009', ?, ?)`,
+      at,
+      at,
+    );
+    const byName = listDirectory({ q: 'carlos mamaní' });
+    assert.deepEqual(byName.people.map((p) => p.phone_key), ['59171110009']);
+    assert.equal(byName.people[0].full_name, 'Carlos Mamani');
+    assert.equal(byName.people[0].name_source, 'whatsapp');
+    assert.equal(byName.people[0].phone, '59171110009');
+
+    // También por número, aunque se escriba con espacios.
+    const byPhone = listDirectory({ q: '711 100 09' });
+    assert.deepEqual(byPhone.people.map((p) => p.phone_key), ['59171110009']);
+  });
+
+  it('no muestra grupos ni estados al buscar un contacto para enviar', () => {
+    const at = nowIso();
+    run(
+      `INSERT INTO contacts (session_id, chat_id, name, phone, created_at, updated_at)
+       VALUES ('s-a', '120363000000000001@g.us', 'Grupo Ventas', '59171110010', ?, ?)`,
+      at,
+      at,
+    );
+    run(
+      `INSERT INTO contacts (session_id, chat_id, name, phone, created_at, updated_at)
+       VALUES ('s-a', 'status@broadcast', 'Estado', '59171110011', ?, ?)`,
+      at,
+      at,
+    );
+    assert.equal(listDirectory({ q: 'Grupo Ventas' }).total, 0);
+    assert.equal(listDirectory({ q: '59171110010' }).total, 0);
+    assert.equal(listDirectory({ q: '59171110011' }).total, 0);
+  });
 });

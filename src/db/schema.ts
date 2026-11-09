@@ -400,6 +400,21 @@ CREATE TABLE IF NOT EXISTS contact_note_tags (
 
 CREATE INDEX IF NOT EXISTS idx_contact_note_tags_tag ON contact_note_tags(tag_id);
 
+-- Personas adicionales a las que se deriva una nota/tarea. La columna
+-- contact_notes.assigned_to conserva al responsable principal (el primero
+-- elegido) por compatibilidad; esta tabla permite derivar la misma tarea a
+-- varias personas a la vez.
+CREATE TABLE IF NOT EXISTS contact_note_assignees (
+  note_id   INTEGER NOT NULL,
+  user_id   INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (note_id, user_id),
+  FOREIGN KEY(note_id) REFERENCES contact_notes(id) ON DELETE CASCADE,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_contact_note_assignees_user ON contact_note_assignees(user_id, note_id);
+
 -- Reacciones a mensajes (cliente o agente). Una por actor y mensaje.
 CREATE TABLE IF NOT EXISTS message_reactions (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -8092,7 +8092,11 @@
       search: document.getElementById('agenda-search'),
       newBtn: document.getElementById('agenda-new'),
     };
-    var state = { boards: [], activeId: null, notes: [], q: '', loadingBoards: true, loadingNotes: false };
+    var state = { boards: [], activeId: null, notes: [], q: '', view: 'board', filter: 'all', loadingBoards: true, loadingNotes: false };
+    try {
+      var savedView = localStorage.getItem('agenda-view');
+      if (savedView === 'list' || savedView === 'board') state.view = savedView;
+    } catch (e) { /* sin storage */ }
 
     function saveActive() {
       try { localStorage.setItem('agenda-board', String(state.activeId || '')); } catch (e) { /* sin storage */ }
@@ -8188,16 +8192,26 @@
       if (!els.stats) return;
       var c = counts();
       var items = [
-        { key: 'total', label: 'en total', value: c.total },
-        { key: 'open', label: 'en curso', value: c.open },
-        { key: 'overdue', label: c.overdue === 1 ? 'vencida' : 'vencidas', value: c.overdue },
-        { key: 'done', label: c.done === 1 ? 'resuelta' : 'resueltas', value: c.done },
+        { key: 'all', label: 'En total', value: c.total, icon: 'ri-folder-3-line', tone: 'np-info' },
+        { key: 'open', label: 'En curso', value: c.open, icon: 'ri-progress-4-line', tone: 'np-info' },
+        { key: 'overdue', label: c.overdue === 1 ? 'Vencida' : 'Vencidas', value: c.overdue, icon: 'ri-alarm-warning-line', tone: 'np-danger' },
+        { key: 'done', label: c.done === 1 ? 'Resuelta' : 'Resueltas', value: c.done, icon: 'ri-check-double-line', tone: 'np-ok' },
       ];
-      els.stats.innerHTML = items.map(function (it, index) {
-        return (index ? '<span class="ag-sum-sep" aria-hidden="true"></span>' : '') +
-          '<span class="ag-sum-item is-' + it.key + '"><span class="ag-sum-dot" aria-hidden="true"></span>' +
-          '<b>' + it.value + '</b> ' + it.label + '</span>';
+      els.stats.innerHTML = items.map(function (it) {
+        var on = state.filter === it.key;
+        return '<button type="button" role="tab" aria-selected="' + on + '" data-ag-filter="' + it.key + '" ' +
+          'class="np-stat ' + it.tone + (on ? ' on' : '') + (it.value ? '' : ' zero') + '">' +
+          '<span class="np-stat-ic ' + it.icon + '" aria-hidden="true"></span>' +
+          '<span class="np-stat-num">' + it.value + '</span>' +
+          '<span class="np-stat-label">' + it.label + '</span></button>';
       }).join('');
+      Array.prototype.forEach.call(els.stats.querySelectorAll('[data-ag-filter]'), function (btn) {
+        btn.addEventListener('click', function () {
+          state.filter = btn.getAttribute('data-ag-filter');
+          renderStats();
+          renderBoard();
+        });
+      });
     }
 
     function renderBoards() {
@@ -8206,13 +8220,12 @@
         els.boards.innerHTML = '<div class="agenda-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Cargando sub-agendas…</div>';
         return;
       }
-      els.boards.innerHTML = '<div class="ag-board-tabs" role="tablist" aria-label="Sub-agendas">' +
+      els.boards.innerHTML = '<div class="np-sections" role="tablist" aria-label="Sub-agendas">' +
         state.boards.map(function (b) {
           var on = b.id === state.activeId;
-          return '<button type="button" class="ag-board-tab' + (on ? ' on' : '') + '" data-board="' + b.id + '" role="tab" aria-selected="' + on + '">' +
-            '<span class="ri-folder-3-line" aria-hidden="true"></span>' +
-            '<span class="ag-board-name">' + escapeHtml(b.name) + '</span>' +
-            '<span class="ag-board-count">' + (b.notes || 0) + '</span></button>';
+          return '<button type="button" class="np-section' + (on ? ' is-on' : '') + '" data-board="' + b.id + '" role="tab" aria-selected="' + on + '">' +
+            '<span class="ri-folder-3-line" aria-hidden="true"></span> ' + escapeHtml(b.name) +
+            '<span class="np-section-count">' + (b.notes || 0) + '</span></button>';
         }).join('') +
         '</div>' +
         '<div class="ag-board-actions">' +
@@ -8225,12 +8238,13 @@
     }
 
     function bindBoards() {
-      Array.prototype.forEach.call(els.boards.querySelectorAll('.ag-board-tab'), function (btn) {
+      Array.prototype.forEach.call(els.boards.querySelectorAll('.np-section[data-board]'), function (btn) {
         btn.addEventListener('click', function () {
           var id = Number(btn.getAttribute('data-board'));
           if (!id || id === state.activeId) return;
           state.activeId = id;
           state.notes = [];
+          state.filter = 'all';
           saveActive();
           renderBoards();
           loadNotes();
@@ -8242,17 +8256,74 @@
       if (add) add.addEventListener('click', function () { openBoardDialog(null); });
     }
 
+    function visibleNotes() {
+      if (state.filter === 'all') return state.notes;
+      return state.notes.filter(function (n) {
+        var stage = stageForNote(n);
+        var done = stageDone(n, stage);
+        if (state.filter === 'done') return done;
+        if (state.filter === 'overdue') return !done && n.due_at && NoteKit.daysFromToday(n.due_at) < 0;
+        if (state.filter === 'open') return !done;
+        return true;
+      });
+    }
+
+    function renderSideInfo() {
+      var el = document.getElementById('agenda-side-info');
+      if (!el) return;
+      var b = activeBoard();
+      if (!b) {
+        el.innerHTML = '<p class="ag-side-empty">Sin sub-agendas.</p>';
+        return;
+      }
+      el.innerHTML = '<div class="ag-side-board">' +
+        '<span class="ag-side-ico" aria-hidden="true"><span class="ri-folder-3-line"></span></span>' +
+        '<div class="ag-side-copy"><b>' + escapeHtml(b.name) + '</b>' +
+          '<span>' + (b.stages ? b.stages.length : 0) + ' columnas · ' + (b.notes || 0) + ' notas</span></div>' +
+      '</div>';
+    }
+
+    function emptyBoardState() {
+      return '<div class="agenda-empty"><span class="ri-folder-add-line" aria-hidden="true"></span>' +
+        '<h6>Creá tu primera sub-agenda</h6><p>Agrupá tus procesos por tipo y definí las columnas del pipeline.</p>' +
+        '<button type="button" class="btn btn-primary btn-sm" id="ag-empty-new-board"><span class="ri-add-line"></span> Nueva sub-agenda</button></div>';
+    }
+
+    function renderList(notes) {
+      if (!notes.length) {
+        return '<div class="agenda-empty"><span class="ri-filter-off-line" aria-hidden="true"></span>' +
+          '<h6>No hay notas con este filtro</h6><p>Probá con otro estado o limpiá la búsqueda.</p></div>';
+      }
+      return '<div class="ag-list">' + stages().map(function (stage) {
+        var listNotes = notes.filter(function (n) {
+          var s = stageForNote(n);
+          return !!s && s.id === stage.id;
+        });
+        if (!listNotes.length) return '';
+        var tone = stage.color || '#64748b';
+        return '<section class="ag-list-group" aria-label="' + escapeHtml(stage.name) + '">' +
+          '<header class="ag-list-head" style="--ag-tone:' + escapeHtml(tone) + '">' +
+            '<span class="ag-stage-dot" aria-hidden="true"></span>' +
+            '<b>' + escapeHtml(stage.name) + '</b>' +
+            (stage.is_done ? '<span class="ag-col-done ri-check-line" title="Columna final del proceso" aria-hidden="true"></span>' : '') +
+            '<span class="ag-col-count">' + listNotes.length + '</span>' +
+          '</header>' +
+          '<div class="ag-list-cards">' + listNotes.map(cardHtml).join('') + '</div>' +
+        '</section>';
+      }).join('') + '</div>';
+    }
+
     function renderBoard() {
       var board = activeBoard();
       if (!els.board) return;
+      if (root) root.classList.toggle('board-mode', state.view === 'board');
+      renderSideInfo();
       if (state.loadingBoards) {
         els.board.innerHTML = '<div class="agenda-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Cargando agenda…</div>';
         return;
       }
       if (!board) {
-        els.board.innerHTML = '<div class="agenda-empty"><span class="ri-folder-add-line" aria-hidden="true"></span>' +
-          '<h6>Creá tu primera sub-agenda</h6><p>Agrupá tus procesos por tipo y definí las columnas del pipeline.</p>' +
-          '<button type="button" class="btn btn-primary btn-sm" id="ag-empty-new-board"><span class="ri-add-line"></span> Nueva sub-agenda</button></div>';
+        els.board.innerHTML = emptyBoardState();
         var create = document.getElementById('ag-empty-new-board');
         if (create) create.addEventListener('click', function () { openBoardDialog(null); });
         return;
@@ -8270,11 +8341,22 @@
         els.board.innerHTML = '<div class="agenda-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Cargando notas…</div>';
         return;
       }
-      var hint = state.notes.length ? '' :
-        '<div class="ag-board-empty-hint"><span class="ri-information-line" aria-hidden="true"></span> ' +
+      var notes = visibleNotes();
+      if (state.view === 'list') {
+        els.board.innerHTML = renderList(notes);
+        bindBoardCards();
+        return;
+      }
+      var hint = '';
+      if (!state.notes.length) {
+        hint = '<div class="ag-board-empty-hint"><span class="ri-information-line" aria-hidden="true"></span> ' +
           'Todavía no hay notas en esta sub-agenda. Usá «Nueva nota» o el botón + de una columna.</div>';
+      } else if (!notes.length) {
+        hint = '<div class="ag-board-empty-hint"><span class="ri-filter-off-line" aria-hidden="true"></span> ' +
+          'No hay notas con este filtro. Elegí «En total» para verlas todas.</div>';
+      }
       els.board.innerHTML = hint + '<div class="ag-columns">' + list.map(function (stage) {
-        var listNotes = state.notes.filter(function (n) {
+        var listNotes = notes.filter(function (n) {
           var s = stageForNote(n);
           return !!s && s.id === stage.id;
         });
@@ -8283,7 +8365,7 @@
           '<header class="ag-col-head">' +
             '<span class="ag-stage-dot" aria-hidden="true"></span>' +
             '<div class="ag-col-title"><b>' + escapeHtml(stage.name) + '</b></div>' +
-            (stage.is_done ? '<span class="ag-col-done ri-check-line" title="Columna final del proceso" aria-label="Columna final"></span>' : '') +
+            (stage.is_done ? '<span class="ag-col-done ri-check-line" title="Columna final del proceso" aria-hidden="true"></span>' : '') +
             '<span class="ag-col-count">' + listNotes.length + '</span>' +
           '</header>' +
           '<div class="ag-col-body">' +
@@ -8763,6 +8845,26 @@
       });
     }
     if (els.newBtn) els.newBtn.addEventListener('click', function () { openAgendaDialog(state.activeId, null); });
+
+    var viewButtons = Array.prototype.slice.call(document.querySelectorAll('[data-ag-view]'));
+    function syncViewButtons() {
+      viewButtons.forEach(function (btn) {
+        var on = btn.getAttribute('data-ag-view') === state.view;
+        btn.classList.toggle('on', on);
+        btn.setAttribute('aria-pressed', String(on));
+      });
+    }
+    viewButtons.forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var view = btn.getAttribute('data-ag-view');
+        if (view !== 'board' && view !== 'list') return;
+        state.view = view;
+        try { localStorage.setItem('agenda-view', view); } catch (e) { /* sin storage */ }
+        syncViewButtons();
+        renderBoard();
+      });
+    });
+    syncViewButtons();
 
     if (liveSource()) {
       var liveTimer = null;

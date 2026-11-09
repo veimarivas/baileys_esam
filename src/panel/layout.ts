@@ -234,14 +234,14 @@ export function renderLayout(
             <a href="/" class="logo logo-dark"><span class="logo-lg"><b>Seguimiento ESAM</b></span></a>
             <a href="/" class="logo logo-light"><span class="logo-lg"><b>Seguimiento ESAM</b></span></a>
           </div>
-          <button type="button" class="btn btn-sm px-3 fs-16 header-item vertical-menu-btn topnav-hamburger material-shadow-none" id="topnav-hamburger-icon">
+          <button type="button" class="btn btn-sm px-3 fs-16 header-item vertical-menu-btn topnav-hamburger material-shadow-none" id="topnav-hamburger-icon" aria-label="Abrir o cerrar el menú">
             <span class="hamburger-icon"><span></span><span></span><span></span></span>
           </button>
         </div>
         <div class="d-flex align-items-center">
           ${notificationsBell(user)}
           <div class="ms-1 header-item d-none d-sm-flex">
-            <button type="button" class="btn btn-icon btn-topbar material-shadow-none btn-ghost-secondary rounded-circle light-dark-mode">
+            <button type="button" class="btn btn-icon btn-topbar material-shadow-none btn-ghost-secondary rounded-circle light-dark-mode" aria-label="Cambiar entre tema claro y oscuro">
               <i class="ri-moon-line fs-22"></i>
             </button>
           </div>
@@ -274,7 +274,7 @@ export function renderLayout(
     <div class="navbar-brand-box">
       <a href="/" class="logo logo-dark"><span class="logo-sm"><i class="ri-whatsapp-line fs-22 text-success"></i></span><span class="logo-lg"><b>Seguimiento ESAM</b></span></a>
       <a href="/" class="logo logo-light"><span class="logo-sm"><i class="ri-whatsapp-line fs-22 text-success"></i></span><span class="logo-lg"><b>Seguimiento ESAM</b></span></a>
-      <button type="button" class="btn btn-sm p-0 fs-20 header-item float-end btn-vertical-sm-hover" id="vertical-hover"><i class="ri-record-circle-line"></i></button>
+      <button type="button" class="btn btn-sm p-0 fs-20 header-item float-end btn-vertical-sm-hover" id="vertical-hover" aria-label="Contraer o expandir el menú lateral"><i class="ri-record-circle-line"></i></button>
     </div>
     <div id="scrollbar">
       <div class="container-fluid">
@@ -291,7 +291,7 @@ export function renderLayout(
   <div class="vertical-overlay"></div>
 
   <div class="main-content">
-    <div class="page-content">
+    <main class="page-content">
       <div class="container-fluid">
         <div class="row"><div class="col-12">
           <div class="page-title-box d-sm-flex align-items-center justify-content-between">
@@ -311,7 +311,7 @@ export function renderLayout(
         ${flash}${error}
         ${body}
       </div>
-    </div>
+    </main>
     <footer class="footer">
       <div class="container-fluid">
         <div class="footer-inner">
@@ -329,7 +329,7 @@ export function renderLayout(
     </footer>
   </div>
 </div>
-<button onclick="topFunction()" class="btn btn-danger btn-icon" id="back-to-top"><i class="ri-arrow-up-line"></i></button>
+<button onclick="topFunction()" class="btn btn-danger btn-icon" id="back-to-top" aria-label="Volver arriba"><i class="ri-arrow-up-line"></i></button>
 ${scripts()}
 </body>
 </html>`;

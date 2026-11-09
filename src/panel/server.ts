@@ -155,17 +155,44 @@ const INBOX_WHERE = `chat_id NOT LIKE '%@broadcast' AND chat_id NOT LIKE '%@news
  * etapas. El contenido lo arma `initAgenda()` en public/app.js.
  */
 export function renderAgendaPage(): string {
-  return `<div class="agenda-page" id="agenda-page">
+  return `<div class="agenda-page nk-section board-mode" id="agenda-page">
     <div class="agenda-boards" id="agenda-boards" aria-label="Sub-agendas"></div>
-    <div class="agenda-workbar">
-      <label class="agenda-search" for="agenda-search">
-        <span class="ri-search-line" aria-hidden="true"></span>
-        <input type="search" id="agenda-search" placeholder="Buscar por nota, contacto o número…" autocomplete="off" />
-      </label>
-      <div class="agenda-summary" id="agenda-stats" aria-live="polite"></div>
-    </div>
-    <div class="agenda-board" id="agenda-board" aria-live="polite">
-      <div class="agenda-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Cargando tu agenda…</div>
+    <div class="np-stats" id="agenda-stats" role="tablist" aria-label="Resumen de la sub-agenda"></div>
+    <div class="np-layout">
+      <section class="np-main agenda-main" aria-label="Mi agenda">
+        <div class="np-toolbar">
+          <div class="np-view" role="group" aria-label="Vista">
+            <button type="button" class="np-view-btn on" data-ag-view="board" aria-pressed="true">
+              <span class="ri-kanban-view" aria-hidden="true"></span> Pipeline</button>
+            <button type="button" class="np-view-btn" data-ag-view="list" aria-pressed="false">
+              <span class="ri-list-check-2" aria-hidden="true"></span> Lista</button>
+          </div>
+          <label class="notes-search" for="agenda-search">
+            <span class="ri-search-line" aria-hidden="true"></span>
+            <input type="search" id="agenda-search" placeholder="Buscar por nota, contacto o número…" autocomplete="off" />
+          </label>
+        </div>
+        <div class="agenda-board" id="agenda-board" aria-live="polite">
+          <div class="agenda-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Cargando tu agenda…</div>
+        </div>
+      </section>
+      <aside class="np-side agenda-side" aria-label="Sub-agenda actual y ayuda">
+        <div class="np-side-card">
+          <div class="np-side-head">
+            <h5><span class="ri-folder-3-line" aria-hidden="true"></span> Sub-agenda actual</h5>
+          </div>
+          <div id="agenda-side-info" class="ag-side-info"></div>
+        </div>
+        <div class="np-side-card np-tips">
+          <h5><span class="ri-lightbulb-line" aria-hidden="true"></span> Cómo funciona</h5>
+          <ul>
+            <li>Cada sub-agenda tiene sus propias columnas.</li>
+            <li>La última columna marca el proceso como resuelto.</li>
+            <li>Mové una nota de columna con el selector o llevala a otra sub-agenda con el ícono de carpeta.</li>
+            <li>Las notas siguen siendo privadas de tu usuario.</li>
+          </ul>
+        </div>
+      </aside>
     </div>
   </div>`;
 }

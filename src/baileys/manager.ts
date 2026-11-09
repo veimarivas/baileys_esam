@@ -1533,6 +1533,25 @@ export class SessionManager implements OutboundSender {
   }
 
   /**
+   * Foto de perfil de un chat (grupo o individual): la guardada para esa línea
+   * o, si no hay, se pide a WhatsApp una sola vez.
+   */
+  async chatAvatar(sessionId: string, chatId: string): Promise<string | null> {
+    const find = (): string | null => {
+      const row = get<{ avatar_path: string | null }>(
+        'SELECT avatar_path FROM contacts WHERE session_id = ? AND chat_id = ?',
+        sessionId,
+        chatId,
+      );
+      return row?.avatar_path && fs.existsSync(row.avatar_path) ? row.avatar_path : null;
+    };
+    const found = find();
+    if (found) return found;
+    await this.refreshAvatar(sessionId, chatId);
+    return find();
+  }
+
+  /**
    * Foto de perfil de un participante de grupo: la guardada para esa persona
    * (en cualquier línea) o, si no hay, se pide a WhatsApp una sola vez.
    */

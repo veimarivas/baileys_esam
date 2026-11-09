@@ -165,6 +165,8 @@ export interface ContactNoteRow {
   pipeline_stage?: string | null;
   /** Responsable de la tarea (null = sin asignar). */
   assigned_to: number | null;
+  /** 1 = nota privada del autor (Mi agenda); 0 = nota compartida del equipo. */
+  personal: number;
   /** Mensaje del chat desde el que se registró (si se guardó desde una burbuja). */
   source_message_id: number | null;
   updated_at: string | null;

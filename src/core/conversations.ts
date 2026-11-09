@@ -217,8 +217,8 @@ function mapConversation(
   };
 }
 
-function mapConversations(rows: ConvJoinRow[]): ConversationDTO[] {
-  const notes = noteCountsFor(rows.map((r) => r.contact_id ?? 0));
+function mapConversations(rows: ConvJoinRow[], viewerId: number | null = null): ConversationDTO[] {
+  const notes = noteCountsFor(rows.map((r) => r.contact_id ?? 0), viewerId);
   const keys = [...new Set(rows.map(personKey).filter((k): k is string => !!k))];
   const people = personTagsByKeys(keys);
   // Personas con foto en alguna línea (la foto se sirve desde la que la tenga).
@@ -266,7 +266,7 @@ export function findConversationForUser(user: UserRow, chatParam: string): Conve
     ...params,
     chat,
   );
-  return row ? mapConversations([row])[0] : undefined;
+  return row ? mapConversations([row], user.id)[0] : undefined;
 }
 
 /** ¿El mensaje pertenece a ese chat de esa línea? (para enlazar una nota a su mensaje). */
@@ -384,7 +384,7 @@ export function listConversations(
      ORDER BY COALESCE(c.last_message_at, c.updated_at) DESC LIMIT ${limit}`,
     ...params,
   );
-  return mapConversations(rows);
+  return mapConversations(rows, user.id);
 }
 
 function messageReactions(messageIds: number[], sessionId: string): Map<number, MessageDTO['reactions']> {

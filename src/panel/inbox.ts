@@ -17,6 +17,7 @@ import {
   listAllNotes,
   listNoteHistory,
   listNotes,
+  listPersonalNotes,
   markAssignmentSeen,
   markContacted,
   markFromTemplate,
@@ -223,6 +224,11 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       res.status(409).json({ error: 'La nota está en la papelera. Restaurala para modificarla.' });
       return null;
     }
+    // Las notas de «Mi agenda» son privadas: solo las ve su autor (o un admin).
+    if (note.personal && note.user_id !== req.user!.id && !esamEsAdmin(req.user!)) {
+      res.status(403).json({ error: 'Esta nota es privada de su autor.' });
+      return null;
+    }
     const scope = noteScope(req.user!);
     // La gerencia/supervisión de un área accede a las notas de esa área aunque
     // la persona se atienda en la línea de otro asesor.
@@ -242,6 +248,22 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
     const chats = personChatsForNote(noteId);
     const assigneeIds = noteAssigneeIds(noteId);
     if (!chats.length && !assigneeIds.length) return;
+    const note = getNote(noteId);
+    // Las notas personales solo se avisan a su autor, aunque se abran desde otra
+    // línea; el evento es privado para no filtrar su existencia al equipo.
+    if (note?.personal) {
+      panelBus.publish('note', {
+        noteId,
+        action,
+        actorId,
+        assignedTo: null,
+        private: true,
+        userIds: note.user_id ? [note.user_id] : [],
+        sessionIds: [...new Set(chats.map((c) => c.session_id))],
+        chats: chats.map((c) => ({ sessionId: c.session_id, chatId: c.chat_id })),
+      });
+      return;
+    }
     panelBus.publish('note', {
       noteId,
       action,
@@ -275,6 +297,8 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
   ): void {
     const n = listAllNotes({ ids: [noteId], sessionIds: null, status: 'all', limit: 1 })[0];
     if (!n) return;
+    // Las notas de «Mi agenda» no generan avisos al equipo.
+    if (n.personal) return;
     const who = actor.name ?? actor.username ?? 'Alguien';
     const contact = n.contact_name || (n.contact_phone ? `+${n.contact_phone}` : n.chat_id.split('@')[0]);
     const phone = n.contact_phone ? `+${n.contact_phone}` : '';
@@ -478,8 +502,12 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       if (scope !== null && !scope.includes(sessionId)) return res.status(403).end();
       let file: string | null = null;
       try {
+        const jid = String(req.params.jid);
+        const load = jid.endsWith('@g.us')
+          ? manager.chatAvatar(sessionId, jid)
+          : manager.participantAvatar(sessionId, jid);
         file = await Promise.race([
-          manager.participantAvatar(sessionId, String(req.params.jid)),
+          load,
           new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000)),
         ]);
       } catch {
@@ -722,7 +750,7 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       const resolved = resolveAuthorized(req, res, String(req.params.session), String(req.params.chat));
       if (!resolved) return;
       const contact = getOrCreateContact(resolved.session.id, resolved.chatId);
-      res.json(listNotes(contact.id).map((n) => withPermissions(req.user!, n)));
+      res.json(listNotes(contact.id, 200, req.user!.id).map((n) => withPermissions(req.user!, n)));
     }),
   );
 
@@ -1143,6 +1171,7 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       const assignedIds = parseAssigneeIds(
         req.body?.assigned_to_ids !== undefined ? req.body.assigned_to_ids : req.body?.assigned_to,
       );
+      const personal = parseFlag(req.body?.personal);
       const note = addNote(
         contact.id,
         req.user!.id,
@@ -1152,12 +1181,13 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
         parseTagIds(req.body?.tag_ids),
         parseFlag(req.body?.pinned),
         {
-          assigneeIds: assignedIds,
+          assigneeIds: personal ? [] : assignedIds,
+          personal,
           dueTime: parseTime(req.body?.due_time),
           sourceMessageId: sourceId && conversations.messageInChat(sourceId, resolved.session.id, resolved.chatId) ? sourceId : null,
         },
       );
-      const derived = (note.assignees ?? []).some((a) => a.id !== req.user!.id);
+      const derived = !personal && (note.assignees ?? []).some((a) => a.id !== req.user!.id);
       publishNoteChange(note.id, derived ? 'assigned' : 'created', req.user!.id);
       announce(note.id, 'created', req.user!);
       res.status(201).json(withPermissions(req.user!, note));
@@ -1245,6 +1275,53 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
           .map((n) => withPermissions(user, n)),
         stats: noteStats({ sessionIds: listScope, authorId, assignedTo, viewerId: user.id, ownerId, ownerArea }),
       });
+    }),
+  );
+
+  // ── Mi agenda: notas privadas y pipeline personal ───────────────────────────
+  app.get(
+    '/agenda/notes',
+    ...auth,
+    ah((req, res) => {
+      const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({
+        notes: listPersonalNotes(req.user!.id, { q: q || null })
+          .map((n) => withPermissions(req.user!, n)),
+      });
+    }),
+  );
+
+  app.post(
+    '/agenda/notes',
+    ...auth,
+    ah((req, res) => {
+      const sessionId = String(req.body?.session_id ?? '').trim();
+      const chatParam = String(req.body?.chat_id ?? '').trim();
+      if (!sessionId || !chatParam) return res.status(422).json({ error: 'Elegí un contacto para la nota.' });
+      const resolved = resolveAuthorized(req, res, sessionId, chatParam);
+      if (!resolved) return;
+      const text = String(req.body?.text ?? '').trim();
+      if (!text) return res.status(422).json({ error: 'Escribí la nota.' });
+      if (text.length > 4000) return res.status(422).json({ error: 'La nota es demasiado larga (máx. 4000 caracteres).' });
+      const stage = ['todo', 'doing'].includes(String(req.body?.stage)) ? String(req.body.stage) : 'todo';
+      const contact = getOrCreateContact(resolved.session.id, resolved.chatId);
+      const note = addNote(
+        contact.id,
+        req.user!.id,
+        text,
+        null,
+        parseDue(req.body?.due_at),
+        [],
+        parseFlag(req.body?.pinned),
+        {
+          personal: true,
+          pipelineStage: stage,
+          dueTime: parseTime(req.body?.due_time),
+        },
+      );
+      publishNoteChange(note.id, 'created', req.user!.id);
+      res.status(201).json(withPermissions(req.user!, note));
     }),
   );
 
@@ -1406,6 +1483,7 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       const nextAssignees = assigneesProvided
         ? parseAssigneeIds(req.body?.assigned_to_ids !== undefined ? req.body.assigned_to_ids : req.body.assigned_to)
         : undefined;
+      const personal = req.body?.personal !== undefined ? parseFlag(req.body.personal) : undefined;
       const beforeAssignees = noteAssigneeIds(note.id);
       try {
         updateNote(note.id, {
@@ -1414,6 +1492,7 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
           dueTime: req.body?.due_time !== undefined ? parseTime(req.body.due_time) : undefined,
           tagIds: req.body?.tag_ids !== undefined ? parseTagIds(req.body.tag_ids) : undefined,
           pinned: req.body?.pinned !== undefined ? parseFlag(req.body.pinned) : undefined,
+          personal,
           assignedToIds: nextAssignees,
         }, req.user!.id);
       } catch (err) {
@@ -1421,7 +1500,8 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       }
       const afterAssignees = noteAssigneeIds(note.id);
       const added = afterAssignees.filter((id) => !beforeAssignees.includes(id));
-      const reassigned = added.length > 0 && added.some((id) => id !== req.user!.id);
+      const isPersonal = getNote(note.id)?.personal === 1;
+      const reassigned = !isPersonal && added.length > 0 && added.some((id) => id !== req.user!.id);
       publishNoteChange(note.id, reassigned ? 'assigned' : 'edited', req.user!.id);
       if (reassigned) announce(note.id, 'reassigned', req.user!);
       res.json(withPermissions(req.user!, noteDTO(note.id)!));

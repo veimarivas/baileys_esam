@@ -2241,6 +2241,10 @@
         ? '<span class="nk-pin-badge"><span class="ri-pushpin-2-fill" aria-hidden="true"></span>Importante</span>'
         : '';
       pinBadge += prospectBadge(n, !!opts.showAdvisor);
+      if (n.personal) {
+        pinBadge += '<span class="nk-personal-badge" title="Nota privada: solo la ves vos en Mi agenda">' +
+          '<span class="ri-lock-line" aria-hidden="true"></span>Solo para mí</span>';
+      }
       var noteAssignees = Array.isArray(n.assignees) && n.assignees.length
         ? n.assignees
         : (n.assigned_to ? [{ id: n.assigned_to, name: n.assigned_name, area_label: n.assigned_area }] : []);
@@ -2444,9 +2448,15 @@
 
     function editorHtml(n) {
       return '<textarea class="form-control nk-textarea nk-edit-text" rows="3" maxlength="4000">' + escapeHtml(n.note_text || '') + '</textarea>' +
+        '<label class="nk-personal-toggle nk-personal-toggle-sm' + (n.personal ? ' on' : '') + '">' +
+          '<input type="checkbox" class="nk-personal-input nk-edit-personal"' + (n.personal ? ' checked' : '') + ' />' +
+          '<span class="nk-personal-switch" aria-hidden="true"></span>' +
+          '<span class="nk-personal-text"><b><span class="ri-lock-line" aria-hidden="true"></span> Solo para mí</b>' +
+            '<small>Privada en Mi agenda, sin derivación.</small></span>' +
+        '</label>' +
         '<div class="nk-field-label">Etiquetas</div><div class="nk-tag-picker"></div>' +
         '<div class="nk-field-label">Seguimiento</div><div class="nk-due-wrap"></div>' +
-        '<div class="nk-field-label">Derivar a <span class="nk-field-hint">· varias personas por área</span></div>' +
+        '<div class="nk-field-label nk-edit-assign-label">Derivar a <span class="nk-field-hint">· varias personas por área</span></div>' +
         '<div class="nk-assign-picker nk-assign-picker-sm"></div>' +
         '<div class="nk-editor-foot">' +
           '<span class="nk-hint">Ctrl + Enter para guardar · Esc para cancelar</span>' +
@@ -2545,6 +2555,16 @@
             ? note.assignees.map(function (a) { return a.id; })
             : (note.assigned_to ? [note.assigned_to] : []);
           var assignees = bindAssignees(editor.querySelector('.nk-assign-picker'), initialAssignees);
+          var editPersonal = editor.querySelector('.nk-edit-personal');
+          var syncEditPersonal = function () {
+            editPersonal.closest('.nk-personal-toggle').classList.toggle('on', editPersonal.checked);
+            var picker = editor.querySelector('.nk-assign-picker');
+            var label = editor.querySelector('.nk-edit-assign-label');
+            if (picker) picker.hidden = editPersonal.checked;
+            if (label) label.hidden = editPersonal.checked;
+          };
+          editPersonal.addEventListener('change', syncEditPersonal);
+          syncEditPersonal();
           var ta = editor.querySelector('.nk-edit-text');
           var close = function () { editor.hidden = true; editor.innerHTML = ''; view.hidden = false; card.classList.remove('editing'); };
           var save = function () {
@@ -2552,7 +2572,11 @@
             if (!text && !note.audio_path) { toast('La nota no puede quedar vacía', true); ta.focus(); return; }
             var saveBtn = editor.querySelector('.nk-edit-save');
             saveBtn.disabled = true;
-            jsonApi('/inbox/notes/' + id, 'PUT', { text: text, due_at: pickers.due(), due_time: pickers.time(), tag_ids: pickers.tags(), assigned_to: assignees() })
+            jsonApi('/inbox/notes/' + id, 'PUT', {
+              text: text, due_at: pickers.due(), due_time: pickers.time(), tag_ids: pickers.tags(),
+              personal: editPersonal.checked,
+              assigned_to: editPersonal.checked ? [] : assignees(),
+            })
               .then(function (updated) { toast('Nota actualizada'); opts.onChanged(updated, id); })
               .catch(function (e) { saveBtn.disabled = false; toast(e.message, true); });
           };
@@ -5376,7 +5400,7 @@
     }
 
     function emptyNoteDraft() {
-      return { open: false, text: '', tags: [], due: '', time: '', pinned: false, assignedTo: [], sourceMessageId: null, sourceLabel: '' };
+      return { open: false, text: '', tags: [], due: '', time: '', pinned: false, personal: false, assignedTo: [], sourceMessageId: null, sourceLabel: '' };
     }
 
     function notesSectionHtml() {
@@ -5386,7 +5410,7 @@
           '<span class="nk-counts" id="nk-counts"></span>' +
         '</div>' +
         '<p class="nk-intro"><span class="ri-team-line" aria-hidden="true"></span>' +
-          'Acuerdos, datos y pendientes de esta persona. Los ve todo el equipo, escriba al número del sistema que escriba. No se envían al contacto.</p>' +
+          'Acuerdos, datos y pendientes de esta persona. Los ve todo el equipo, escriba al número del sistema que escriba. Si es una anotación tuya, marcá «Solo para mí» y quedará en Mi agenda. No se envían al contacto.</p>' +
         '<div id="nk-composer"></div>' +
         '<div id="nk-list" class="nk-list"></div>' +
       '</div>';
@@ -5427,12 +5451,18 @@
           '<span class="nk-pin-text"><b><span class="ri-pushpin-2-line" aria-hidden="true"></span> Importante</b>' +
             '<small>Se muestra fijada arriba del chat para quien atienda a esta persona.</small></span>' +
         '</label>' +
+        '<label class="nk-personal-toggle' + (d.personal ? ' on' : '') + '">' +
+          '<input type="checkbox" class="nk-personal-input"' + (d.personal ? ' checked' : '') + ' />' +
+          '<span class="nk-personal-switch" aria-hidden="true"></span>' +
+          '<span class="nk-personal-text"><b><span class="ri-lock-line" aria-hidden="true"></span> Solo para mí</b>' +
+            '<small>Queda en Mi agenda como anotación privada: no la ve el equipo ni se deriva.</small></span>' +
+        '</label>' +
         '<div class="nk-compose-options">' +
           '<div class="nk-compose-col">' +
             '<div class="nk-field-label">¿Es una tarea? Fecha de seguimiento</div><div class="nk-due-wrap"></div>' +
             '<div class="nk-field-label">Etiquetas</div><div class="nk-tag-picker"></div>' +
           '</div>' +
-          '<div class="nk-compose-col">' +
+          '<div class="nk-compose-col nk-assign-col">' +
             '<div class="nk-field-label">Derivar a <span class="nk-field-hint">· una o varias personas, agrupadas por área</span></div>' +
             '<div class="nk-assign-picker"></div>' +
           '</div>' +
@@ -5456,6 +5486,15 @@
         d.pinned = pinInput.checked;
         pinInput.closest('.nk-pin-toggle').classList.toggle('on', d.pinned);
       });
+      var personalInput = form.querySelector('.nk-personal-input');
+      var syncPersonal = function () {
+        d.personal = personalInput.checked;
+        personalInput.closest('.nk-personal-toggle').classList.toggle('on', d.personal);
+        var assignCol = form.querySelector('.nk-assign-col');
+        if (assignCol) assignCol.hidden = d.personal;
+      };
+      personalInput.addEventListener('change', syncPersonal);
+      syncPersonal();
       var pickers = NoteKit.bindPickers(form, state.tags, d.tags, d.due, function () {
         d.tags = pickers.tags();
         d.due = pickers.due() || '';
@@ -5479,7 +5518,7 @@
         btn.disabled = true;
         jsonApi(notesUrl, 'POST', {
           text: text, due_at: pickers.due(), due_time: pickers.time(), tag_ids: pickers.tags(), pinned: d.pinned,
-          assigned_to: assignees(), source_message_id: d.sourceMessageId,
+          personal: d.personal, assigned_to: d.personal ? [] : assignees(), source_message_id: d.sourceMessageId,
         })
           .then(done)
           .catch(function (e) { btn.disabled = false; toast(e.message, true); });
@@ -5501,7 +5540,8 @@
         if (pickers.time()) fd.append('due_time', pickers.time());
         fd.append('tag_ids', JSON.stringify(pickers.tags()));
         if (d.pinned) fd.append('pinned', '1');
-        if (assignees().length) fd.append('assigned_to', JSON.stringify(assignees()));
+        if (d.personal) fd.append('personal', '1');
+        if (!d.personal && assignees().length) fd.append('assigned_to', JSON.stringify(assignees()));
         if (d.sourceMessageId) fd.append('source_message_id', String(d.sourceMessageId));
         fetch(notesUrl, { method: 'POST', body: fd, headers: { 'Accept': 'application/json' }, credentials: 'same-origin' })
           .then(function (r) { if (!r.ok) throw new Error('No se pudo guardar la nota de voz'); done(); })
@@ -6020,8 +6060,10 @@
           var line = g.session_name || fmtPhone(g.session_phone) || '';
           var meta = (g.participant_count ? g.participant_count + ' miembros' : 'Grupo') +
             (line ? ' · ' + escapeHtml(line) : '');
+          var avatarUrl = '/inbox/participant-avatar/' + encodeURIComponent(g.session_id) + '/' + encodeURIComponent(g.chat_id);
           return '<button type="button" class="cg-item" data-group-session="' + escapeHtml(g.session_id) + '" data-group-chat="' + escapeHtml(g.chat_id) + '" title="Abrir el grupo ' + escapeHtml(g.name) + '">' +
-            '<span class="cg-avatar"><span class="ri-group-line" aria-hidden="true"></span></span>' +
+            '<span class="cg-avatar"><img src="' + avatarUrl + '" alt="" loading="lazy" />' +
+              '<span class="cg-fallback ri-group-line" aria-hidden="true"></span></span>' +
             '<span class="cg-main"><span class="cg-name">' + escapeHtml(g.name) + '</span>' +
               '<span class="cg-meta">' + meta + '</span></span>' +
             '<span class="ri-arrow-right-s-line cg-go" aria-hidden="true"></span></button>';
@@ -6045,6 +6087,10 @@
           }
           renderContact();
         });
+      });
+      // Si el grupo no tiene foto, se oculta la imagen y queda el ícono de respaldo.
+      Array.prototype.forEach.call(els.contact.querySelectorAll('.cg-avatar img'), function (img) {
+        img.addEventListener('error', function () { img.remove(); });
       });
       Array.prototype.forEach.call(els.contact.querySelectorAll('.cg-item'), function (btn) {
         btn.addEventListener('click', function () {
@@ -6094,6 +6140,48 @@
       if (host) { host.innerHTML = html; return; }
       var hero = els.contact.querySelector('.contact-hero');
       if (hero) hero.insertAdjacentHTML('afterend', '<div class="contact-flags">' + html + '</div>');
+    }
+
+    // Amplía la foto de la ficha (contacto o grupo) en un visor a pantalla completa.
+    function openAvatarLightbox(url, name) {
+      if (!url) return;
+      var dlg = document.createElement('dialog');
+      dlg.className = 'avatar-lightbox';
+      dlg.innerHTML = '<div class="avatar-lightbox-inner">' +
+        '<button type="button" class="avatar-lightbox-x" aria-label="Cerrar"><span class="ri-close-line" aria-hidden="true"></span></button>' +
+        '<img src="' + url + '" alt="Foto de ' + escapeHtml(name || 'el contacto') + '" />' +
+        '<span class="avatar-lightbox-name">' + escapeHtml(name || '') + '</span>' +
+      '</div>';
+      document.body.appendChild(dlg);
+      document.documentElement.classList.add('nk-assign-open');
+      var close = function () {
+        document.documentElement.classList.remove('nk-assign-open');
+        if (dlg.open) dlg.close();
+        if (dlg.parentNode) dlg.parentNode.removeChild(dlg);
+      };
+      dlg.addEventListener('click', function (e) {
+        if (e.target === dlg || e.target.closest('.avatar-lightbox-x')) close();
+      });
+      dlg.addEventListener('close', function () {
+        document.documentElement.classList.remove('nk-assign-open');
+        if (dlg.parentNode) dlg.parentNode.removeChild(dlg);
+      });
+      dlg.showModal();
+    }
+
+    function bindContactAvatarZoom(c) {
+      var url = chatPhoto(c);
+      var box = els.contact.querySelector('.contact-hero-avatar');
+      if (!url || !box) return;
+      box.classList.add('is-zoomable');
+      box.setAttribute('role', 'button');
+      box.setAttribute('tabindex', '0');
+      box.setAttribute('title', 'Ampliar la foto');
+      var open = function () { openAvatarLightbox(url, convoName(c)); };
+      box.addEventListener('click', open);
+      box.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+      });
     }
 
     function renderContact() {
@@ -6193,6 +6281,7 @@
       if (closeBtn) closeBtn.addEventListener('click', function () { root.classList.add('contact-hidden'); });
       bindContactTabs();
       bindContactSends();
+      bindContactAvatarZoom(c);
 
       // Notas internas: compositor (con borrador) y lista.
       renderNoteComposer();
@@ -7992,6 +8081,398 @@
   }
 
   /* ── Envíos por usuario: búsqueda, orden y detalle (tabla ya renderizada) ── */
+  /* ── Mi agenda: notas privadas y pipeline personal ── */
+  function initAgenda() {
+    var root = document.getElementById('agenda-page');
+    if (!root) return;
+    var els = {
+      stats: document.getElementById('agenda-stats'),
+      board: document.getElementById('agenda-board'),
+      search: document.getElementById('agenda-search'),
+      newBtn: document.getElementById('agenda-new'),
+    };
+    var state = { notes: [], q: '', loading: true };
+    var STAGES = [
+      { key: 'todo', label: 'Por hacer', hint: 'Pendientes de iniciar', icon: 'ri-inbox-archive-line' },
+      { key: 'doing', label: 'En gestión', hint: 'Procesos en curso', icon: 'ri-loader-4-line' },
+      { key: 'contacted', label: 'Contactado', hint: 'Ya hubo contacto', icon: 'ri-phone-line' },
+      { key: 'done', label: 'Resuelto', hint: 'Cerrados', icon: 'ri-check-double-line' },
+    ];
+
+    function stageOf(n) {
+      if (n.done_at) return 'done';
+      if (n.pipeline_stage === 'contacted' || n.contacted_at) return 'contacted';
+      if (n.pipeline_stage === 'doing') return 'doing';
+      return 'todo';
+    }
+
+    function dueHtml(n) {
+      if (!n.due_at) return '';
+      var diff = NoteKit.daysFromToday(n.due_at);
+      var cls = n.done_at ? 'done' : diff < 0 ? 'overdue' : diff === 0 ? 'today' : 'valid';
+      var icon = cls === 'overdue' ? 'ri-alarm-warning-line' : cls === 'done' ? 'ri-check-double-line'
+        : cls === 'today' ? 'ri-time-line' : 'ri-calendar-event-line';
+      var label = NoteKit.fmtDay(n.due_at) + (n.due_time ? ' · ' + n.due_time : '');
+      return '<span class="ag-due is-' + cls + '"><span class="' + icon + '" aria-hidden="true"></span>' + escapeHtml(label) + '</span>';
+    }
+
+    function contactName(n) {
+      return n.contact_name || n.contact_phone || String(n.chat_id || '').split('@')[0] || 'Contacto';
+    }
+
+    function tagList(n) {
+      return (n.tags || []).map(function (t) {
+        return '<span class="nk-tag" style="--tag:' + t.color + '">' + escapeHtml(t.name) + '</span>';
+      }).join('');
+    }
+
+    function cardHtml(n) {
+      var stage = stageOf(n);
+      var name = contactName(n);
+      var phone = n.contact_phone && n.contact_phone !== name ? fmtPhone(n.contact_phone) : '';
+      var chatUrl = '/conversations/' + encodeURIComponent(n.chat_id || '');
+      var overdue = stage !== 'done' && n.due_at && NoteKit.daysFromToday(n.due_at) < 0;
+      return '<article class="ag-card is-' + stage + (overdue ? ' is-overdue' : '') + '" data-id="' + n.id + '">' +
+        '<div class="ag-card-top">' +
+          '<a class="ag-contact" href="' + chatUrl + '" title="Abrir la conversación con ' + escapeHtml(name) + '">' +
+            '<span class="ag-avatar" aria-hidden="true">' + escapeHtml(initials(name)) + '</span>' +
+            '<span class="ag-contact-body"><b>' + escapeHtml(name) + '</b>' +
+              (phone ? '<small>' + escapeHtml(phone) + '</small>' : '') + '</span>' +
+          '</a>' +
+          (n.pinned ? '<span class="ag-pin ri-pushpin-2-fill" title="Importante" aria-hidden="true"></span>' : '') +
+        '</div>' +
+        (n.note_text ? '<p class="ag-text">' + linkifyHtml(escapeHtml(n.note_text)) + '</p>' : '<p class="ag-text is-muted">Nota de voz</p>') +
+        '<div class="ag-meta">' + dueHtml(n) + tagList(n) + '</div>' +
+        '<div class="ag-card-foot">' +
+          '<select class="form-select form-select-sm ag-stage" data-id="' + n.id + '" aria-label="Mover a otra etapa">' +
+            STAGES.map(function (s) {
+              return '<option value="' + s.key + '"' + (s.key === stage ? ' selected' : '') + '>' + s.label + '</option>';
+            }).join('') +
+          '</select>' +
+          '<a class="ag-open" href="' + chatUrl + '">Abrir <span class="ri-arrow-right-line" aria-hidden="true"></span></a>' +
+        '</div>' +
+      '</article>';
+    }
+
+    function counts() {
+      var c = { total: state.notes.length, todo: 0, doing: 0, contacted: 0, done: 0, overdue: 0 };
+      state.notes.forEach(function (n) {
+        c[stageOf(n)] = (c[stageOf(n)] || 0) + 1;
+        if (!n.done_at && n.due_at && NoteKit.daysFromToday(n.due_at) < 0) c.overdue++;
+      });
+      return c;
+    }
+
+    function renderStats() {
+      if (!els.stats) return;
+      var c = counts();
+      var items = [
+        { key: 'total', label: 'En total', value: c.total, icon: 'ri-calendar-todo-line' },
+        { key: 'todo', label: 'Por hacer', value: c.todo, icon: 'ri-inbox-archive-line' },
+        { key: 'doing', label: 'En gestión', value: c.doing, icon: 'ri-loader-4-line' },
+        { key: 'contacted', label: 'Contactado', value: c.contacted, icon: 'ri-phone-line' },
+        { key: 'done', label: 'Resuelto', value: c.done, icon: 'ri-check-double-line' },
+        { key: 'overdue', label: 'Vencidas', value: c.overdue, icon: 'ri-alarm-warning-line' },
+      ];
+      els.stats.innerHTML = items.map(function (it) {
+        return '<div class="ag-stat is-' + it.key + '"><span class="ag-stat-ico ' + it.icon + '" aria-hidden="true"></span>' +
+          '<div><b>' + it.value + '</b><span>' + it.label + '</span></div></div>';
+      }).join('');
+    }
+
+    function emptyColumn(stage) {
+      return '<div class="ag-col-empty"><span class="' + stage.icon + '" aria-hidden="true"></span><span>Sin notas</span></div>';
+    }
+
+    function renderBoard() {
+      if (state.loading) {
+        els.board.innerHTML = '<div class="agenda-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Cargando tu agenda…</div>';
+        return;
+      }
+      if (!state.notes.length) {
+        els.board.innerHTML = '<div class="agenda-empty"><span class="ri-calendar-todo-line" aria-hidden="true"></span>' +
+          '<h6>Tu agenda está vacía</h6><p>Registrá una nota con un contacto o marcá «Solo para mí» al anotar en una ficha.</p>' +
+          '<button type="button" class="btn btn-primary btn-sm" id="agenda-empty-new"><span class="ri-add-line"></span> Crear mi primera nota</button></div>';
+        var btn = document.getElementById('agenda-empty-new');
+        if (btn) btn.addEventListener('click', openAgendaDialog);
+        return;
+      }
+      els.board.innerHTML = STAGES.map(function (stage) {
+        var list = state.notes.filter(function (n) { return stageOf(n) === stage.key; });
+        return '<section class="ag-col is-' + stage.key + '">' +
+          '<header class="ag-col-head">' +
+            '<span class="ag-col-ico ' + stage.icon + '" aria-hidden="true"></span>' +
+            '<div class="ag-col-title"><b>' + stage.label + '</b><small>' + stage.hint + '</small></div>' +
+            '<span class="ag-col-count">' + list.length + '</span>' +
+          '</header>' +
+          '<div class="ag-col-body">' + (list.length ? list.map(cardHtml).join('') : emptyColumn(stage)) + '</div>' +
+        '</section>';
+      }).join('');
+      bindBoard();
+    }
+
+    function render() {
+      renderStats();
+      renderBoard();
+    }
+
+    function load() {
+      state.loading = true;
+      render();
+      var url = '/agenda/notes' + (state.q ? '?q=' + encodeURIComponent(state.q) : '');
+      api(url)
+        .then(function (d) {
+          state.notes = (d && d.notes) || [];
+          state.loading = false;
+          render();
+        })
+        .catch(function (e) {
+          state.loading = false;
+          els.board.innerHTML = '<div class="agenda-empty"><span class="ri-error-warning-line" aria-hidden="true"></span>' +
+            '<h6>No se pudo cargar tu agenda</h6><p>' + escapeHtml(e.message || 'Intentá de nuevo.') + '</p></div>';
+        });
+    }
+
+    function updateLocal(updated) {
+      if (!updated || !updated.id) { load(); return; }
+      var shown = stageOf(updated);
+      state.notes = state.notes.map(function (n) {
+        if (n.id !== updated.id) return n;
+        return updated;
+      });
+      // Si la nota deja de pertenecer a la agenda (p. ej. se convirtió en equipo), se quita.
+      if (!updated.personal) state.notes = state.notes.filter(function (n) { return n.id !== updated.id; });
+      render();
+      toast('Etapa actualizada: ' + (STAGES.filter(function (s) { return s.key === shown; })[0] || { label: '' }).label + '.');
+    }
+
+    function changeStage(id, stage, select) {
+      var note = state.notes.filter(function (n) { return n.id === id; })[0];
+      if (!note) return;
+      if (stage === 'contacted' && !note.contacted_at) {
+        openResultDialog(note, select);
+        return;
+      }
+      select.disabled = true;
+      jsonApi('/inbox/notes/' + id + '/stage', 'POST', { stage: stage })
+        .then(function (updated) { updateLocal(updated); })
+        .catch(function (e) { select.disabled = false; select.value = stageOf(note); toast(e.message, true); });
+    }
+
+    function bindBoard() {
+      Array.prototype.forEach.call(els.board.querySelectorAll('.ag-stage'), function (sel) {
+        sel.addEventListener('change', function () {
+          changeStage(Number(sel.getAttribute('data-id')), sel.value, sel);
+        });
+      });
+    }
+
+    function openResultDialog(note, select) {
+      var dlg = document.createElement('dialog');
+      dlg.className = 'agenda-dialog nk-section';
+      dlg.innerHTML = '<div class="agenda-dialog-box agenda-dialog-sm">' +
+        '<div class="agenda-dialog-head"><div><h5>Confirmar contacto</h5>' +
+          '<p>Contá brevemente cómo fue la comunicación con ' + escapeHtml(contactName(note)) + '.</p></div>' +
+          '<button type="button" class="agenda-dialog-x" data-close aria-label="Cerrar"><span class="ri-close-line"></span></button></div>' +
+        '<div class="agenda-dialog-body"><textarea class="form-control" id="ag-result-text" rows="3" maxlength="1000" ' +
+          'placeholder="Ej.: Lo llamé, confirmó que envía el comprobante el viernes."></textarea></div>' +
+        '<div class="agenda-dialog-foot"><button type="button" class="btn btn-light btn-sm" data-close>Cancelar</button>' +
+          '<button type="button" class="btn btn-primary btn-sm" id="ag-result-save">Guardar contacto</button></div>' +
+      '</div>';
+      document.body.appendChild(dlg);
+      document.documentElement.classList.add('nk-assign-open');
+      var close = function () {
+        document.documentElement.classList.remove('nk-assign-open');
+        if (dlg.open) dlg.close();
+        if (dlg.parentNode) dlg.parentNode.removeChild(dlg);
+        select.value = stageOf(note);
+      };
+      dlg.addEventListener('close', function () {
+        document.documentElement.classList.remove('nk-assign-open');
+        if (dlg.parentNode) dlg.parentNode.removeChild(dlg);
+      });
+      dlg.addEventListener('click', function (e) { if (e.target === dlg) close(); });
+      Array.prototype.forEach.call(dlg.querySelectorAll('[data-close]'), function (b) { b.addEventListener('click', close); });
+      var save = dlg.querySelector('#ag-result-save');
+      var text = dlg.querySelector('#ag-result-text');
+      dlg.showModal();
+      text.focus();
+      save.addEventListener('click', function () {
+        var value = text.value.trim();
+        if (value.length < 3) { toast('Contá brevemente cómo fue el contacto.', true); text.focus(); return; }
+        save.disabled = true;
+        jsonApi('/inbox/notes/' + note.id + '/stage', 'POST', { stage: 'contacted', result: value })
+          .then(function (updated) {
+            close();
+            updateLocal(updated);
+          })
+          .catch(function (e) { save.disabled = false; toast(e.message, true); });
+      });
+    }
+
+    function openAgendaDialog() {
+      var dlg = document.createElement('dialog');
+      dlg.className = 'agenda-dialog nk-section';
+      dlg.innerHTML = '<div class="agenda-dialog-box">' +
+        '<div class="agenda-dialog-head"><div><h5>Nueva nota para mí</h5>' +
+          '<p>Elegí un contacto, escribí la anotación y, si querés, ponele fecha. Queda solo en tu agenda.</p></div>' +
+          '<button type="button" class="agenda-dialog-x" data-close aria-label="Cerrar"><span class="ri-close-line"></span></button></div>' +
+        '<div class="agenda-dialog-body">' +
+          '<div class="ag-field"><label class="ag-label">Contacto</label>' +
+            '<div class="ag-contact-search"><span class="ri-search-line" aria-hidden="true"></span>' +
+              '<input type="search" id="ag-contact-q" placeholder="Buscar por nombre o número…" autocomplete="off"></div>' +
+            '<div class="ag-contact-results" id="ag-contact-results"></div>' +
+            '<div class="ag-selected-contact" id="ag-selected-contact" hidden></div>' +
+          '</div>' +
+          '<div class="ag-field"><label class="ag-label" for="ag-note-text">Nota</label>' +
+            '<textarea class="form-control" id="ag-note-text" rows="4" maxlength="4000" ' +
+              'placeholder="Ej.: Quedó en enviar los documentos el lunes. Hacer seguimiento por la tarde."></textarea></div>' +
+          '<div class="ag-grid2">' +
+            '<div class="ag-field"><label class="ag-label">Fecha de seguimiento</label><div class="ag-due-wrap"></div></div>' +
+            '<div class="ag-field"><label class="ag-label" for="ag-stage">Etapa inicial</label>' +
+              '<select class="form-select form-select-sm" id="ag-stage"><option value="todo">Por hacer</option><option value="doing">En gestión</option></select></div>' +
+          '</div>' +
+          '<label class="ag-check"><input type="checkbox" id="ag-pinned"> Marcar como importante</label>' +
+        '</div>' +
+        '<div class="agenda-dialog-foot"><button type="button" class="btn btn-light btn-sm" data-close>Cancelar</button>' +
+          '<button type="button" class="btn btn-primary btn-sm" id="ag-save" disabled><span class="ri-save-3-line me-1"></span>Guardar en mi agenda</button></div>' +
+      '</div>';
+      document.body.appendChild(dlg);
+      document.documentElement.classList.add('nk-assign-open');
+      var selected = null;
+      var resultTimer = null;
+      var results = dlg.querySelector('#ag-contact-results');
+      var search = dlg.querySelector('#ag-contact-q');
+      var selectedBox = dlg.querySelector('#ag-selected-contact');
+      var noteText = dlg.querySelector('#ag-note-text');
+      var save = dlg.querySelector('#ag-save');
+      var pickers = NoteKit.bindPickers(dlg, [], [], '', null);
+      var syncSave = function () {
+        save.disabled = !selected || !noteText.value.trim();
+      };
+
+      var close = function () {
+        document.documentElement.classList.remove('nk-assign-open');
+        if (dlg.open) dlg.close();
+        if (dlg.parentNode) dlg.parentNode.removeChild(dlg);
+      };
+      dlg.addEventListener('close', function () {
+        document.documentElement.classList.remove('nk-assign-open');
+        if (dlg.parentNode) dlg.parentNode.removeChild(dlg);
+      });
+      dlg.addEventListener('click', function (e) { if (e.target === dlg) close(); });
+      Array.prototype.forEach.call(dlg.querySelectorAll('[data-close]'), function (b) { b.addEventListener('click', close); });
+
+      function selectPerson(p) {
+        if (!p || !p.chat) return;
+        selected = {
+          session_id: p.chat.session_id,
+          chat_id: p.chat.chat_id,
+          name: p.full_name || fmtPhone(p.phone || '') || 'Contacto',
+          phone: p.phone || '',
+        };
+        var name = selected.name;
+        selectedBox.hidden = false;
+        selectedBox.innerHTML = '<span class="ag-avatar" aria-hidden="true">' + escapeHtml(initials(name)) + '</span>' +
+          '<span class="ag-selected-body"><b>' + escapeHtml(name) + '</b>' +
+            (selected.phone ? '<small>' + escapeHtml(fmtPhone(selected.phone)) + '</small>' : '') + '</span>' +
+          '<button type="button" class="ag-selected-x" aria-label="Quitar contacto"><span class="ri-close-line"></span></button>';
+        search.value = '';
+        results.innerHTML = '';
+        selectedBox.querySelector('.ag-selected-x').addEventListener('click', function () {
+          selected = null;
+          selectedBox.hidden = true;
+          selectedBox.innerHTML = '';
+          syncSave();
+        });
+        noteText.focus();
+        syncSave();
+      }
+
+      function renderResults(people, q) {
+        var usable = people.filter(function (p) { return p.chat; });
+        if (!usable.length) {
+          results.innerHTML = '<div class="ag-contact-none">No encontramos contactos con conversación' +
+            (q ? ' para «' + escapeHtml(q) + '»' : '') + '. Probá con otro nombre o número.</div>';
+          return;
+        }
+        results.innerHTML = usable.map(function (p, i) {
+          var name = p.full_name || fmtPhone(p.phone || '') || 'Contacto';
+          return '<button type="button" class="ag-contact-result" data-index="' + i + '">' +
+            '<span class="ag-avatar" aria-hidden="true">' + escapeHtml(initials(name)) + '</span>' +
+            '<span class="ag-contact-body"><b>' + escapeHtml(name) + '</b>' +
+              '<small>' + escapeHtml(fmtPhone(p.phone || '')) + '</small></span>' +
+            '<span class="ri-arrow-right-s-line" aria-hidden="true"></span></button>';
+        }).join('');
+        Array.prototype.forEach.call(results.querySelectorAll('.ag-contact-result'), function (btn) {
+          btn.addEventListener('click', function () { selectPerson(usable[Number(btn.getAttribute('data-index'))]); });
+        });
+      }
+
+      search.addEventListener('input', function () {
+        var q = search.value.trim();
+        if (resultTimer) clearTimeout(resultTimer);
+        if (q.length < 2) { results.innerHTML = ''; return; }
+        resultTimer = setTimeout(function () {
+          api('/inbox/directory?q=' + encodeURIComponent(q) + '&limit=10&include_contacts=1')
+            .then(function (d) { renderResults((d && d.people) || [], q); })
+            .catch(function () { results.innerHTML = '<div class="ag-contact-none">No se pudo buscar.</div>'; });
+        }, 230);
+      });
+
+      noteText.addEventListener('input', syncSave);
+      save.addEventListener('click', function () {
+        if (!selected) { toast('Elegí un contacto.', true); search.focus(); return; }
+        var text = noteText.value.trim();
+        if (!text) { toast('Escribí la nota.', true); noteText.focus(); return; }
+        save.disabled = true;
+        jsonApi('/agenda/notes', 'POST', {
+          session_id: selected.session_id,
+          chat_id: selected.chat_id,
+          text: text,
+          due_at: pickers.due(),
+          due_time: pickers.time(),
+          stage: dlg.querySelector('#ag-stage').value,
+          pinned: dlg.querySelector('#ag-pinned').checked,
+        })
+          .then(function (created) {
+            close();
+            state.notes.unshift(created);
+            state.q = '';
+            if (els.search) els.search.value = '';
+            render();
+            toast('Nota guardada en tu agenda.');
+          })
+          .catch(function (e) { save.disabled = false; toast(e.message, true); });
+      });
+
+      dlg.showModal();
+      search.focus();
+    }
+
+    if (els.search) {
+      var searchTimer = null;
+      els.search.addEventListener('input', function () {
+        state.q = els.search.value.trim();
+        if (searchTimer) clearTimeout(searchTimer);
+        searchTimer = setTimeout(load, 250);
+      });
+    }
+    if (els.newBtn) els.newBtn.addEventListener('click', openAgendaDialog);
+
+    if (liveSource()) {
+      var liveTimer = null;
+      ['note', 'reminder'].forEach(function (evt) {
+        liveSource().addEventListener(evt, function () {
+          if (liveTimer) clearTimeout(liveTimer);
+          liveTimer = setTimeout(load, 600);
+        });
+      });
+    }
+
+    load();
+  }
+
   function initActivity() {
     function setup(opts) {
       var card = document.getElementById(opts.card);
@@ -8273,6 +8754,7 @@
 
   initInbox();
   initNotes();
+  initAgenda();
   initReminders();
   initNotifications();
   initMessageAlerts();

@@ -67,6 +67,7 @@ export interface NavItem {
 const NAV: NavItem[] = [
   { section: 'conversations', href: '/conversations', label: 'Conversaciones', icon: 'ri-chat-3-line' },
   { section: 'conversations', href: '/notes', label: 'Notas y tareas', icon: 'ri-sticky-note-line' },
+  { section: 'conversations', href: '/agenda', label: 'Mi agenda', icon: 'ri-calendar-todo-line' },
   { section: 'batches', href: '/batches', label: 'Lotes', icon: 'ri-send-plane-line' },
   { section: 'batches', href: '/import', label: 'Importar CSV', icon: 'ri-upload-2-line' },
   { section: 'templates', href: '/templates', label: 'Plantillas', icon: 'ri-file-text-line' },

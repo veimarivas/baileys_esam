@@ -60,6 +60,8 @@ CREATE TABLE IF NOT EXISTS messages (
   media_seconds    INTEGER,
   wa_message_id    TEXT,
   status           TEXT NOT NULL DEFAULT 'sent',
+  revoked_at       TEXT,
+  revoked_scope    TEXT,
   transcription    TEXT,
   origin           TEXT,
   occurred_at      TEXT NOT NULL,
@@ -351,13 +353,15 @@ CREATE TABLE IF NOT EXISTS contacts (
 CREATE INDEX IF NOT EXISTS idx_contacts_session ON contacts(session_id);
 CREATE INDEX IF NOT EXISTS idx_contacts_chat ON contacts(session_id, chat_id);
 
--- Notas internas del contacto (solo visibles en el panel; texto o audio).
+-- Notas internas del contacto (solo visibles en el panel; texto, audio o imagen).
 CREATE TABLE IF NOT EXISTS contact_notes (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   contact_id INTEGER NOT NULL,
   user_id    INTEGER,
   note_text  TEXT,
   audio_path TEXT,
+  image_path TEXT,
+  image_mime TEXT,
   personal   INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   FOREIGN KEY(contact_id) REFERENCES contacts(id) ON DELETE CASCADE
@@ -372,6 +376,7 @@ CREATE TABLE IF NOT EXISTS agenda_boards (
   name       TEXT NOT NULL,
   color      TEXT,
   position   INTEGER NOT NULL DEFAULT 0,
+  uses_cites INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   UNIQUE(user_id, name)
@@ -384,6 +389,7 @@ CREATE TABLE IF NOT EXISTS agenda_stages (
   color      TEXT NOT NULL DEFAULT '#64748b',
   position   INTEGER NOT NULL DEFAULT 0,
   is_done    INTEGER NOT NULL DEFAULT 0,
+  requires_cite INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   UNIQUE(board_id, name),
@@ -391,6 +397,36 @@ CREATE TABLE IF NOT EXISTS agenda_stages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_agenda_stages_board ON agenda_stages(board_id, position);
+
+-- Permisos para ver o editar una sub-agenda de otra persona.
+-- principal_type: 'user' (principal_id = id de usuario) o 'area' (clave de área).
+CREATE TABLE IF NOT EXISTS agenda_board_shares (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  board_id       INTEGER NOT NULL,
+  principal_type TEXT NOT NULL,
+  principal_id   TEXT NOT NULL,
+  permission     TEXT NOT NULL DEFAULT 'view',
+  created_by     INTEGER,
+  created_at     TEXT NOT NULL,
+  UNIQUE(board_id, principal_type, principal_id),
+  FOREIGN KEY(board_id) REFERENCES agenda_boards(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_agenda_shares_board ON agenda_board_shares(board_id);
+CREATE INDEX IF NOT EXISTS idx_agenda_shares_principal ON agenda_board_shares(principal_type, principal_id);
+
+-- Cites (folios de pago a la universidad) sincronizados desde cronogramas.
+-- Las sub-agendas con cites habilitados eligen uno al mover una tarjeta.
+CREATE TABLE IF NOT EXISTS folio_cites (
+  id             INTEGER PRIMARY KEY,
+  nombre         TEXT NOT NULL,
+  concepto       TEXT,
+  status         TEXT NOT NULL DEFAULT 'habilitado',
+  fecha_registro TEXT,
+  synced_at      TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_folio_cites_status ON folio_cites(status);
 
 -- Seguimientos de desarrollo de módulos enviados desde cronogramas.
 -- No dependen de un contacto: son tareas para el responsable de la sesión.

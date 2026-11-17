@@ -25,9 +25,9 @@ export function cleanupMedia(days = config.mediaRetentionDays): { deleted: numbe
   const keep = new Set([path.join(root, 'stickers'), path.join(root, NOTES_MEDIA_DIR), path.join(root, AVATARS_MEDIA_DIR)]);
   // Por si alguna nota de voz quedó guardada en otra carpeta (versiones anteriores).
   const noteFiles = new Set(
-    all<{ audio_path: string }>('SELECT audio_path FROM contact_notes WHERE audio_path IS NOT NULL').map((r) =>
-      path.resolve(r.audio_path),
-    ),
+    all<{ audio_path: string | null; image_path: string | null }>(
+      'SELECT audio_path, image_path FROM contact_notes WHERE audio_path IS NOT NULL OR image_path IS NOT NULL',
+    ).flatMap((r) => [r.audio_path, r.image_path].filter((x): x is string => !!x).map((x) => path.resolve(x))),
   );
   const cutoff = Date.now() - days * DAY_MS;
   let deleted = 0;

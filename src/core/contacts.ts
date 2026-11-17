@@ -133,15 +133,52 @@ export interface ContactNoteWithAuthor extends ContactNoteRow {
   session_id: string;
   session_name: string | null;
   session_phone: string | null;
+  /** Programa principal de la persona (manual o el más reciente de cronogramas). */
+  programa?: string | null;
+  /** Carnet de identidad registrado para la persona (opcional). */
+  person_ci?: string | null;
   tags: NoteTagLite[];
   /** Todas las personas a las que se derivó (la primera es la principal). */
   assignees: NoteAssigneeLite[];
 }
 
+/** Programa principal de la persona dueña de la nota, si se conoce. */
+const NOTE_PROGRAMA_EXPR = `COALESCE(
+  (SELECT pmp.programa FROM person_manual_programs pmp WHERE pmp.phone_key = ct.phone_key),
+  (SELECT pp.programa FROM person_programs pp WHERE pp.phone_key = ct.phone_key
+    ORDER BY pp.last_at DESC LIMIT 1)
+)`;
+const NOTE_PROGRAMA_SQL = `${NOTE_PROGRAMA_EXPR} AS programa`;
+
+/** Carnet de identidad de la persona dueña de la nota (si lo registró). */
+const NOTE_CI_EXPR = `(SELECT pc.ci FROM person_ci pc WHERE pc.phone_key = ct.phone_key)`;
+const NOTE_CI_SQL = `${NOTE_CI_EXPR} AS person_ci`;
+
+/** Nombre registrado de la persona (ficha/cronogramas), con WhatsApp como respaldo. */
+const NOTE_PERSON_NAME_SQL = `COALESCE(
+  (SELECT pn.full_name FROM person_names pn WHERE pn.phone_key = COALESCE(ct.phone_key, ct.chat_id)),
+  (SELECT pp.full_name FROM person_programs pp WHERE pp.phone_key = ct.phone_key AND pp.full_name IS NOT NULL
+    ORDER BY pp.last_at DESC LIMIT 1),
+  ct.name)`;
+
+const NOTE_CONTACT_NAME_SQL = `${NOTE_PERSON_NAME_SQL} AS contact_name`;
+
+/** Quién movió la nota por última vez y cuándo (para el tablero de Mi agenda). */
+const NOTE_STAGE_META_SQL = `(SELECT u2.name FROM contact_note_history h2 LEFT JOIN users u2 ON u2.id = h2.user_id
+    WHERE h2.note_id = n.id AND h2.action = 'stage'
+      AND COALESCE(json_extract(h2.detail, '$.comment'), '') <> 'Nota creada en esta columna'
+    ORDER BY h2.created_at DESC, h2.id DESC LIMIT 1) AS last_stage_by,
+  (SELECT h2.created_at FROM contact_note_history h2
+    WHERE h2.note_id = n.id AND h2.action = 'stage'
+      AND COALESCE(json_extract(h2.detail, '$.comment'), '') <> 'Nota creada en esta columna'
+    ORDER BY h2.created_at DESC, h2.id DESC LIMIT 1) AS last_stage_at`;
+
 /** Columnas comunes de una nota con su autor, quién la completó y su línea de origen. */
 const NOTE_SELECT = `SELECT n.*, u.name AS author_name, d.name AS done_by_name, a.name AS assigned_name,
     a.esam_area AS assigned_area, u.esam_area AS author_area, ab.name AS assigned_by_name, cb.name AS contacted_by_name,
-    ct.session_id AS session_id, s.name AS session_name, COALESCE(s.phone, s.expected_phone) AS session_phone
+    ct.session_id AS session_id, ${NOTE_CONTACT_NAME_SQL}, ct.phone AS contact_phone, ct.chat_id AS chat_id,
+    s.name AS session_name, COALESCE(s.phone, s.expected_phone) AS session_phone,
+    ${NOTE_PROGRAMA_SQL}, ${NOTE_CI_SQL}, ${NOTE_STAGE_META_SQL}
   FROM contact_notes n
   JOIN contacts ct ON ct.id = n.contact_id
   LEFT JOIN sessions s ON s.id = ct.session_id
@@ -150,6 +187,21 @@ const NOTE_SELECT = `SELECT n.*, u.name AS author_name, d.name AS done_by_name, 
   LEFT JOIN users a ON a.id = n.assigned_to
   LEFT JOIN users ab ON ab.id = n.assigned_by
   LEFT JOIN users cb ON cb.id = n.contacted_by`;
+
+/**
+ * Filtro de búsqueda de notas: texto libre y datos de la ficha (nombre
+ * registrado, programa y CI), no solo el nombre de WhatsApp.
+ */
+function noteSearchClause(like: string, where: string[], params: unknown[]): void {
+  const f = (col: string) => `fold(${col}) LIKE ? ESCAPE '!'`;
+  const nameCol = `COALESCE(${NOTE_PERSON_NAME_SQL}, '')`;
+  const progCol = `COALESCE(${NOTE_PROGRAMA_EXPR}, '')`;
+  const ciCol = `COALESCE(${NOTE_CI_EXPR}, '')`;
+  where.push(`(${f("COALESCE(n.note_text,'')")} OR ${f("COALESCE(ct.name,'')")}
+    OR ${f("COALESCE(ct.phone,'')")} OR ${f('ct.chat_id')}
+    OR ${f(nameCol)} OR ${f(progCol)} OR ${f(ciCol)})`);
+  params.push(like, like, like, like, like, like, like);
+}
 
 /**
  * Fichas de la misma persona en todas las líneas: la propia más las que
@@ -458,6 +510,11 @@ export function addNote(
     agendaStageId?: number | null;
     /** Nota de equipo de la que se copia esta nota personal. */
     agendaSourceNoteId?: number | null;
+    /** Cite elegido al registrarla en una columna que lo exige. */
+    cite?: { id: number; number: string; concept: string | null } | null;
+    /** Imagen adjunta a la nota (ruta y MIME). */
+    imagePath?: string | null;
+    imageMime?: string | null;
   } = {},
 ): ContactNoteWithAuthor {
   const assigneeIds = [
@@ -473,14 +530,16 @@ export function addNote(
   const primary = personal ? null : effectiveAssignees[0] ?? null;
   const now = nowIso();
   const created = run(
-    `INSERT INTO contact_notes (contact_id, user_id, note_text, audio_path, due_at, due_time, pinned, assigned_to,
+    `INSERT INTO contact_notes (contact_id, user_id, note_text, audio_path, image_path, image_mime, due_at, due_time, pinned, assigned_to,
        assigned_by, assigned_at, source_message_id, personal, pipeline_stage, agenda_board_id, agenda_stage_id,
-       agenda_source_note_id, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       agenda_source_note_id, cite_folio_id, cite_number, cite_concept, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     contactId,
     userId,
     noteText,
     audioPath,
+    extra.imagePath ?? null,
+    extra.imageMime ?? null,
     dueAt || null,
     dueAt ? extra.dueTime || null : null,
     pinned ? 1 : 0,
@@ -493,9 +552,37 @@ export function addNote(
     personal ? extra.agendaBoardId ?? null : null,
     personal ? extra.agendaStageId ?? null : null,
     personal ? extra.agendaSourceNoteId ?? null : null,
+    personal ? extra.cite?.id ?? null : null,
+    personal ? extra.cite?.number ?? null : null,
+    personal ? extra.cite?.concept ?? null : null,
     now,
   );
   setNoteTags(created.lastInsertRowid, tagIds);
+  // La nota personal nace en una columna concreta: queda registrado desde el
+  // inicio para que el historial muestre el recorrido completo.
+  if (personal && extra.agendaStageId) {
+    const stage = get<{ name: string; board_id: number }>(
+      'SELECT name, board_id FROM agenda_stages WHERE id = ?',
+      extra.agendaStageId,
+    );
+    if (stage) {
+      const board = get<{ name: string }>('SELECT name FROM agenda_boards WHERE id = ?', stage.board_id);
+      logNoteStage(
+        created.lastInsertRowid,
+        userId,
+        {
+          fromBoard: null,
+          from: null,
+          toBoard: board?.name ?? null,
+          to: stage.name,
+          comment: 'Nota creada en esta columna',
+          cite: extra.cite?.number ?? null,
+          citeConcept: extra.cite?.concept ?? null,
+        },
+        now,
+      );
+    }
+  }
   if (effectiveAssignees.length) {
     for (const id of effectiveAssignees) {
       run(
@@ -537,7 +624,7 @@ export function updateNote(
   const pinned = patch.pinned !== undefined ? (patch.pinned ? 1 : 0) : current.pinned;
   const dueTime = due ? (patch.dueTime !== undefined ? patch.dueTime || null : current.due_time) : null;
   const personal = patch.personal !== undefined ? (patch.personal ? 1 : 0) : current.personal;
-  if (!text && !current.audio_path) throw new Error('La nota no puede quedar vacía.');
+  if (!text && !current.audio_path && !current.image_path) throw new Error('La nota no puede quedar vacía.');
   const prevTags = tagNames(noteId);
   const tagsChanged = patch.tagIds !== undefined && !sameIds(patch.tagIds, tagIdsOf(noteId));
   if (text !== current.note_text || due !== current.due_at || tagsChanged || personal !== current.personal) {
@@ -572,6 +659,33 @@ export function updateNote(
         ? (patch.assignedTo ? [patch.assignedTo] : [])
         : undefined;
   if (nextIds !== undefined) setNoteAssignees(noteId, nextIds, userId);
+}
+
+/** Adjunta, reemplaza o quita la imagen de una nota interna. */
+export function setNoteImage(
+  noteId: number,
+  userId: number | null,
+  imagePath: string | null,
+  imageMime: string | null = null,
+): void {
+  const current = getNote(noteId);
+  if (!current) throw new Error('Nota no encontrada.');
+  if (!imagePath && !current.note_text && !current.audio_path) {
+    throw new Error('La nota no puede quedar vacía: escribí un texto antes de quitar la imagen.');
+  }
+  const detail = imagePath
+    ? current.image_path
+      ? 'Cambió la imagen'
+      : 'Agregó una imagen'
+    : 'Quitó la imagen';
+  run(
+    'UPDATE contact_notes SET image_path = ?, image_mime = ?, updated_at = ? WHERE id = ?',
+    imagePath || null,
+    imagePath ? imageMime || null : null,
+    nowIso(),
+    noteId,
+  );
+  logNoteEvent(noteId, userId, imagePath ? 'image' : 'image_removed', undefined, detail);
 }
 
 /** El responsable abrió la derivación: queda registrado una sola vez. */
@@ -714,7 +828,10 @@ export type NoteAction =
   | 'template'
   | 'seen'
   | 'contacted'
-  | 'stage';
+  | 'stage'
+  | 'cite'
+  | 'image'
+  | 'image_removed';
 
 export interface NoteHistoryEntry {
   id: number;
@@ -757,6 +874,7 @@ function logNoteEvent(
   action: NoteAction,
   prev?: { text: string | null; due: string | null; tags: string[] },
   detail: string | null = null,
+  at: string = nowIso(),
 ): void {
   run(
     `INSERT INTO contact_note_history (note_id, user_id, action, prev_text, prev_due_at, prev_tags, detail, created_at)
@@ -768,13 +886,51 @@ function logNoteEvent(
     prev?.due ?? null,
     prev ? JSON.stringify(prev.tags) : null,
     detail,
-    nowIso(),
+    at,
   );
+}
+
+/** Detalle de un movimiento entre columnas de Mi agenda. */
+export interface NoteStageDetail {
+  /** Sub-agenda de origen (null si la nota nació en esa columna). */
+  fromBoard: string | null;
+  /** Columna de origen (null al crear la nota). */
+  from: string | null;
+  /** Sub-agenda de destino. */
+  toBoard: string | null;
+  /** Columna de destino. */
+  to: string | null;
+  /** Detalle escrito por quien movió la nota. */
+  comment: string | null;
+  /** Número de cite elegido (sub-agendas que los exigen). */
+  cite?: string | null;
+  /** Tipo de pago del cite elegido. */
+  citeConcept?: string | null;
+}
+
+/** Deja constancia de la columna en la que nació o a la que se movió una nota. */
+export function logNoteStage(
+  noteId: number,
+  userId: number | null,
+  detail: NoteStageDetail,
+  at: string = nowIso(),
+): void {
+  logNoteEvent(noteId, userId, 'stage', undefined, JSON.stringify(detail), at);
 }
 
 /** Deja constancia de que la nota nació de una plantilla. */
 export function markFromTemplate(noteId: number, userId: number | null, templateName: string): void {
   logNoteEvent(noteId, userId, 'template', undefined, templateName);
+}
+
+/** Deja constancia del cite agregado o cambiado en una nota de agenda. */
+export function logNoteCite(
+  noteId: number,
+  userId: number | null,
+  cite: string,
+  concept: string | null,
+): void {
+  logNoteEvent(noteId, userId, 'cite', undefined, concept ? `${cite} · ${concept}` : cite);
 }
 
 export interface PersonLine {
@@ -888,12 +1044,249 @@ export function listNoteHistory(noteId: number): NoteHistoryEntry[] {
   });
 }
 
+export interface ContactHistoryStage {
+  fromBoard: string | null;
+  from: string | null;
+  toBoard: string | null;
+  to: string | null;
+  comment: string | null;
+  cite?: string | null;
+  citeConcept?: string | null;
+}
+
+export interface ContactHistoryEvent {
+  /** `n<id>` para la creación de la nota y `h<id>` para cada evento. */
+  id: string;
+  note_id: number;
+  action: NoteAction | 'created';
+  user_id: number | null;
+  user_name: string | null;
+  created_at: string;
+  note_text: string | null;
+  personal: number;
+  has_image: number;
+  has_audio: number;
+  agenda_board_id: number | null;
+  detail: string | null;
+  prev_text: string | null;
+  stage: ContactHistoryStage | null;
+}
+
+export interface ContactHistoryResult {
+  contact: {
+    id: number;
+    name: string | null;
+    phone: string | null;
+    email: string | null;
+    company: string | null;
+    ci: string | null;
+    programas: string[];
+    session_id: string;
+    chat_id: string;
+    /** true cuando falta el nombre o el programa: conviene registrar/completar la ficha. */
+    needs_profile: boolean;
+  };
+  users: Array<{ id: number | null; name: string; count: number }>;
+  entries: ContactHistoryEvent[];
+}
+
+function parseStageDetail(raw: string | null): ContactHistoryStage | null {
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as Record<string, unknown>;
+    if (!value || typeof value !== 'object') return null;
+    return {
+      fromBoard: value.fromBoard == null ? null : String(value.fromBoard),
+      from: value.from == null ? null : String(value.from),
+      toBoard: value.toBoard == null ? null : String(value.toBoard),
+      to: value.to == null ? null : String(value.to),
+      comment: value.comment == null ? null : String(value.comment),
+      cite: value.cite == null ? null : String(value.cite),
+      citeConcept: value.citeConcept == null ? null : String(value.citeConcept),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Historial consolidado de una persona: creación y cambios de todas sus notas
+ * de equipo y de las notas privadas del usuario que consulta. Incluye los
+ * movimientos entre columnas de Mi agenda, para ver el recorrido completo.
+ */
+export function contactHistory(contactId: number, viewerId: number, limit = 2000): ContactHistoryResult | null {
+  const contact = get<ContactRow & { phone_key: string | null }>(
+    'SELECT * FROM contacts WHERE id = ?',
+    contactId,
+  );
+  if (!contact) return null;
+
+  const notes = all<{
+    id: number;
+    note_text: string | null;
+    personal: number;
+    created_at: string;
+    user_id: number | null;
+    author_name: string | null;
+    audio_path: string | null;
+    image_path: string | null;
+    agenda_board_id: number | null;
+  }>(
+    `SELECT n.id, n.note_text, n.personal, n.created_at, n.user_id, u.name AS author_name,
+            n.audio_path, n.image_path, n.agenda_board_id
+       FROM contact_notes n
+       JOIN contacts ct ON ct.id = n.contact_id
+       LEFT JOIN users u ON u.id = n.user_id
+      WHERE n.deleted_at IS NULL AND ${samePersonClause('ct')}
+        AND (n.personal = 0 OR n.user_id = ?)
+      ORDER BY n.created_at ASC, n.id ASC`,
+    contactId,
+    viewerId,
+  );
+
+  const noteIds = notes.map((n) => n.id);
+  const history = noteIds.length
+    ? all<{
+        id: number;
+        note_id: number;
+        user_id: number | null;
+        user_name: string | null;
+        action: NoteAction;
+        detail: string | null;
+        prev_text: string | null;
+        created_at: string;
+      }>(
+        `SELECT h.id, h.note_id, h.user_id, u.name AS user_name, h.action, h.detail, h.prev_text, h.created_at
+           FROM contact_note_history h LEFT JOIN users u ON u.id = h.user_id
+          WHERE h.note_id IN (${noteIds.map(() => '?').join(',')})
+          ORDER BY h.created_at ASC, h.id ASC
+          LIMIT ?`,
+        ...noteIds,
+        Math.max(1, limit),
+      )
+    : [];
+
+  // La columna inicial de una nota personal se muestra en la creación, no como
+  // un movimiento separado.
+  const initialStage = new Map<number, ContactHistoryStage>();
+  for (const h of history) {
+    if (h.action !== 'stage') continue;
+    const stage = parseStageDetail(h.detail);
+    if (stage && !stage.from && stage.to && !initialStage.has(h.note_id)) initialStage.set(h.note_id, stage);
+  }
+
+  const byNote = new Map(notes.map((n) => [n.id, n]));
+  const entries: ContactHistoryEvent[] = notes.map((n) => ({
+    id: `n${n.id}`,
+    note_id: n.id,
+    action: 'created' as const,
+    user_id: n.user_id,
+    user_name: n.author_name,
+    created_at: n.created_at,
+    note_text: n.note_text,
+    personal: n.personal,
+    has_image: n.image_path ? 1 : 0,
+    has_audio: n.audio_path ? 1 : 0,
+    agenda_board_id: n.agenda_board_id,
+    detail: null,
+    prev_text: null,
+    stage: initialStage.get(n.id) ?? null,
+  }));
+
+  for (const h of history) {
+    const note = byNote.get(h.note_id);
+    if (!note) continue;
+    const stage = h.action === 'stage' ? parseStageDetail(h.detail) : null;
+    // La creación ya trae la columna inicial.
+    if (h.action === 'stage' && stage && !stage.from && stage.to && initialStage.has(h.note_id)) continue;
+    entries.push({
+      id: `h${h.id}`,
+      note_id: h.note_id,
+      action: h.action,
+      user_id: h.user_id,
+      user_name: h.user_name,
+      created_at: h.created_at,
+      note_text: note.note_text,
+      personal: note.personal,
+      has_image: note.image_path ? 1 : 0,
+      has_audio: note.audio_path ? 1 : 0,
+      agenda_board_id: note.agenda_board_id,
+      detail: stage ? null : h.detail,
+      prev_text: h.prev_text,
+      stage,
+    });
+  }
+
+  entries.sort((a, b) => (
+    a.created_at === b.created_at
+      ? (a.action === 'created' ? -1 : b.action === 'created' ? 1 : a.id.localeCompare(b.id))
+      : a.created_at.localeCompare(b.created_at)
+  ));
+
+  const users = new Map<string, { id: number | null; name: string; count: number }>();
+  for (const e of entries) {
+    const key = e.user_id == null ? 'null' : String(e.user_id);
+    const current = users.get(key) ?? {
+      id: e.user_id,
+      name: e.user_name || (e.user_id == null ? 'Sistema' : `Usuario ${e.user_id}`),
+      count: 0,
+    };
+    current.count++;
+    if (e.user_name) current.name = e.user_name;
+    users.set(key, current);
+  }
+
+  const phoneKey = contact.phone_key;
+  const resolvedName = phoneKey
+    ? get<{ full_name: string }>('SELECT full_name FROM person_names WHERE phone_key = ?', phoneKey)?.full_name
+      ?? get<{ full_name: string }>(
+        'SELECT full_name FROM person_programs WHERE phone_key = ? AND full_name IS NOT NULL ORDER BY last_at DESC LIMIT 1',
+        phoneKey,
+      )?.full_name
+      ?? contact.name
+    : contact.name;
+  const ci = phoneKey
+    ? get<{ ci: string }>('SELECT ci FROM person_ci WHERE phone_key = ?', phoneKey)?.ci ?? null
+    : null;
+  const manualProgram = phoneKey
+    ? get<{ programa: string }>('SELECT programa FROM person_manual_programs WHERE phone_key = ?', phoneKey)?.programa ?? null
+    : null;
+  const programas = phoneKey
+    ? manualProgram
+      ? [manualProgram]
+      : all<{ programa: string }>(
+          'SELECT programa FROM person_programs WHERE phone_key = ? ORDER BY last_at DESC',
+          phoneKey,
+        ).map((r) => r.programa)
+    : [];
+
+  return {
+    contact: {
+      id: contact.id,
+      name: resolvedName,
+      phone: contact.phone,
+      email: contact.email,
+      company: contact.company,
+      ci,
+      programas: [...new Set(programas.filter(Boolean))],
+      session_id: contact.session_id,
+      chat_id: contact.chat_id,
+      needs_profile: !resolvedName || programas.length === 0,
+    },
+    users: [...users.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'es')),
+    entries,
+  };
+}
+
 export interface GlobalNote extends ContactNoteWithAuthor {
   deleted_by_name: string | null;
   contact_name: string | null;
   contact_phone: string | null;
   chat_id: string;
   session_id: string;
+  /** Último usuario que movió la nota de columna y cuándo. */
+  last_stage_by?: string | null;
+  last_stage_at?: string | null;
 }
 
 /**
@@ -1042,13 +1435,16 @@ export function listAllNotes(opts: {
     // del texto buscado se toman literales.
     const like = `%${foldText(opts.q).replace(/[!%_]/g, (c) => '!' + c)}%`;
     const f = (col: string) => `fold(${col}) LIKE ? ESCAPE '!'`;
+    const nameCol = `COALESCE(${NOTE_PERSON_NAME_SQL}, '')`;
+    const progCol = `COALESCE(${NOTE_PROGRAMA_EXPR}, '')`;
+    const ciCol = `COALESCE(${NOTE_CI_EXPR}, '')`;
     where.push(`(${f("COALESCE(n.note_text,'')")} OR ${f("COALESCE(ct.name,'')")} OR ${f("COALESCE(ct.phone,'')")}
-      OR ${f('ct.chat_id')} OR ${f("COALESCE(a.name,'')")}
+      OR ${f('ct.chat_id')} OR ${f(nameCol)} OR ${f(progCol)} OR ${f(ciCol)} OR ${f("COALESCE(a.name,'')")}
       OR EXISTS (SELECT 1 FROM contact_note_assignees qa JOIN users qau ON qau.id = qa.user_id
                   WHERE qa.note_id = n.id AND ${f('qau.name')})
       OR EXISTS (SELECT 1 FROM contact_note_tags qt JOIN note_tags t ON t.id = qt.tag_id
                   WHERE qt.note_id = n.id AND ${f('t.name')}))`);
-    params.push(like, like, like, like, like, like, like);
+    params.push(like, like, like, like, like, like, like, like, like, like);
   }
 
   const limit = Math.min(Math.max(opts.limit ?? 500, 1), 1000);
@@ -1062,12 +1458,9 @@ export function listAllNotes(opts: {
   const rows = all<GlobalNote>(
     `SELECT n.*, u.name AS author_name, d.name AS done_by_name, x.name AS deleted_by_name, a.name AS assigned_name,
             a.esam_area AS assigned_area, u.esam_area AS author_area, ab.name AS assigned_by_name, cb.name AS contacted_by_name,
-            COALESCE(
-              (SELECT pn.full_name FROM person_names pn WHERE pn.phone_key = COALESCE(ct.phone_key, ct.chat_id)),
-              (SELECT pp.full_name FROM person_programs pp WHERE pp.phone_key = ct.phone_key AND pp.full_name IS NOT NULL
-                ORDER BY pp.last_at DESC LIMIT 1),
-              ct.name) AS contact_name, ct.phone AS contact_phone, ct.chat_id AS chat_id, ct.session_id AS session_id,
-            s.name AS session_name, COALESCE(s.phone, s.expected_phone) AS session_phone
+            ${NOTE_CONTACT_NAME_SQL}, ct.phone AS contact_phone, ct.chat_id AS chat_id, ct.session_id AS session_id,
+            s.name AS session_name, COALESCE(s.phone, s.expected_phone) AS session_phone,
+            ${NOTE_PROGRAMA_SQL}, ${NOTE_CI_SQL}
        FROM contact_notes n
        LEFT JOIN users u ON u.id = n.user_id
        LEFT JOIN users d ON d.id = n.done_by
@@ -1102,21 +1495,15 @@ export function listPersonalNotes(
   }
   if (opts.q) {
     const like = `%${foldText(opts.q).replace(/[!%_]/g, (c) => '!' + c)}%`;
-    const f = (col: string) => `fold(${col}) LIKE ? ESCAPE '!'`;
-    where.push(`(${f("COALESCE(n.note_text,'')")} OR ${f("COALESCE(ct.name,'')")}
-      OR ${f("COALESCE(ct.phone,'')")} OR ${f('ct.chat_id')})`);
-    params.push(like, like, like, like);
+    noteSearchClause(like, where, params);
   }
   const limit = Math.min(Math.max(opts.limit ?? 500, 1), 1000);
   const rows = all<GlobalNote>(
     `SELECT n.*, u.name AS author_name, d.name AS done_by_name, x.name AS deleted_by_name, a.name AS assigned_name,
             a.esam_area AS assigned_area, u.esam_area AS author_area, ab.name AS assigned_by_name, cb.name AS contacted_by_name,
-            COALESCE(
-              (SELECT pn.full_name FROM person_names pn WHERE pn.phone_key = COALESCE(ct.phone_key, ct.chat_id)),
-              (SELECT pp.full_name FROM person_programs pp WHERE pp.phone_key = ct.phone_key AND pp.full_name IS NOT NULL
-                ORDER BY pp.last_at DESC LIMIT 1),
-              ct.name) AS contact_name, ct.phone AS contact_phone, ct.chat_id AS chat_id, ct.session_id AS session_id,
-            s.name AS session_name, COALESCE(s.phone, s.expected_phone) AS session_phone
+            ${NOTE_CONTACT_NAME_SQL}, ct.phone AS contact_phone, ct.chat_id AS chat_id, ct.session_id AS session_id,
+            s.name AS session_name, COALESCE(s.phone, s.expected_phone) AS session_phone,
+            ${NOTE_PROGRAMA_SQL}, ${NOTE_CI_SQL}, ${NOTE_STAGE_META_SQL}
        FROM contact_notes n
        LEFT JOIN users u ON u.id = n.user_id
        LEFT JOIN users d ON d.id = n.done_by
@@ -1132,6 +1519,54 @@ export function listPersonalNotes(
       LIMIT ?`,
     ...params,
     limit,
+  );
+  return withTags(rows);
+}
+
+/**
+ * Notas de una sub-agenda compartida: incluye las de todas las personas con
+ * acceso al tablero (no se filtra por autor). El permiso se valida antes.
+ */
+export function listNotesByBoard(
+  boardId: number,
+  opts: { q?: string | null; limit?: number } = {},
+): GlobalNote[] {
+  const where: string[] = ['n.deleted_at IS NULL', 'n.personal = 1', 'n.agenda_board_id = ?'];
+  const params: unknown[] = [boardId];
+  if (opts.q) {
+    const like = `%${foldText(opts.q).replace(/[!%_]/g, (c) => '!' + c)}%`;
+    noteSearchClause(like, where, params);
+  }
+  const limit = Math.min(Math.max(opts.limit ?? 500, 1), 1000);
+  const rows = all<GlobalNote>(
+    `${NOTE_SELECT}
+      WHERE ${where.join(' AND ')}
+      ORDER BY (n.done_at IS NOT NULL), COALESCE(n.due_at, '9999-12-31'),
+               COALESCE(n.due_time, '99:99'), n.created_at DESC
+      LIMIT ?`,
+    ...params,
+    limit,
+  );
+  return withTags(rows);
+}
+
+export interface CiteNote extends GlobalNote {
+  /** Sub-agenda y columna donde está la tarjeta. */
+  board_name: string | null;
+  stage_name: string | null;
+}
+
+/** Notas privadas que tienen asignado un cite, con su sub-agenda y columna. */
+export function listNotesByCite(citeId: number): CiteNote[] {
+  const rows = all<CiteNote>(
+    `SELECT q.*,
+        (SELECT b.name FROM agenda_boards b WHERE b.id = q.agenda_board_id) AS board_name,
+        (SELECT s.name FROM agenda_stages s WHERE s.id = q.agenda_stage_id) AS stage_name
+       FROM (${NOTE_SELECT}
+         WHERE n.personal = 1 AND n.deleted_at IS NULL AND n.cite_folio_id = ?
+       ) q
+      ORDER BY q.created_at DESC, q.id DESC`,
+    citeId,
   );
   return withTags(rows);
 }

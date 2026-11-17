@@ -21,6 +21,11 @@
     mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-bs-theme'] });
   })();
 
+  /** Normaliza texto para comparar/buscar sin mayúsculas ni acentos. */
+  function foldText(value) {
+    return String(value == null ? '' : value).normalize('NFD').replace(/\p{Mn}/gu, '').toLowerCase();
+  }
+
   // Auto-ocultar alertas Bootstrap.
   document.querySelectorAll('[data-auto-hide]').forEach(function (el) {
     setTimeout(function () {
@@ -149,6 +154,55 @@
     return linkifyHtml(waFormatHtml(escapeHtml(text)));
   }
 
+  /** Cuerpo original (con @LID) para poder pintar las menciones con nombre/foto. */
+  function messageText(msg) {
+    return msg && msg.body_raw != null ? msg.body_raw : (msg ? msg.body : '');
+  }
+
+  /** Mención con foto, nombre y teléfono, como en WhatsApp. */
+  function mentionChipHtml(info, ctx) {
+    var name = String((info && info.name) || '').trim();
+    var phone = String((info && info.phone) || '').replace(/\D+/g, '');
+    var token = String((info && info.token) || '');
+    var label = name || (phone ? fmtPhone(phone) : token);
+    var session = ctx && typeof ctx.sessionId === 'function' ? ctx.sessionId() : '';
+    var jid = String((info && info.jid) || '');
+    var chatId = phone ? phone + '@c.us' : jid;
+    var photo = session && jid
+      ? '/inbox/participant-avatar/' + encodeURIComponent(session) + '/' + encodeURIComponent(jid)
+      : '';
+    var title = '@' + label + (phone && name ? ' · ' + fmtPhone(phone) : '');
+    var attrs = chatId
+      ? ' data-mention-chat="' + escapeHtml(chatId) + '" data-mention-name="' + escapeHtml(label) + '"'
+      : '';
+    return '<button type="button" class="wa-mention" title="' + escapeHtml(title) + '"' + attrs + '>' +
+      avatarHtml(label, 'wa-mention-av', photo) +
+      '<span class="wa-mention-txt"><span class="wa-mention-name">@' + escapeHtml(label) + '</span>' +
+      (phone && name ? '<span class="wa-mention-phone">' + escapeHtml(fmtPhone(phone)) + '</span>' : '') +
+      '</span></button>';
+  }
+
+  /** Pinta el cuerpo reemplazando únicamente los tokens de las menciones. */
+  function waMentionHtml(text, mentions, ctx) {
+    var byToken = {};
+    (mentions || []).forEach(function (m) {
+      if (m && m.token) byToken[String(m.token)] = m;
+    });
+    var chips = [];
+    var protectedText = String(text == null ? '' : text).replace(/@(\d{8,20})/g, function (all, token) {
+      var info = byToken[token];
+      if (!info) return all;
+      chips.push(info);
+      return '\u0002' + (chips.length - 1) + '\u0002';
+    });
+    var html = linkifyHtml(waFormatHtml(escapeHtml(protectedText)));
+    // Centinela interno que no puede venir en un mensaje real.
+    // eslint-disable-next-line no-control-regex
+    return html.replace(/\u0002(\d+)\u0002/g, function (_m, i) {
+      return mentionChipHtml(chips[Number(i)], ctx);
+    });
+  }
+
   // Quién reaccionó: nombre y número. Se resuelve en el servidor; si el dato es
   // viejo (solo llegó el JID) se muestra el número del JID como respaldo.
   function reactionWho(r) {
@@ -192,12 +246,16 @@
     if (diff < 3600) return Math.floor(diff / 60) + 'm';
     if (diff < 86400) return Math.floor(diff / 3600) + 'h';
     if (diff < 604800) return Math.floor(diff / 86400) + 'd';
-    try { return new Date(iso).toLocaleDateString(); } catch (e) { return ''; }
+    try {
+      return new Date(iso).toLocaleDateString('es-BO', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    } catch (e) { return ''; }
   }
 
   function dateKey(iso) {
     var d = new Date(iso);
-    return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
+    // Clave por día local (no UTC): evita separadores duplicados o corridos
+    // en mensajes de la noche.
+    return isNaN(d.getTime()) ? '' : d.toLocaleDateString('sv-SE');
   }
 
   function dayLabel(iso) {
@@ -209,8 +267,10 @@
     var same = function (a, b) { return a.toDateString() === b.toDateString(); };
     if (same(d, today)) return 'Hoy';
     if (same(d, yesterday)) return 'Ayer';
-    try { return d.toLocaleDateString('es', { weekday: 'long', day: 'numeric', month: 'long' }); }
-    catch (e) { return ''; }
+    try {
+      // Siempre con año: la conversación puede tener mensajes de otras gestiones.
+      return d.toLocaleDateString('es-BO', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+    } catch (e) { return ''; }
   }
 
   var AV_CLASSES = ['av-0', 'av-1', 'av-2', 'av-3', 'av-4', 'av-5', 'av-6', 'av-7'];
@@ -621,6 +681,13 @@
     var isOut = msg.direction === 'out';
     var row = document.createElement('div');
     row.className = 'bubble-row ' + (isOut ? 'out' : 'in');
+    if (msg.revoked_at) {
+      row.classList.add('is-revoked');
+      row.setAttribute('data-revoked-scope', msg.revoked_scope || 'revoke');
+      row.title = msg.revoked_scope === 'delete'
+        ? 'Mensaje eliminado del teléfono; el contenido se conserva en Seguimiento ESAM'
+        : 'Mensaje eliminado en WhatsApp; el contenido se conserva en Seguimiento ESAM';
+    }
     row.setAttribute('data-id', msg.id);
     row.setAttribute('data-day', dateKey(msg.occurred_at));
 
@@ -675,6 +742,16 @@
       (cHasMedia && (ctype === 'image' || ctype === 'video') ? ' has-media' : '');
     // El nombre de quien escribe va dentro de la burbuja, como en WhatsApp.
     if (author) bubble.appendChild(author);
+
+    // El mensaje se conserva aunque se haya borrado en WhatsApp: se avisa con
+    // un distintivo y un color distinto para no confundirlo con uno vigente.
+    if (msg.revoked_at) {
+      var revoked = document.createElement('div');
+      revoked.className = 'bubble-revoked';
+      revoked.innerHTML = '<span class="ri-delete-bin-6-line" aria-hidden="true"></span> ' +
+        (msg.revoked_scope === 'delete' ? 'Eliminado del teléfono' : 'Eliminado en WhatsApp');
+      bubble.appendChild(revoked);
+    }
 
     // Cita (clic para ir al mensaje original + contacto para abrir su chat).
     if (msg.reply_to) {
@@ -871,13 +948,14 @@
     var type = msg.content_type || 'text';
     var status = msg.media_status || (msg.media_path ? 'ok' : null);
     var hasMedia = status === 'ok' || status === 'pending';
+    var textBody = messageText(msg);
     var murl = '/media/' + msg.id;
     if (MEDIA_LABELS[type] && (status === 'missing' || status === 'unfetched')) {
       frag.appendChild(mediaUnavailable(msg, type));
-      if (msg.body && type !== 'sticker') frag.appendChild(paragraph(msg.body, ctx));
+      if (textBody && type !== 'sticker') frag.appendChild(paragraph(textBody, ctx, msg.mentions));
     } else if ((type === 'image' || type === 'sticker' || type === 'video') && hasMedia) {
       frag.appendChild(buildMediaNode(msg, type, ctx));
-      if (msg.body && type !== 'sticker') frag.appendChild(paragraph(msg.body, ctx));
+      if (textBody && type !== 'sticker') frag.appendChild(paragraph(textBody, ctx, msg.mentions));
     } else if (type === 'audio' && hasMedia) {
       frag.appendChild(buildMediaNode(msg, type, ctx));
       if (msg.transcription) {
@@ -888,7 +966,7 @@
       }
     } else if (type === 'document' && hasMedia && isPdf(msg)) {
       frag.appendChild(buildPdfCard(msg, murl));
-      if (msg.body && msg.media_filename) frag.appendChild(paragraph(msg.body, ctx));
+      if (textBody && msg.media_filename) frag.appendChild(paragraph(textBody, ctx, msg.mentions));
     } else if (type === 'document' && hasMedia) {
       var fileName = msg.media_filename || msg.body || 'Documento';
       var doc = document.createElement('div');
@@ -901,17 +979,21 @@
         '<a class="doc-download" href="' + murl + '" download="' + escapeHtml(fileName) + '" title="Descargar">' +
           '<span class="ri-download-2-line"></span></a>';
       frag.appendChild(doc);
-      if (msg.body && msg.media_filename) frag.appendChild(paragraph(msg.body, ctx));
+      if (textBody && msg.media_filename) frag.appendChild(paragraph(textBody, ctx, msg.mentions));
     } else if (MEDIA_LABELS[type]) {
       // Adjunto sin archivo ni forma de recuperarlo (mensajes antiguos).
       frag.appendChild(mediaUnavailable(msg, type));
-      if (msg.body && type !== 'sticker') frag.appendChild(paragraph(msg.body, ctx));
+      if (textBody && type !== 'sticker') frag.appendChild(paragraph(textBody, ctx, msg.mentions));
     } else if (type === 'contact') {
       frag.appendChild(buildContactCards(msg, ctx));
     } else if (type === 'poll') {
       frag.appendChild(buildPollCard(msg));
+    } else if (type === 'text' && mentionsOnly(textBody, msg.mentions)) {
+      // Un mensaje que solo menciona a alguien se muestra como tarjeta de
+      // contacto, igual que un contacto compartido.
+      frag.appendChild(buildMentionCards(msg.mentions, ctx));
     } else {
-      frag.appendChild(paragraph(msg.body != null ? msg.body : '[' + type + ']', ctx));
+      frag.appendChild(paragraph(textBody != null && textBody !== '' ? textBody : '[' + type + ']', ctx, msg.mentions));
     }
     return frag;
   }
@@ -935,28 +1017,54 @@
     return digits ? digits + '@s.whatsapp.net' : '';
   }
 
+  /** Menciones sueltas (`@LID`) se muestran como tarjeta de contacto. */
+  function mentionsOnly(text, mentions) {
+    if (!mentions || !mentions.length) return false;
+    var rest = String(text || '')
+      .replace(/@\d{8,20}/g, '')
+      .replace(/[\s.,;:!?()[\]{}'"“”‘’\-–—]+/g, '');
+    return rest === '';
+  }
+
+  function buildMentionCards(mentions, ctx) {
+    var contacts = (mentions || []).map(function (m) {
+      return {
+        name: m.name || (m.phone ? fmtPhone(m.phone) : ('@' + (m.token || 'Contacto'))),
+        phone: m.phone || null,
+        jid: m.jid || null,
+      };
+    });
+    return buildContactCards({ meta: { contacts: contacts }, body: '' }, ctx);
+  }
+
   function buildContactCards(msg, ctx) {
     var wrap = document.createElement('div');
     wrap.className = 'wa-contact-list';
+    var session = ctx && typeof ctx.sessionId === 'function' ? ctx.sessionId() : '';
     contactCardList(msg).forEach(function (contact) {
       var phone = contact.phone ? String(contact.phone).replace(/\D+/g, '') : '';
       var name = contact.name || (phone ? fmtPhone(phone) : 'Contacto');
+      var jid = contact.jid || contactJid(phone);
+      var photo = session && jid
+        ? '/inbox/participant-avatar/' + encodeURIComponent(session) + '/' + encodeURIComponent(jid)
+        : '';
       var card = document.createElement('div');
-      card.className = 'wa-contact-card' + (phone ? ' is-clickable' : '');
-      card.innerHTML = '<span class="wa-contact-avatar">' + avatarHtml(name, 'avatar-sm') + '</span>' +
+      card.className = 'wa-contact-card' + (jid ? ' is-clickable' : '');
+      card.innerHTML = '<span class="wa-contact-avatar">' + avatarHtml(name, 'avatar-sm', photo) + '</span>' +
         '<span class="wa-contact-info">' +
           '<span class="wa-contact-name">' + escapeHtml(name) + '</span>' +
           (phone
             ? '<span class="wa-contact-phone"><span class="ri-whatsapp-line" aria-hidden="true"></span> ' + escapeHtml(fmtPhone(phone)) + '</span>'
-            : '<span class="wa-contact-phone is-missing">Número no disponible</span>') +
+            : jid
+              ? '<span class="wa-contact-phone"><span class="ri-whatsapp-line" aria-hidden="true"></span> Contacto de WhatsApp</span>'
+              : '<span class="wa-contact-phone is-missing">Número no disponible</span>') +
         '</span>' +
-        (phone
+        (jid
           ? '<button type="button" class="wa-contact-open" title="Abrir conversación con ' + escapeHtml(name) + '">' +
               '<span class="ri-chat-3-line" aria-hidden="true"></span><span>Abrir chat</span>' +
             '</button>'
           : '');
-      if (phone) {
-        var jid = contactJid(phone);
+      if (jid) {
         card.addEventListener('click', function (ev) {
           if (ev.target.closest && ev.target.closest('button')) return;
           ctx.onOpenContact(jid, name);
@@ -1093,11 +1201,22 @@
     return card;
   }
 
-  function paragraph(text, ctx) {
+  function paragraph(text, ctx, mentions) {
     var p = document.createElement('span');
     p.className = 'bubble-text';
     // Formato de WhatsApp (*negrita*, _cursiva_, ~tachado~, ```monospace```).
-    p.innerHTML = waRichHtml(text);
+    p.innerHTML = (mentions && mentions.length)
+      ? waMentionHtml(text, mentions, ctx)
+      : waRichHtml(text);
+    if (mentions && mentions.length && ctx && ctx.onOpenContact) {
+      Array.prototype.forEach.call(p.querySelectorAll('.wa-mention[data-mention-chat]'), function (btn) {
+        btn.addEventListener('click', function (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          ctx.onOpenContact(btn.getAttribute('data-mention-chat'), btn.getAttribute('data-mention-name'));
+        });
+      });
+    }
     if (ctx && ctx.onOpenContact) linkifyPhones(p, ctx);
     enhanceYoutube(p);
     return p;
@@ -1110,6 +1229,8 @@
     var nodes = [];
     while (walker.nextNode()) nodes.push(walker.currentNode);
     nodes.forEach(function (node) {
+      // El teléfono de una mención ya se muestra en su chip: no se convierte en enlace.
+      if (node.parentElement && node.parentElement.closest('.wa-mention')) return;
       var text = node.nodeValue || '';
       re.lastIndex = 0;
       if (!re.test(text)) return;
@@ -2212,6 +2333,68 @@
       return function () { return chosen.slice(); };
     }
 
+    /** Imagen adjunta a una nota (se ve en la ficha y en /notes). */
+    function noteImageHtml(n) {
+      if (!n.image_path) return '';
+      var url = '/inbox/notes/' + n.id + '/image';
+      return '<a class="nk-image js-lightbox" href="' + url + '" title="Ver la imagen de la nota">' +
+        '<img src="' + url + '" alt="Imagen de la nota" loading="lazy" decoding="async"></a>';
+    }
+
+    /** Primera imagen del portapapeles al pegar (Ctrl+V), si hay. */
+    function imagePasteFile(ev) {
+      var dt = ev.clipboardData;
+      if (!dt) return null;
+      var file = null;
+      var i;
+      if (dt.items) {
+        for (i = 0; i < dt.items.length; i++) {
+          if (dt.items[i].kind === 'file' && /^image\//.test(dt.items[i].type)) { file = dt.items[i].getAsFile(); break; }
+        }
+      }
+      if (!file && dt.files) {
+        for (i = 0; i < dt.files.length; i++) {
+          if (/^image\//.test(dt.files[i].type)) { file = dt.files[i]; break; }
+        }
+      }
+      return file;
+    }
+
+    var NOTE_IMAGE_MAX_BYTES = 15 * 1024 * 1024;
+
+    function validNoteImage(file) {
+      if (!file) return false;
+      if (!/^image\/(jpeg|jpg|png|webp|gif)$/i.test(file.type || '')) {
+        toast('La imagen debe ser JPG, PNG, WEBP o GIF.', true);
+        return false;
+      }
+      if (file.size > NOTE_IMAGE_MAX_BYTES) {
+        toast('La imagen es demasiado grande (máx. 15 MB).', true);
+        return false;
+      }
+      return true;
+    }
+
+    function uploadNoteImage(id, file) {
+      var fd = new FormData();
+      fd.append('image', file);
+      return fetch('/inbox/notes/' + id + '/image', {
+        method: 'POST',
+        body: fd,
+        headers: { 'Accept': 'application/json' },
+        credentials: 'same-origin',
+      }).then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (d) {
+          if (!r.ok) throw new Error(d.error || 'No se pudo guardar la imagen.');
+          return d;
+        });
+      });
+    }
+
+    function deleteNoteImage(id) {
+      return jsonApi('/inbox/notes/' + id + '/image', 'DELETE');
+    }
+
     function cardHtml(n, opts) {
       opts = opts || {};
       var st = dueState(n);
@@ -2241,6 +2424,10 @@
         ? '<span class="nk-pin-badge"><span class="ri-pushpin-2-fill" aria-hidden="true"></span>Importante</span>'
         : '';
       pinBadge += prospectBadge(n, !!opts.showAdvisor);
+      if (n.person_ci) {
+        pinBadge += '<span class="nk-ci-badge" title="Carnet de identidad"><span class="ri-id-card-line" aria-hidden="true"></span>CI ' +
+          escapeHtml(n.person_ci) + '</span>';
+      }
       if (n.personal) {
         pinBadge += '<span class="nk-personal-badge" title="Nota privada: solo la ves vos en Mi agenda">' +
           '<span class="ri-lock-line" aria-hidden="true"></span>Solo para mí</span>';
@@ -2249,6 +2436,22 @@
         var agendaBadgeTitle = 'Agregada a Mi agenda' + (n.agenda_board_name ? ' · ' + n.agenda_board_name : '');
         pinBadge += '<span class="nk-agenda-badge" title="' + escapeHtml(agendaBadgeTitle) + '">' +
           '<span class="ri-calendar-check-line" aria-hidden="true"></span>En mi agenda</span>';
+      }
+      // Desde la ficha se puede saltar al apartado donde quedó registrada:
+      // la nota del equipo en «Notas y tareas» o la copia en Mi agenda.
+      if (opts.showOpenLinks) {
+        if (!n.personal) {
+          pinBadge += '<a class="nk-jump is-notes" href="/notes/' + n.id + '" title="Abrir esta nota en Notas y tareas">' +
+            '<span class="ri-file-list-3-line" aria-hidden="true"></span>Abrir en Notas</a>';
+        }
+        var agendaId = n.agenda_note_id || (n.personal ? n.id : 0);
+        if (agendaId) {
+          var agendaParams = [];
+          if (n.agenda_board_id) agendaParams.push('board=' + n.agenda_board_id);
+          agendaParams.push('note=' + agendaId);
+          pinBadge += '<a class="nk-jump is-agenda" href="/agenda?' + agendaParams.join('&') + '" title="Abrir esta nota en Mi agenda">' +
+            '<span class="ri-calendar-check-line" aria-hidden="true"></span>Ver en Mi agenda</a>';
+        }
       }
       var noteAssignees = Array.isArray(n.assignees) && n.assignees.length
         ? n.assignees
@@ -2288,7 +2491,11 @@
             '<span class="' + (n.agenda_note_id ? 'ri-calendar-check-line' : 'ri-calendar-todo-line') + '"></span></button>'
         : '';
       var actions = '<button type="button" class="nk-icon nk-hist" title="Ver historial de cambios" aria-label="Ver historial de cambios" aria-expanded="false">' +
-          '<span class="ri-history-line"></span></button>' + agendaAction +
+          '<span class="ri-history-line"></span></button>' +
+        (n.contact_id
+          ? '<button type="button" class="nk-icon nk-contact-hist" data-contact-history="' + n.contact_id + '" data-contact-name="' + escapeHtml(name) +
+              '" title="Historial completo del contacto" aria-label="Historial completo del contacto"><span class="ri-route-line"></span></button>'
+          : '') + agendaAction +
         '<button type="button" class="nk-icon nk-pin' + (n.pinned ? ' on' : '') + '" title="' + pinTitle + '" aria-label="' + pinTitle + '" aria-pressed="' + !!n.pinned + '">' +
           '<span class="' + (n.pinned ? 'ri-pushpin-2-fill' : 'ri-pushpin-2-line') + '"></span></button>' +
         (n.can_edit
@@ -2315,6 +2522,7 @@
             '<div class="nk-view">' +
               (n.note_text ? '<p class="nk-text">' + linkifyHtml(escapeHtml(n.note_text)) + '</p>' : '') +
               (n.audio_path ? '<audio controls preload="none" src="/inbox/notes/' + n.id + '/audio"></audio>' : '') +
+              noteImageHtml(n) +
               ((n.tags && n.tags.length) || due || pinBadge ? '<div class="nk-badges">' + pinBadge + due + tagsHtml(n) + '</div>' : '') +
               '<div class="nk-meta">' + meta + '</div>' +
             '</div>' +
@@ -2337,8 +2545,10 @@
       return '<article class="nk-card nk-trashed" data-id="' + n.id + '">' + contact +
         '<div class="nk-row"><span class="nk-trash-ic ri-delete-bin-6-line" aria-hidden="true"></span>' +
           '<div class="nk-main">' +
-            (n.note_text ? '<p class="nk-text">' + linkifyHtml(escapeHtml(n.note_text)) + '</p>' : '<p class="nk-text"><i>Nota de voz</i></p>') +
+            (n.note_text ? '<p class="nk-text">' + linkifyHtml(escapeHtml(n.note_text)) + '</p>' : '<p class="nk-text"><i>' + (n.image_path ? 'Imagen adjunta' : 'Nota de voz') + '</i></p>') +
+            noteImageHtml(n) +
             '<div class="nk-meta">' +
+              (n.person_ci ? '<span class="nk-meta-item nk-ci"><span class="ri-id-card-line" aria-hidden="true"></span>CI ' + escapeHtml(n.person_ci) + '</span>' : '') +
               '<span class="nk-meta-item"><span class="ri-user-3-line" aria-hidden="true"></span>' + escapeHtml(n.author_name || 'Equipo') + ' · ' + escapeHtml(relTime(n.created_at)) + '</span>' +
               '<span class="nk-meta-item nk-deleted-by"><span class="ri-delete-bin-line" aria-hidden="true"></span>Eliminada por ' +
                 escapeHtml(n.deleted_by_name || 'el equipo') + ' ' + escapeHtml(relTime(n.deleted_at)) + '</span>' +
@@ -2366,14 +2576,25 @@
       template: 'La creó desde una plantilla',
       seen: 'Vio la derivación',
       contacted: 'Confirmó que se comunicó con el contacto',
+      cite: 'Actualizó el cite',
+      image: 'Agregó o cambió la imagen',
+      image_removed: 'Quitó la imagen',
     };
     var HISTORY_ICONS = {
       edited: 'ri-pencil-line', done: 'ri-check-double-line', reopened: 'ri-restart-line',
       pinned: 'ri-pushpin-2-fill', unpinned: 'ri-unpin-line', deleted: 'ri-delete-bin-6-line', restored: 'ri-arrow-go-back-line',
       assigned: 'ri-user-received-2-line',
       snoozed: 'ri-alarm-snooze-line', template: 'ri-file-list-3-line',
-      seen: 'ri-eye-line', contacted: 'ri-phone-line', stage: 'ri-kanban-view',
+      seen: 'ri-eye-line', contacted: 'ri-phone-line', stage: 'ri-kanban-view', cite: 'ri-file-list-3-line',
+      image: 'ri-image-add-line', image_removed: 'ri-image-off-line',
     };
+    // El historial de notas muestra el cite aunque el módulo de agenda esté en
+    // otro ámbito: se traduce acá con el mismo criterio.
+    var NOTE_CITE_CONCEPTS = { Inscripcion: 'Inscripción', Matricula: 'Matrícula', Colegiatura: 'Colegiatura', Certificacion: 'Certificación' };
+    function noteCiteConceptLabel(concepto) {
+      var raw = String(concepto || '').split(',')[0].trim();
+      return NOTE_CITE_CONCEPTS[raw] || raw || '';
+    }
 
     // Línea de tiempo: la creación sale de la propia nota; el resto, del historial.
     function historyHtml(n, entries) {
@@ -2383,8 +2604,32 @@
           ' <span class="nk-h-when" title="' + escapeHtml(fmtDateTime(when)) + '">' + escapeHtml(relTime(when)) + '</span>' +
           (extra || '') + '</div></li>';
       };
-      var rows = [item('ri-add-circle-line', n.author_name, 'Registró la nota', n.created_at)];
+      // Los movimientos de Mi agenda guardan un JSON con la columna de origen,
+      // la de destino y el detalle escrito por quien movió la nota.
+      var stageDetail = function (e) {
+        if (e.action !== 'stage' || !e.detail) return null;
+        try {
+          var d = JSON.parse(e.detail);
+          return d && typeof d === 'object' ? d : null;
+        } catch (_) {
+          return null;
+        }
+      };
+      var initial = null;
+      for (var i = 0; i < entries.length; i++) {
+        var d = stageDetail(entries[i]);
+        if (d && !d.from && d.to) { initial = { entry: entries[i], data: d }; break; }
+      }
+      var createdWhat = 'Registró la nota';
+      var createdExtra = '';
+      if (initial) {
+        createdWhat += ' en «' + initial.data.to + '»';
+        if (initial.data.toBoard) createdWhat += ' · ' + initial.data.toBoard;
+        createdExtra = '<div class="nk-h-sub">' + escapeHtml(fmtDateTime(n.created_at)) + '</div>';
+      }
+      var rows = [item('ri-add-circle-line', n.author_name, createdWhat, n.created_at, createdExtra)];
       entries.forEach(function (e) {
+        if (initial && e.id === initial.entry.id) return;
         var extra = '';
         if (e.action === 'edited') {
           var prev = [];
@@ -2397,8 +2642,24 @@
         if (e.action === 'assigned') what = e.detail ? 'Asignó la tarea a ' + e.detail : 'Quitó el responsable';
         if (e.action === 'snoozed' && e.detail) what = 'Pospuso el recordatorio para ' + e.detail;
         if (e.action === 'template' && e.detail) what = 'La creó desde la plantilla «' + e.detail + '»';
-        if (e.action === 'stage') what = 'La movió a «' + (e.detail || 'otra etapa') + '»';
+        if (e.action === 'stage') {
+          var move = stageDetail(e);
+          if (move) {
+            what = move.from
+              ? 'Movió la nota de «' + move.from + '» a «' + move.to + '»'
+              : 'Ubicó la nota en «' + move.to + '»';
+            if (move.fromBoard && move.toBoard && move.fromBoard !== move.toBoard) {
+              what += ' · de ' + move.fromBoard + ' a ' + move.toBoard;
+            }
+            extra = '<div class="nk-h-before"><span class="nk-h-label">Detalle</span><span>' +
+              escapeHtml(move.comment || 'Sin detalle') + '</span></div>' +
+              '<div class="nk-h-sub">' + escapeHtml(fmtDateTime(e.created_at)) + '</div>';
+          } else {
+            what = 'La movió a «' + (e.detail || 'otra etapa') + '»';
+          }
+        }
         if (e.action === 'contacted' && e.detail) extra = '<div class="nk-h-before"><span class="nk-h-label">Resultado</span><span>' + escapeHtml(e.detail) + '</span></div>';
+        if ((e.action === 'image' || e.action === 'image_removed') && e.detail) what = e.detail;
         rows.push(item(HISTORY_ICONS[e.action] || 'ri-record-circle-line', e.user_name, what, e.created_at, extra));
       });
       return '<div class="nk-h-head">Historial</div><ol class="nk-h-list">' + rows.join('') + '</ol>';
@@ -2458,7 +2719,21 @@
     }
 
     function editorHtml(n) {
+      var imgUrl = n.image_path ? '/inbox/notes/' + n.id + '/image' : '';
       return '<textarea class="form-control nk-textarea nk-edit-text" rows="3" maxlength="4000">' + escapeHtml(n.note_text || '') + '</textarea>' +
+        '<div class="nk-field-label">Imagen <span class="nk-field-hint">· Ctrl+V o archivo · máx. 15 MB</span></div>' +
+        '<div class="nk-image-edit">' +
+          (imgUrl
+            ? '<div class="nk-image-existing" data-existing>' +
+                '<a class="js-lightbox" href="' + imgUrl + '" title="Ver imagen actual"><img src="' + imgUrl + '" alt="Imagen actual de la nota"></a>' +
+                '<button type="button" class="btn btn-sm btn-light nk-image-remove-existing">Quitar imagen</button>' +
+              '</div>'
+            : '') +
+          '<div class="nk-image-new" hidden></div>' +
+          '<input type="file" class="nk-image-input" accept="image/*" hidden />' +
+          '<button type="button" class="btn btn-sm btn-light nk-image-pick"><span class="ri-image-add-line" aria-hidden="true"></span> Elegir imagen</button>' +
+          '<div class="nk-hint nk-image-hint">También podés pegar una captura con Ctrl+V.</div>' +
+        '</div>' +
         '<label class="nk-personal-toggle nk-personal-toggle-sm' + (n.personal ? ' on' : '') + '">' +
           '<input type="checkbox" class="nk-personal-input nk-edit-personal"' + (n.personal ? ' checked' : '') + ' />' +
           '<span class="nk-personal-switch" aria-hidden="true"></span>' +
@@ -2582,18 +2857,95 @@
           editPersonal.addEventListener('change', syncEditPersonal);
           syncEditPersonal();
           var ta = editor.querySelector('.nk-edit-text');
+          var editImageFile = null;
+          var editImageUrl = '';
+          var editImageRemoved = false;
+          var existingImage = editor.querySelector('.nk-image-existing');
+          var newImageBox = editor.querySelector('.nk-image-new');
+          var imageInput = editor.querySelector('.nk-image-input');
+          var imageHint = editor.querySelector('.nk-image-hint');
+          var renderEditImage = function () {
+            if (existingImage) existingImage.hidden = editImageRemoved;
+            if (editImageUrl) {
+              newImageBox.hidden = false;
+              newImageBox.innerHTML = '<a class="js-lightbox" href="' + editImageUrl + '" title="Ver imagen nueva"><img src="' + editImageUrl + '" alt="Imagen nueva"></a>' +
+                '<div class="nk-image-meta">Imagen nueva</div>' +
+                '<button type="button" class="btn btn-sm btn-light nk-image-remove-new">Quitar</button>';
+              newImageBox.querySelector('.nk-image-remove-new').addEventListener('click', function () {
+                if (editImageUrl) URL.revokeObjectURL(editImageUrl);
+                editImageFile = null;
+                editImageUrl = '';
+                renderEditImage();
+              });
+            } else {
+              newImageBox.hidden = true;
+              newImageBox.innerHTML = '';
+            }
+            if (imageHint) {
+              imageHint.textContent = editImageRemoved
+                ? 'La imagen actual se quitará al guardar.'
+                : 'También podés pegar una captura con Ctrl+V (máx. 15 MB).';
+            }
+          };
+          var pickEditImage = function (file) {
+            if (!validNoteImage(file)) return;
+            if (editImageUrl) URL.revokeObjectURL(editImageUrl);
+            editImageFile = file;
+            editImageUrl = URL.createObjectURL(file);
+            editImageRemoved = false;
+            renderEditImage();
+          };
+          var imagePickBtn = editor.querySelector('.nk-image-pick');
+          if (imagePickBtn) imagePickBtn.addEventListener('click', function () { imageInput.click(); });
+          if (imageInput) imageInput.addEventListener('change', function () {
+            if (imageInput.files && imageInput.files[0]) pickEditImage(imageInput.files[0]);
+            imageInput.value = '';
+          });
+          if (existingImage) {
+            var removeExisting = existingImage.querySelector('.nk-image-remove-existing');
+            if (removeExisting) removeExisting.addEventListener('click', function () {
+              editImageRemoved = true;
+              renderEditImage();
+            });
+          }
+          ta.addEventListener('paste', function (ev) {
+            var file = imagePasteFile(ev);
+            if (!file) return;
+            ev.preventDefault();
+            pickEditImage(file);
+          });
+          renderEditImage();
           var close = function () { editor.hidden = true; editor.innerHTML = ''; view.hidden = false; card.classList.remove('editing'); };
           var save = function () {
             var text = ta.value.trim();
-            if (!text && !note.audio_path) { toast('La nota no puede quedar vacía', true); ta.focus(); return; }
+            var hasImage = !!editImageFile || (!!note.image_path && !editImageRemoved);
+            if (!text && !note.audio_path && !hasImage) { toast('La nota no puede quedar vacía', true); ta.focus(); return; }
             var saveBtn = editor.querySelector('.nk-edit-save');
             saveBtn.disabled = true;
-            jsonApi('/inbox/notes/' + id, 'PUT', {
-              text: text, due_at: pickers.due(), due_time: pickers.time(), tag_ids: pickers.tags(),
-              personal: editPersonal.checked,
-              assigned_to: editPersonal.checked ? [] : assignees(),
-            })
-              .then(function (updated) { toast('Nota actualizada'); opts.onChanged(updated, id); })
+            var saveText = function () {
+              return jsonApi('/inbox/notes/' + id, 'PUT', {
+                text: text, due_at: pickers.due(), due_time: pickers.time(), tag_ids: pickers.tags(),
+                personal: editPersonal.checked,
+                assigned_to: editPersonal.checked ? [] : assignees(),
+              });
+            };
+            var chain;
+            if (editImageFile) {
+              // Primero la imagen: así una nota que solo tenía texto puede quedar
+              // vacía de texto sin que la validación la rechace.
+              chain = uploadNoteImage(id, editImageFile).then(saveText);
+            } else if (editImageRemoved && note.image_path) {
+              // Primero el texto: la validación de la imagen mira el texto guardado.
+              chain = saveText().then(function () { return deleteNoteImage(id); });
+            } else {
+              chain = saveText();
+            }
+            chain
+              .then(function (updated) {
+                if (editImageUrl) URL.revokeObjectURL(editImageUrl);
+                toast('Nota actualizada');
+                opts.onChanged(updated, id);
+              })
               .catch(function (e) { saveBtn.disabled = false; toast(e.message, true); });
           };
           editor.querySelector('.nk-edit-cancel').addEventListener('click', close);
@@ -2639,6 +2991,378 @@
       });
     }
 
+    // ── Historial consolidado del contacto (notas + agenda) ────────────────
+    var CONTACT_ACTION_ICONS = {
+      created: 'ri-add-circle-line',
+      edited: 'ri-pencil-line', done: 'ri-check-double-line', reopened: 'ri-restart-line',
+      pinned: 'ri-pushpin-2-fill', unpinned: 'ri-unpin-line', deleted: 'ri-delete-bin-6-line',
+      restored: 'ri-arrow-go-back-line', assigned: 'ri-user-received-2-line',
+      snoozed: 'ri-alarm-snooze-line', template: 'ri-file-list-3-line',
+      seen: 'ri-eye-line', contacted: 'ri-phone-line', stage: 'ri-kanban-view',
+      cite: 'ri-file-list-3-line',
+      image: 'ri-image-add-line', image_removed: 'ri-image-off-line',
+    };
+
+    function openContactHistory(contactId, fallbackName) {
+      if (!contactId) return;
+      var old = document.getElementById('contact-history-dialog');
+      if (old) old.remove();
+      var dlg = document.createElement('dialog');
+      dlg.id = 'contact-history-dialog';
+      dlg.className = 'ch-dialog';
+      dlg.innerHTML = '<div class="ch-box">' +
+        '<div class="ch-head">' +
+          '<div class="ch-head-main">' +
+            '<span class="ch-avatar" aria-hidden="true">?</span>' +
+            '<div class="ch-head-copy">' +
+              '<span class="ch-eyebrow"><span class="ri-route-line" aria-hidden="true"></span> Historial del contacto</span>' +
+              '<h5>Historial</h5>' +
+              '<div class="ch-contact-meta">Cargando…</div>' +
+            '</div>' +
+          '</div>' +
+          '<div class="ch-head-actions">' +
+            '<a class="ch-action-btn ch-open-chat" href="#" hidden><span class="ri-whatsapp-line" aria-hidden="true"></span> Conversación</a>' +
+            '<button type="button" class="ch-action-btn is-primary ch-edit-profile" hidden><span class="ri-user-add-line" aria-hidden="true"></span> Registrar contacto</button>' +
+            '<button type="button" class="ch-close" aria-label="Cerrar"><span class="ri-close-line"></span></button>' +
+          '</div>' +
+        '</div>' +
+        '<div class="ch-stats" hidden></div>' +
+        '<div class="ch-toolbar" hidden>' +
+          '<label class="ch-search"><span class="ri-search-line" aria-hidden="true"></span>' +
+            '<input type="search" placeholder="Buscar por nota, usuario, columna o detalle…" aria-label="Buscar en el historial" /></label>' +
+          '<div class="ch-kinds" role="tablist" aria-label="Tipo de actividad">' +
+            '<button type="button" class="ch-kind on" data-ch-kind="all" role="tab" aria-selected="true">Todo</button>' +
+            '<button type="button" class="ch-kind" data-ch-kind="notes" role="tab" aria-selected="false">Notas</button>' +
+            '<button type="button" class="ch-kind" data-ch-kind="agenda" role="tab" aria-selected="false">Agenda</button>' +
+          '</div>' +
+        '</div>' +
+        '<div class="ch-users" hidden></div>' +
+        '<div class="ch-body"><div class="ch-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Cargando historial…</div></div>' +
+        '<div class="ch-profile" hidden></div>' +
+      '</div>';
+      document.body.appendChild(dlg);
+      document.documentElement.classList.add('nk-assign-open');
+      var close = function () {
+        document.documentElement.classList.remove('nk-assign-open');
+        if (dlg.open) dlg.close();
+        if (dlg.parentNode) dlg.parentNode.removeChild(dlg);
+      };
+      dlg.addEventListener('close', function () {
+        document.documentElement.classList.remove('nk-assign-open');
+        if (dlg.parentNode) dlg.parentNode.removeChild(dlg);
+      });
+      dlg.addEventListener('click', function (ev) { if (ev.target === dlg) close(); });
+      dlg.querySelector('.ch-close').addEventListener('click', close);
+      dlg.showModal();
+
+      var state = { data: null, user: 'all', kind: 'all', q: '' };
+      var body = dlg.querySelector('.ch-body');
+      var chips = dlg.querySelector('.ch-users');
+      var meta = dlg.querySelector('.ch-contact-meta');
+      var stats = dlg.querySelector('.ch-stats');
+      var toolbar = dlg.querySelector('.ch-toolbar');
+      var search = toolbar.querySelector('input[type="search"]');
+      var profileBox = dlg.querySelector('.ch-profile');
+      var openChat = dlg.querySelector('.ch-open-chat');
+      var editBtn = dlg.querySelector('.ch-edit-profile');
+      var title = dlg.querySelector('.ch-head-copy h5');
+
+      var actionText = function (e) {
+        if (e.action === 'created') {
+          return 'Creó la nota' + (e.stage && e.stage.to ? ' en «' + e.stage.to + '»' : '');
+        }
+        if (e.action === 'stage' && e.stage) {
+          var text = e.stage.from
+            ? 'Movió la nota de «' + e.stage.from + '» a «' + e.stage.to + '»'
+            : 'Ubicó la nota en «' + e.stage.to + '»';
+          if (e.stage.fromBoard && e.stage.toBoard && e.stage.fromBoard !== e.stage.toBoard) {
+            text += ' · de ' + e.stage.fromBoard + ' a ' + e.stage.toBoard;
+          }
+          return text;
+        }
+        if (e.action === 'image' || e.action === 'image_removed') return e.detail || HISTORY_LABELS[e.action] || e.action;
+        if (e.action === 'assigned') return e.detail ? 'Asignó la tarea a ' + e.detail : 'Quitó el responsable';
+        if (e.action === 'snoozed' && e.detail) return 'Pospuso el recordatorio para ' + e.detail;
+        if (e.action === 'template' && e.detail) return 'La creó desde la plantilla «' + e.detail + '»';
+        if (e.action === 'contacted' && e.detail) return 'Confirmó contacto: ' + e.detail;
+        if (e.action === 'cite') return e.detail ? 'Actualizó el cite: ' + e.detail : 'Actualizó el cite';
+        if (e.action === 'stage' && e.detail) return 'La movió a «' + e.detail + '»';
+        return HISTORY_LABELS[e.action] || e.action;
+      };
+
+      var isAgenda = function (e) {
+        return e.action === 'stage' || (e.action === 'created' && e.personal === 1);
+      };
+
+      var noteLink = function (e) {
+        if (e.personal) {
+          var params = [];
+          if (e.agenda_board_id) params.push('board=' + e.agenda_board_id);
+          params.push('note=' + e.note_id);
+          return '/agenda?' + params.join('&');
+        }
+        return '/notes/' + e.note_id;
+      };
+
+      var renderHeader = function () {
+        var d = state.data;
+        var c = d.contact || {};
+        var programs = (c.programas || []).filter(Boolean);
+        dlg.querySelector('.ch-avatar').textContent = initials(c.name || fallbackName || c.phone || '?');
+        title.textContent = c.name || fallbackName || 'Contacto sin registrar';
+        meta.innerHTML = (c.phone ? '<span><span class="ri-whatsapp-line" aria-hidden="true"></span>' + escapeHtml(c.phone) + '</span>' : '') +
+          (c.ci ? '<span><span class="ri-id-card-line" aria-hidden="true"></span>CI ' + escapeHtml(c.ci) + '</span>' : '') +
+          (programs.length
+            ? '<span><span class="ri-graduation-cap-line" aria-hidden="true"></span>' + escapeHtml(programs.join(' · ')) + '</span>'
+            : '<span class="is-muted"><span class="ri-plug-line" aria-hidden="true"></span>Sin datos de cronogramas</span>');
+        if (c.chat_id) {
+          openChat.href = '/conversations/' + encodeURIComponent(c.chat_id);
+          openChat.hidden = false;
+        }
+        if (c.session_id && c.chat_id) {
+          editBtn.hidden = false;
+          editBtn.innerHTML = '<span class="' + (c.needs_profile ? 'ri-user-add-line' : 'ri-pencil-line') + '" aria-hidden="true"></span> ' +
+            (c.needs_profile ? 'Registrar contacto' : 'Editar datos');
+        }
+
+        var notes = new Set(d.entries.map(function (e) { return e.note_id; }));
+        var moves = d.entries.filter(function (e) { return e.action === 'stage'; }).length;
+        stats.innerHTML =
+          '<div class="ch-stat"><span class="ri-route-line" aria-hidden="true"></span><b>' + d.entries.length + '</b><small>Registros</small></div>' +
+          '<div class="ch-stat"><span class="ri-sticky-note-line" aria-hidden="true"></span><b>' + notes.size + '</b><small>Notas</small></div>' +
+          '<div class="ch-stat"><span class="ri-kanban-view" aria-hidden="true"></span><b>' + moves + '</b><small>Movimientos de agenda</small></div>' +
+          '<div class="ch-stat"><span class="ri-team-line" aria-hidden="true"></span><b>' + d.users.length + '</b><small>Usuarios</small></div>';
+        stats.hidden = false;
+        toolbar.hidden = false;
+      };
+
+      var filtered = function () {
+        var d = state.data;
+        if (!d) return [];
+        return d.entries.filter(function (e) {
+          if (state.user !== 'all' && String(e.user_id == null ? 'null' : e.user_id) !== state.user) return false;
+          if (state.kind === 'agenda' && !isAgenda(e)) return false;
+          if (state.kind === 'notes' && isAgenda(e)) return false;
+          if (!state.q) return true;
+          var hay = [
+            e.user_name,
+            actionText(e),
+            e.note_text,
+            e.detail,
+            e.stage && [e.stage.from, e.stage.to, e.stage.fromBoard, e.stage.toBoard, e.stage.comment, e.stage.cite, e.stage.citeConcept].join(' '),
+          ].filter(Boolean).join(' ').toLowerCase();
+          return hay.indexOf(state.q) !== -1;
+        });
+      };
+
+      var renderBody = function () {
+        var d = state.data;
+        if (!d) return;
+        var list = filtered();
+        if (!list.length) {
+          var hasFilters = state.user !== 'all' || state.kind !== 'all' || state.q;
+          body.innerHTML = '<div class="ch-empty">' +
+            '<span class="' + (hasFilters ? 'ri-filter-off-line' : 'ri-history-line') + '" aria-hidden="true"></span>' +
+            '<b>' + (hasFilters ? 'Sin resultados con estos filtros' : 'Sin actividad registrada') + '</b>' +
+            '<span>' + (hasFilters ? 'Probá con otro usuario, tipo o búsqueda.' : 'Las notas, cambios y movimientos de agenda aparecerán acá.') + '</span>' +
+            (!hasFilters && d.contact.needs_profile
+              ? '<button type="button" class="btn btn-sm btn-primary ch-empty-action"><span class="ri-user-add-line"></span> Registrar datos del contacto</button>'
+              : '') +
+            '</div>';
+          var emptyAction = body.querySelector('.ch-empty-action');
+          if (emptyAction) emptyAction.addEventListener('click', showProfileForm);
+          return;
+        }
+        var day = '';
+        var html = '<ol class="ch-list">';
+        list.forEach(function (e) {
+          var date = new Date(e.created_at);
+          var dayLabel = isNaN(date.getTime()) ? '' : date.toLocaleDateString('es-BO', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+          if (dayLabel !== day) {
+            day = dayLabel;
+            html += '<li class="ch-day">' + escapeHtml(dayLabel) + '</li>';
+          }
+          var note = String(e.note_text || (e.has_image ? 'Imagen adjunta' : e.has_audio ? 'Nota de voz' : '')).replace(/\s+/g, ' ').trim();
+          if (note.length > 180) note = note.slice(0, 177) + '…';
+          var time = isNaN(date.getTime()) ? '' : date.toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+          var tags = (e.personal ? '<span class="ch-badge is-personal"><span class="ri-lock-line" aria-hidden="true"></span>Mi agenda</span>' : '') +
+            (e.has_image ? '<span class="ch-badge"><span class="ri-image-line" aria-hidden="true"></span>Imagen</span>' : '') +
+            (e.has_audio ? '<span class="ch-badge"><span class="ri-mic-line" aria-hidden="true"></span>Audio</span>' : '');
+          var tone = e.action === 'stage' ? 'is-stage' : e.action === 'created' ? 'is-created' : (e.action === 'image' || e.action === 'image_removed') ? 'is-image' : '';
+          html += '<li class="ch-item ' + tone + '">' +
+            '<span class="ch-ic" aria-hidden="true"><i class="' + (CONTACT_ACTION_ICONS[e.action] || 'ri-record-circle-line') + '"></i></span>' +
+            '<div class="ch-main">' +
+              '<div class="ch-action"><b>' + escapeHtml(e.user_name || 'Sistema') + '</b> ' + escapeHtml(actionText(e)) + '</div>' +
+              (e.stage && e.stage.cite ? '<div class="ch-comment"><span>Cite</span>Cite ' + escapeHtml(e.stage.cite) +
+                (e.stage.citeConcept ? ' · ' + escapeHtml(noteCiteConceptLabel(e.stage.citeConcept)) : '') + '</div>' : '') +
+              (e.action === 'cite' && e.detail ? '<div class="ch-comment"><span>Cite</span>' + escapeHtml(e.detail) + '</div>' : '') +
+              (e.stage && e.stage.comment ? '<div class="ch-comment"><span>Detalle</span>' + escapeHtml(e.stage.comment) + '</div>' : '') +
+              (e.action === 'edited' && e.prev_text ? '<div class="ch-comment"><span>Antes decía</span>' + escapeHtml(e.prev_text) + '</div>' : '') +
+              (e.action !== 'created' && note ? '<div class="ch-note">«' + escapeHtml(note) + '»</div>' : '') +
+              '<div class="ch-foot">' +
+                '<time datetime="' + escapeHtml(e.created_at) + '">' + escapeHtml(time) + ' · ' + escapeHtml(fmtDateTime(e.created_at)) + '</time>' +
+                tags +
+                '<a class="ch-link" href="' + noteLink(e) + '">Ver nota <span class="ri-arrow-right-up-line" aria-hidden="true"></span></a>' +
+              '</div>' +
+            '</div></li>';
+        });
+        html += '</ol>';
+        body.innerHTML = html;
+      };
+
+      var renderChips = function () {
+        var d = state.data;
+        var total = d.entries.length;
+        var html = '<button type="button" class="ch-user' + (state.user === 'all' ? ' on' : '') + '" data-ch-user="all">Todos <b>' + total + '</b></button>';
+        d.users.forEach(function (u) {
+          var key = String(u.id == null ? 'null' : u.id);
+          html += '<button type="button" class="ch-user' + (state.user === key ? ' on' : '') + '" data-ch-user="' + key + '">' +
+            '<span class="ch-user-av" aria-hidden="true">' + escapeHtml(initials(u.name || '?')) + '</span>' +
+            escapeHtml(u.name) + ' <b>' + u.count + '</b></button>';
+        });
+        chips.innerHTML = html;
+        chips.hidden = false;
+        Array.prototype.forEach.call(chips.querySelectorAll('[data-ch-user]'), function (btn) {
+          btn.addEventListener('click', function () {
+            state.user = btn.getAttribute('data-ch-user');
+            renderChips();
+            renderBody();
+          });
+        });
+      };
+
+      var showProfileForm = function () {
+        var d = state.data;
+        if (!d) return;
+        var c = d.contact || {};
+        var name = c.name || fallbackName || '';
+        var ci = c.ci || '';
+        var email = c.email || '';
+        var company = c.company || '';
+        var programa = (c.programas && c.programas[0]) || '';
+        profileBox.innerHTML = '<div class="ch-profile-head"><span class="ri-user-add-line" aria-hidden="true"></span>' +
+          '<div><h6>' + (c.needs_profile ? 'Registrar datos del contacto' : 'Editar datos del contacto') + '</h6>' +
+            '<p>Completá los datos que ya tenés. El teléfono queda asociado a esta persona y el CI es opcional.</p></div></div>' +
+          '<div class="ch-profile-grid">' +
+            '<label>Nombre completo<input id="ch-profile-name" maxlength="120" placeholder="Apellidos, Nombres" value="' + escapeHtml(name) + '" /></label>' +
+            '<label>Carnet de identidad <small>opcional</small><input id="ch-profile-ci" maxlength="40" placeholder="Ej.: 12345678 LP" value="' + escapeHtml(ci) + '" /></label>' +
+            '<label>Email<input id="ch-profile-email" type="email" maxlength="160" placeholder="correo@ejemplo.com" value="' + escapeHtml(email) + '" /></label>' +
+            '<label>Empresa<input id="ch-profile-company" maxlength="120" placeholder="Empresa o institución" value="' + escapeHtml(company) + '" /></label>' +
+            '<label>Programa<input id="ch-profile-programa" list="ch-profile-programs" maxlength="160" placeholder="Ej.: Diplomado en…" value="' + escapeHtml(programa) + '" /></label>' +
+            '<label>Teléfono<input value="' + escapeHtml(c.phone || '') + '" readonly /></label>' +
+          '</div>' +
+          '<datalist id="ch-profile-programs"></datalist>' +
+          '<div class="ch-profile-actions"><button type="button" class="btn btn-light btn-sm ch-profile-cancel">Cancelar</button>' +
+            '<button type="button" class="btn btn-primary btn-sm ch-profile-save"><span class="ri-save-3-line"></span> Guardar contacto</button></div>';
+        profileBox.hidden = false;
+        body.hidden = true;
+        toolbar.hidden = true;
+        chips.hidden = true;
+        stats.hidden = true;
+        var nameInput = profileBox.querySelector('#ch-profile-name');
+        var ciInput = profileBox.querySelector('#ch-profile-ci');
+        var emailInput = profileBox.querySelector('#ch-profile-email');
+        var companyInput = profileBox.querySelector('#ch-profile-company');
+        var progInput = profileBox.querySelector('#ch-profile-programa');
+        var progList = profileBox.querySelector('#ch-profile-programs');
+        if (progList) {
+          api('/inbox/programs').then(function (d) {
+            progList.innerHTML = ((d && d.programas) || []).map(function (p) {
+              return '<option value="' + escapeHtml(p) + '"></option>';
+            }).join('');
+          }).catch(function () {});
+        }
+        var restore = function () {
+          profileBox.hidden = true;
+          profileBox.innerHTML = '';
+          body.hidden = false;
+          toolbar.hidden = false;
+          chips.hidden = false;
+          stats.hidden = false;
+        };
+        profileBox.querySelector('.ch-profile-cancel').addEventListener('click', restore);
+        profileBox.querySelector('.ch-profile-save').addEventListener('click', function (ev) {
+          var save = ev.currentTarget;
+          var valueName = nameInput.value.trim();
+          var valueCi = ciInput.value.trim();
+          var valueEmail = emailInput.value.trim();
+          var valueCompany = companyInput.value.trim();
+          var valuePrograma = progInput.value.trim();
+          if (!valueName && !valueCi && !valueEmail && !valueCompany && !valuePrograma) {
+            toast('Registrá al menos un dato del contacto.', true);
+            nameInput.focus();
+            return;
+          }
+          save.disabled = true;
+          jsonApi('/inbox/' + encodeURIComponent(c.session_id) + '/' + encodeURIComponent(c.chat_id) + '/profile', 'PUT', {
+            name: valueName,
+            ci: valueCi,
+            email: valueEmail,
+            company: valueCompany,
+            programa: valuePrograma,
+          })
+            .then(function () {
+              toast('Datos del contacto guardados.');
+              window.dispatchEvent(new CustomEvent('esam:contact-updated', { detail: { contactId: contactId } }));
+              restore();
+              loadHistory();
+            })
+            .catch(function (err) {
+              save.disabled = false;
+              toast((err && err.message) || 'No se pudieron guardar los datos.', true);
+            });
+        });
+        nameInput.focus();
+        nameInput.select();
+      };
+
+      var loadHistory = function () {
+        body.hidden = false;
+        body.innerHTML = '<div class="ch-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Cargando historial…</div>';
+        api('/inbox/contacts/' + contactId + '/history')
+          .then(function (d) {
+            if (!d) throw new Error('No se pudo cargar el historial.');
+            state.data = d;
+            renderHeader();
+            renderChips();
+            renderBody();
+          })
+          .catch(function (err) {
+            body.innerHTML = '<div class="ch-empty is-error"><span class="ri-error-warning-line" aria-hidden="true"></span>' +
+              '<b>No se pudo cargar el historial</b><span>' + escapeHtml(err.message || 'Intentá de nuevo.') + '</span>' +
+              '<button type="button" class="btn btn-sm btn-light ch-retry">Reintentar</button></div>';
+            var retry = body.querySelector('.ch-retry');
+            if (retry) retry.addEventListener('click', loadHistory);
+          });
+      };
+
+      search.addEventListener('input', function () {
+        state.q = search.value.trim().toLowerCase();
+        renderBody();
+      });
+      Array.prototype.forEach.call(toolbar.querySelectorAll('[data-ch-kind]'), function (btn) {
+        btn.addEventListener('click', function () {
+          state.kind = btn.getAttribute('data-ch-kind');
+          Array.prototype.forEach.call(toolbar.querySelectorAll('[data-ch-kind]'), function (x) {
+            var on = x === btn;
+            x.classList.toggle('on', on);
+            x.setAttribute('aria-selected', String(on));
+          });
+          renderBody();
+        });
+      });
+      editBtn.addEventListener('click', showProfileForm);
+
+      loadHistory();
+    }
+    // Cualquier botón/enlace con estos atributos abre el historial consolidado.
+    document.addEventListener('click', function (ev) {
+      var trigger = ev.target.closest('[data-contact-history]');
+      if (!trigger) return;
+      ev.preventDefault();
+      openContactHistory(Number(trigger.getAttribute('data-contact-history')), trigger.getAttribute('data-contact-name') || '');
+    });
+
     return {
       dueState: dueState,
       dueLabel: dueLabel,
@@ -2651,6 +3375,11 @@
       fmtDay: fmtDay,
       daysFromToday: daysFromToday,
       cardHtml: cardHtml,
+      noteImageHtml: noteImageHtml,
+      validNoteImage: validNoteImage,
+      imagePasteFile: imagePasteFile,
+      uploadNoteImage: uploadNoteImage,
+      deleteNoteImage: deleteNoteImage,
       prospectOf: prospectOf,
       prospectBadge: prospectBadge,
       vigencia: vigencia,
@@ -2994,6 +3723,9 @@
   function initInbox() {
     var root = document.getElementById('inbox');
     if (!root) return;
+    window.addEventListener('esam:contact-updated', function () {
+      if (state.selectedChat) { loadPerson(); loadNotes(); renderList(); }
+    });
 
     var state = {
       conversations: [],
@@ -3030,6 +3762,7 @@
       memberFilter: '',
       teamArea: '',
       contactTab: 'info',
+      contactEditing: null,
       contactGroups: null,
       contactGroupsLoading: false,
       directory: null,
@@ -3334,7 +4067,10 @@
 
     function inActiveTab(c) {
       if (state.tab === 'contacts') return false;
-      return (state.tab === 'group') === isGroupChat(c);
+      if (state.tab === 'team') return !!c.team;
+      if (state.tab === 'group') return isGroupChat(c);
+      if (state.tab === 'individual') return !isGroupChat(c) && !c.team;
+      return false;
     }
 
     // Contador del menú lateral (Conversaciones): se recalcula con la lista en
@@ -3488,7 +4224,17 @@
 
     function directoryOnlyMatches() {
       if (!state.directory || !state.search.trim()) return [];
-      return directoryMatches().filter(function (p) { return !personHasConversation(p); });
+      // Los compañeros del equipo no se mezclan en la búsqueda de Números.
+      var teamPhones = {};
+      (state.team || []).forEach(function (m) {
+        var digits = String(m.phone || '').replace(/\D+/g, '');
+        if (digits) teamPhones[digits] = true;
+      });
+      return directoryMatches().filter(function (p) {
+        if (personHasConversation(p)) return false;
+        var digits = String(p.phone_key || p.phone || '').replace(/\D+/g, '');
+        return !teamPhones[digits];
+      });
     }
 
     function openDirectoryPerson(p) {
@@ -3546,6 +4292,126 @@
       return el;
     }
 
+    function openNewContactDialog() {
+      var own = ownSessionId();
+      if (!own) {
+        toast('No tenés una línea de WhatsApp para registrar el contacto.', true);
+        return;
+      }
+      var dlg = document.createElement('dialog');
+      dlg.className = 'agenda-dialog nk-section contact-edit-dialog';
+      dlg.innerHTML = '<div class="agenda-dialog-box">' +
+        '<div class="agenda-dialog-head"><div><h5>Nuevo contacto</h5>' +
+          '<p>Registrá una persona desde su número de WhatsApp. No necesita tener conversación, historial ni grupo.</p></div>' +
+          '<button type="button" class="agenda-dialog-x" data-close aria-label="Cerrar"><span class="ri-close-line"></span></button></div>' +
+        '<div class="agenda-dialog-body">' +
+          '<div class="ag-grid2">' +
+            '<div class="ag-field"><label class="ag-label" for="nc-phone">Número de WhatsApp *</label>' +
+              '<input class="form-control form-control-sm" id="nc-phone" type="tel" maxlength="20" placeholder="Ej.: 59171234567" autocomplete="off" /></div>' +
+            '<div class="ag-field"><label class="ag-label" for="nc-name">Nombre completo</label>' +
+              '<input class="form-control form-control-sm" id="nc-name" maxlength="120" placeholder="Apellidos, Nombres" /></div>' +
+            '<div class="ag-field"><label class="ag-label" for="nc-email">Email</label>' +
+              '<input class="form-control form-control-sm" id="nc-email" type="email" maxlength="160" placeholder="correo@ejemplo.com" /></div>' +
+            '<div class="ag-field"><label class="ag-label" for="nc-company">Empresa</label>' +
+              '<input class="form-control form-control-sm" id="nc-company" maxlength="120" placeholder="Empresa o institución" /></div>' +
+            '<div class="ag-field"><label class="ag-label" for="nc-ci">Carnet de identidad <small>· opcional</small></label>' +
+              '<input class="form-control form-control-sm" id="nc-ci" maxlength="40" placeholder="Ej.: 12345678 LP" /></div>' +
+            '<div class="ag-field"><label class="ag-label" for="nc-programa">Programa</label>' +
+              '<select class="form-select form-select-sm" id="nc-programa"><option value="">Cargando programas…</option></select>' +
+              '<input class="form-control form-control-sm" id="nc-programa-new" maxlength="160" placeholder="Nombre del programa nuevo" hidden /></div>' +
+          '</div>' +
+          '<div class="ag-help">El nombre o el programa son necesarios para que aparezca en Contactos. El CI es opcional.</div>' +
+        '</div>' +
+        '<div class="agenda-dialog-foot"><button type="button" class="btn btn-light btn-sm" data-close>Cancelar</button>' +
+          '<button type="button" class="btn btn-primary btn-sm" id="nc-save"><span class="ri-user-add-line"></span> Registrar contacto</button></div>' +
+      '</div>';
+      document.body.appendChild(dlg);
+      document.documentElement.classList.add('nk-assign-open');
+      var close = function () {
+        document.documentElement.classList.remove('nk-assign-open');
+        if (dlg.open) dlg.close();
+        if (dlg.parentNode) dlg.parentNode.removeChild(dlg);
+      };
+      dlg.addEventListener('close', function () {
+        document.documentElement.classList.remove('nk-assign-open');
+        if (dlg.parentNode) dlg.parentNode.removeChild(dlg);
+      });
+      dlg.addEventListener('click', function (ev) { if (ev.target === dlg) close(); });
+      Array.prototype.forEach.call(dlg.querySelectorAll('[data-close]'), function (b) {
+        b.addEventListener('click', close);
+      });
+      var phoneInput = dlg.querySelector('#nc-phone');
+      var nameInput = dlg.querySelector('#nc-name');
+      var emailInput = dlg.querySelector('#nc-email');
+      var companyInput = dlg.querySelector('#nc-company');
+      var ciInput = dlg.querySelector('#nc-ci');
+      var programSelect = dlg.querySelector('#nc-programa');
+      var programNew = dlg.querySelector('#nc-programa-new');
+      var saveBtn = dlg.querySelector('#nc-save');
+      programSelect.disabled = true;
+      saveBtn.disabled = true;
+      var fillPrograms = function () {
+        programSelect.disabled = false;
+        fillProgramSelect(programSelect, programNew, '', true);
+        saveBtn.disabled = false;
+      };
+      loadPersonPrograms().then(fillPrograms).catch(fillPrograms);
+      programSelect.addEventListener('change', function () {
+        syncProgramNew(programSelect, programNew);
+        if (programSelect.value === '__new') programNew.focus();
+      });
+      dlg.querySelector('#nc-save').addEventListener('click', function (ev) {
+        var save = ev.currentTarget;
+        var phone = phoneInput.value.trim();
+        var name = nameInput.value.trim();
+        var email = emailInput.value.trim();
+        var company = companyInput.value.trim();
+        var ci = ciInput.value.trim();
+        var programa = resolveProgramValue(programSelect, programNew);
+        if (programSelect.value === '__new' && !programa) {
+          toast('Escribí el nombre del programa nuevo.', true);
+          programNew.focus();
+          return;
+        }
+        if (phone.replace(/\D+/g, '').length < 8) {
+          toast('Escribí un número de WhatsApp válido, con código de país.', true);
+          phoneInput.focus();
+          return;
+        }
+        if (!name && !programa) {
+          toast('Registrá al menos el nombre o el programa.', true);
+          nameInput.focus();
+          return;
+        }
+        save.disabled = true;
+        jsonApi('/inbox/contacts', 'POST', {
+          session_id: own,
+          phone: phone,
+          name: name,
+          email: email,
+          company: company,
+          ci: ci,
+          programa: programa,
+        })
+          .then(function () {
+            if (programa && personProgramsCache && personProgramsCache.indexOf(programa) === -1) personProgramsCache.push(programa);
+            close();
+            toast('Contacto registrado. Ya aparece en Contactos.');
+            try { state.tab = 'contacts'; } catch (_) {}
+            loadDirectory(true).then(function () {
+              renderTabs();
+              renderList();
+            }).catch(function () { renderList(); });
+          })
+          .catch(function (err) {
+            save.disabled = false;
+            toast((err && err.message) || 'No se pudo registrar el contacto.', true);
+          });
+      });
+      dlg.showModal();
+      phoneInput.focus();
+    }
+
     function renderDirectoryList() {
       if (!els.list) return;
       if (!state.directory) {
@@ -3555,9 +4421,18 @@
       }
       var rows = directoryMatches();
       els.list.innerHTML = '';
+      var tools = document.createElement('div');
+      tools.className = 'dir-tools';
+      tools.innerHTML = '<button type="button" class="btn btn-sm btn-primary dir-new-contact">' +
+        '<span class="ri-user-add-line" aria-hidden="true"></span> Nuevo contacto</button>';
+      tools.querySelector('.dir-new-contact').addEventListener('click', openNewContactDialog);
+      els.list.appendChild(tools);
       if (!rows.length) {
-        els.list.innerHTML = '<div class="cl-empty"><span class="ri-search-eye-line"></span><p>Sin coincidencias</p>' +
-          '<small>Probá con el nombre, el número o el programa.</small></div>';
+        var empty = document.createElement('div');
+        empty.className = 'cl-empty';
+        empty.innerHTML = '<span class="ri-search-eye-line"></span><p>Sin coincidencias</p>' +
+          '<small>Probá con el nombre, el número o el programa.</small>';
+        els.list.appendChild(empty);
         return;
       }
       rows.forEach(function (p) { els.list.appendChild(renderDirectoryRow(p)); });
@@ -3725,7 +4600,8 @@
         var btn = els.tabs.querySelector('[data-tab="' + t + '"]');
         if (!btn) return;
         var list = state.conversations.filter(function (c) {
-          return (t === 'group') === isGroupChat(c);
+          if (t === 'group') return isGroupChat(c);
+          return !isGroupChat(c) && !c.team;
         });
         btn.classList.toggle('active', state.tab === t);
         setTabCount(btn, t, unreadOf(list));
@@ -3906,6 +4782,66 @@
       return c.programa ? [c.programa] : [];
     }
 
+    // Programas ya registrados, para elegirlos en la ficha y evitar duplicados.
+    var personProgramsCache = null;
+    var personProgramsPromise = null;
+    function loadPersonPrograms(force) {
+      if (!force && personProgramsCache) return Promise.resolve(personProgramsCache);
+      if (!force && personProgramsPromise) return personProgramsPromise;
+      personProgramsPromise = api('/inbox/programs').then(function (d) {
+        personProgramsCache = (d && d.programas) || [];
+        personProgramsPromise = null;
+        return personProgramsCache;
+      }, function (err) {
+        personProgramsPromise = null;
+        throw err;
+      });
+      return personProgramsPromise;
+    }
+
+    /** Muestra el campo para escribir un programa nuevo. */
+    function syncProgramNew(select, input) {
+      input.hidden = select.value !== '__new';
+    }
+
+    /** Llena el selector con los programas existentes y «Otro programa…». */
+    function fillProgramSelect(select, input, selected, preferNew) {
+      var list = [];
+      [selected].concat(personProgramsCache || []).forEach(function (value) {
+        var clean = String(value || '').replace(/\s+/g, ' ').trim();
+        if (clean && list.indexOf(clean) === -1) list.push(clean);
+      });
+      select.innerHTML = '<option value="">Sin programa</option>' +
+        list.map(function (p) { return '<option value="' + escapeHtml(p) + '">' + escapeHtml(p) + '</option>'; }).join('') +
+        '<option value="__new">Otro programa…</option>';
+      input.value = '';
+      if (selected && list.indexOf(selected) !== -1) {
+        select.value = selected;
+      } else if (selected) {
+        select.value = '__new';
+        input.value = selected;
+      } else {
+        select.value = (preferNew || !list.length) ? '__new' : '';
+      }
+      syncProgramNew(select, input);
+    }
+
+    /** Programa elegido, normalizando el nombre nuevo contra los existentes. */
+    function resolveProgramValue(select, input) {
+      if (select.value !== '__new') return select.value.trim();
+      var value = input.value.trim();
+      if (!value) return '';
+      var match = null;
+      Array.prototype.some.call(select.options, function (opt) {
+        if (opt.value && opt.value !== '__new' && foldText(opt.value) === foldText(value)) {
+          match = opt.value;
+          return true;
+        }
+        return false;
+      });
+      return match || value;
+    }
+
     function emptyPane() {
       return '<div class="chat-empty-col">' +
         '<span class="ce-glow"><span class="ri-whatsapp-line"></span></span>' +
@@ -3917,8 +4853,10 @@
     function openChat(sessionId, chatId, push, synthetic) {
       state.selectedSession = sessionId;
       state.selectedChat = chatId;
-      // Desde «Equipo» se queda en esa pestaña para seguir eligiendo compañeros.
-      state.tab = /@g\.us$/.test(chatId) ? 'group' : (state.tab === 'team' ? 'team' : 'individual');
+      // Los compañeros del equipo viven solo en la pestaña «Equipo».
+      var existing = findConversation(chatId);
+      var isTeam = !!((existing && existing.team) || (synthetic && synthetic.team));
+      state.tab = /@g\.us$/.test(chatId) ? 'group' : (isTeam ? 'team' : 'individual');
       state.replyTo = null;
       clearPendingFile();
       resetChatSearch();
@@ -3932,6 +4870,7 @@
       state.participants = [];
       state.memberFilter = '';
       state.contactTab = 'info';
+      state.contactEditing = null;
       state.contactGroups = null;
       state.contactGroupsLoading = false;
       state.contactSends = null;
@@ -3939,7 +4878,7 @@
       state.sendsFilter = 'todos';
       try { state.sendsView = localStorage.getItem('sends-view') === 'areas' ? 'areas' : 'cronologico'; } catch (_) { state.sendsView = 'cronologico'; }
       state.notes = [];
-      state.noteDraft = emptyNoteDraft();
+      resetNoteDraft();
       state.person = null;
       state.chatToken++;
       root.classList.remove('list-hidden');
@@ -4530,6 +5469,13 @@
       var chips = '';
       if (c.team) {
         chips += '<span class="chat-team" title="Usuario del sistema"><span class="ri-team-line" aria-hidden="true"></span>' + escapeHtml(c.team.area) + '</span>';
+      }
+      if (c.person && c.person.prospect) {
+        var pr = c.person.prospect;
+        var prTitle = [pr.programa, pr.estado_label].filter(Boolean).join(' · ');
+        chips += '<span class="chat-prospect" title="' + escapeHtml('Prospecto' + (prTitle ? ' · ' + prTitle : '')) + '">' +
+          '<span class="ri-user-star-line" aria-hidden="true"></span>Prospecto' +
+          (pr.estado_label ? ' · ' + escapeHtml(pr.estado_label) : '') + '</span>';
       }
       shown.forEach(function (p) {
         chips += '<span class="chat-programa" title="Programa según cronogramas"><span class="ri-graduation-cap-line" aria-hidden="true"></span>' + escapeHtml(p) + '</span>';
@@ -5374,7 +6320,7 @@
       var tone = pinned.length ? 'pin' : overdue.length ? 'danger' : 'warn';
       var icon = pinned.length ? 'ri-pushpin-2-fill' : overdue.length ? 'ri-alarm-warning-line' : 'ri-calendar-todo-line';
       var label = pinned.length ? 'Importante' : overdue.length ? 'Tarea vencida' : 'Tarea para hoy';
-      var text = lead.note_text || 'Nota de voz';
+      var text = lead.note_text || (lead.audio_path ? 'Nota de voz' : lead.image_path ? 'Imagen adjunta' : 'Nota');
       if (text.length > 160) text = text.slice(0, 157) + '…';
       var extra = [];
       if (pinned.length > 1) extra.push((pinned.length - 1) + ' importante' + (pinned.length > 2 ? 's' : '') + ' más');
@@ -5416,13 +6362,82 @@
     }
 
     function emptyNoteDraft() {
-      return { open: false, text: '', tags: [], due: '', time: '', pinned: false, personal: false, assignedTo: [], sourceMessageId: null, sourceLabel: '' };
+      return {
+        open: false, text: '', tags: [], due: '', time: '', pinned: false, personal: false,
+        assignedTo: [], sourceMessageId: null, sourceLabel: '', boardId: null, stageId: null, citeId: null,
+        imageFile: null, imageUrl: '',
+      };
+    }
+
+    /** Limpia el borrador y libera la vista previa de la imagen pegada. */
+    function resetNoteDraft() {
+      var d = state.noteDraft;
+      if (d && d.imageUrl) {
+        try { URL.revokeObjectURL(d.imageUrl); } catch (_) { /* sin storage */ }
+      }
+      state.noteDraft = emptyNoteDraft();
+    }
+
+    // Sub-agendas y columnas de Mi agenda para las notas privadas del chat.
+    var noteAgendaBoards = null;
+    var noteAgendaBoardsPromise = null;
+
+    function loadNoteAgendaBoards(force) {
+      if (!force && noteAgendaBoards) return Promise.resolve(noteAgendaBoards);
+      if (!force && noteAgendaBoardsPromise) return noteAgendaBoardsPromise;
+      noteAgendaBoardsPromise = api('/agenda/boards').then(function (data) {
+        noteAgendaBoards = data;
+        noteAgendaBoardsPromise = null;
+        return data;
+      }, function (err) {
+        noteAgendaBoardsPromise = null;
+        throw err;
+      });
+      return noteAgendaBoardsPromise;
+    }
+
+    function noteAgendaBoardList() {
+      return ((noteAgendaBoards && noteAgendaBoards.boards) || []).filter(function (b) { return b.can_edit !== false; });
+    }
+
+    function fillNoteAgendaStages(stageSel, board, draft) {
+      var stages = (board && board.stages) || [];
+      if (!stages.length) {
+        stageSel.innerHTML = '<option value="">Sin columnas</option>';
+        draft.stageId = null;
+        return;
+      }
+      var chosen = stages.filter(function (s) { return s.id === Number(draft.stageId); })[0] || stages[0];
+      draft.stageId = chosen.id;
+      stageSel.innerHTML = stages.map(function (s) {
+        return '<option value="' + s.id + '">' + escapeHtml(s.name) + '</option>';
+      }).join('');
+      stageSel.value = String(chosen.id);
+    }
+
+    function fillNoteAgendaBoards(boardSel, stageSel, draft) {
+      var boards = noteAgendaBoardList();
+      if (!boards.length) {
+        boardSel.innerHTML = '<option value="">Sin sub-agendas</option>';
+        stageSel.innerHTML = '';
+        draft.boardId = null;
+        draft.stageId = null;
+        return;
+      }
+      var board = boards.filter(function (b) { return b.id === Number(draft.boardId); })[0] || boards[0];
+      draft.boardId = board.id;
+      boardSel.innerHTML = boards.map(function (b) {
+        return '<option value="' + b.id + '">' + escapeHtml(b.name) + '</option>';
+      }).join('');
+      boardSel.value = String(board.id);
+      fillNoteAgendaStages(stageSel, board, draft);
     }
 
     function notesSectionHtml() {
       return '<div class="panel-section nk-section">' +
         '<div class="nk-section-head">' +
           '<h6><span class="ri-sticky-note-line"></span> Notas y tareas</h6>' +
+          '<div class="nk-jumps" id="nk-jumps"></div>' +
           '<span class="nk-counts" id="nk-counts"></span>' +
         '</div>' +
         '<p class="nk-intro"><span class="ri-team-line" aria-hidden="true"></span>' +
@@ -5461,6 +6476,12 @@
           : '') +
         '<textarea class="form-control nk-textarea" rows="3" maxlength="4000" aria-label="Texto de la nota"' +
           ' placeholder="Ej.: Pagó la 1.ª cuota por transferencia; falta el comprobante. Enviarle el cronograma del diplomado."></textarea>' +
+        '<div class="nk-image-edit nk-composer-image">' +
+          '<div class="nk-image-new" hidden></div>' +
+          '<input type="file" class="nk-image-input" accept="image/*" hidden />' +
+          '<button type="button" class="btn btn-sm btn-light nk-image-pick"><span class="ri-image-add-line" aria-hidden="true"></span> Imagen</button>' +
+          '<div class="nk-hint nk-image-hint">También podés pegar una captura con Ctrl+V (máx. 15 MB).</div>' +
+        '</div>' +
         '<label class="nk-pin-toggle' + (d.pinned ? ' on' : '') + '">' +
           '<input type="checkbox" class="nk-pin-input"' + (d.pinned ? ' checked' : '') + ' />' +
           '<span class="nk-pin-switch" aria-hidden="true"></span>' +
@@ -5473,6 +6494,20 @@
           '<span class="nk-personal-text"><b><span class="ri-lock-line" aria-hidden="true"></span> Solo para mí</b>' +
             '<small>Queda en Mi agenda como anotación privada: no la ve el equipo ni se deriva.</small></span>' +
         '</label>' +
+        '<div class="nk-compose-options nk-agenda-fields"' + (d.personal ? '' : ' style="display:none"') + '>' +
+          '<div class="nk-compose-col">' +
+            '<div class="nk-field-label">Sub-agenda <span class="nk-field-hint">· Mi agenda</span></div>' +
+            '<select class="form-select form-select-sm nk-agenda-board" aria-label="Sub-agenda de Mi agenda"></select>' +
+          '</div>' +
+          '<div class="nk-compose-col">' +
+            '<div class="nk-field-label">Columna <span class="nk-field-hint">· etapa del proceso</span></div>' +
+            '<select class="form-select form-select-sm nk-agenda-stage" aria-label="Columna de la sub-agenda"></select>' +
+          '</div>' +
+          '<div class="nk-compose-col nk-agenda-cite-col" hidden>' +
+            '<div class="nk-field-label">N° de cite <span class="nk-field-hint">· pago a la universidad</span></div>' +
+            '<select class="form-select form-select-sm nk-agenda-cite" aria-label="Cite de la nota"></select>' +
+          '</div>' +
+        '</div>' +
         '<div class="nk-compose-options">' +
           '<div class="nk-compose-col">' +
             '<div class="nk-field-label">¿Es una tarea? Fecha de seguimiento</div><div class="nk-due-wrap"></div>' +
@@ -5494,6 +6529,51 @@
       var ta = form.querySelector('textarea');
       ta.value = d.text;
       ta.addEventListener('input', function () { d.text = ta.value; });
+      var composerImageInput = form.querySelector('.nk-image-input');
+      var composerNewImage = form.querySelector('.nk-image-new');
+      var composerImageHint = form.querySelector('.nk-image-hint');
+      var renderDraftImage = function () {
+        if (d.imageUrl) {
+          composerNewImage.hidden = false;
+          composerNewImage.innerHTML = '<a class="js-lightbox" href="' + d.imageUrl + '" title="Ver la imagen que se va a adjuntar">' +
+            '<img src="' + d.imageUrl + '" alt="Imagen adjunta a la nota"></a>' +
+            '<div class="nk-image-meta">Imagen lista para adjuntar</div>' +
+            '<button type="button" class="btn btn-sm btn-light nk-image-remove-new">Quitar</button>';
+          composerNewImage.querySelector('.nk-image-remove-new').addEventListener('click', function () {
+            if (d.imageUrl) URL.revokeObjectURL(d.imageUrl);
+            d.imageFile = null;
+            d.imageUrl = '';
+            renderDraftImage();
+          });
+        } else {
+          composerNewImage.hidden = true;
+          composerNewImage.innerHTML = '';
+        }
+        if (composerImageHint) {
+          composerImageHint.textContent = d.imageUrl
+            ? 'La imagen se guardará junto con la nota.'
+            : 'También podés pegar una captura con Ctrl+V (máx. 15 MB).';
+        }
+      };
+      var pickDraftImage = function (file) {
+        if (!NoteKit.validNoteImage(file)) return;
+        if (d.imageUrl) URL.revokeObjectURL(d.imageUrl);
+        d.imageFile = file;
+        d.imageUrl = URL.createObjectURL(file);
+        renderDraftImage();
+      };
+      form.querySelector('.nk-image-pick').addEventListener('click', function () { composerImageInput.click(); });
+      composerImageInput.addEventListener('change', function () {
+        if (composerImageInput.files && composerImageInput.files[0]) pickDraftImage(composerImageInput.files[0]);
+        composerImageInput.value = '';
+      });
+      ta.addEventListener('paste', function (ev) {
+        var file = NoteKit.imagePasteFile(ev);
+        if (!file) return;
+        ev.preventDefault();
+        pickDraftImage(file);
+      });
+      renderDraftImage();
       var assignees = NoteKit.bindAssignees(form.querySelector('.nk-assign-picker'), d.assignedTo, function (v) { d.assignedTo = v; });
       var sourceX = form.querySelector('.nk-source-x');
       if (sourceX) sourceX.addEventListener('click', function () { d.sourceMessageId = null; d.sourceLabel = ''; renderNoteComposer(); });
@@ -5503,11 +6583,122 @@
         pinInput.closest('.nk-pin-toggle').classList.toggle('on', d.pinned);
       });
       var personalInput = form.querySelector('.nk-personal-input');
+      var agendaFields = form.querySelector('.nk-agenda-fields');
+      var boardSel = form.querySelector('.nk-agenda-board');
+      var stageSel = form.querySelector('.nk-agenda-stage');
+      var citeCol = form.querySelector('.nk-agenda-cite-col');
+      var citeSel = form.querySelector('.nk-agenda-cite');
+      var composeCites = null;
+      var composeCitesPromise = null;
+      var COMPOSE_CITE_CONCEPTS = { Inscripcion: 'Inscripción', Matricula: 'Matrícula', Colegiatura: 'Colegiatura', Certificacion: 'Certificación' };
+
+      function composeCiteLabel(c) {
+        var raw = String(c.concepto || '').split(',')[0].trim();
+        return 'Cite ' + c.nombre + (raw ? ' · ' + (COMPOSE_CITE_CONCEPTS[raw] || raw) : '');
+      }
+
+      function fillComposeCites() {
+        if (!citeSel) return;
+        var current = d.citeId ? String(d.citeId) : '';
+        if (!composeCites || !composeCites.length) {
+          citeSel.innerHTML = '<option value="">No hay cites habilitados</option>';
+          d.citeId = null;
+          return;
+        }
+        citeSel.innerHTML = '<option value="">Elegí un cite…</option>' +
+          composeCites.map(function (c) {
+            return '<option value="' + c.id + '">' + escapeHtml(composeCiteLabel(c)) + '</option>';
+          }).join('');
+        citeSel.value = current;
+        if (citeSel.value !== current) d.citeId = Number(citeSel.value) || null;
+      }
+
+      function syncAgendaCite() {
+        if (!citeCol || !citeSel) return;
+        var board = noteAgendaBoardList().filter(function (b) { return Number(b.id) === Number(d.boardId); })[0];
+        var stage = board && (board.stages || []).filter(function (s) { return Number(s.id) === Number(d.stageId); })[0];
+        var need = !!(d.personal && board && Number(board.uses_cites) === 1 && stage && Number(stage.requires_cite) === 1);
+        citeCol.hidden = !need;
+        citeCol.style.display = need ? '' : 'none';
+        if (!need) {
+          d.citeId = null;
+          return;
+        }
+        if (composeCites) {
+          fillComposeCites();
+          return;
+        }
+        citeSel.innerHTML = '<option value="">Cargando cites…</option>';
+        if (!composeCitesPromise) {
+          composeCitesPromise = api('/agenda/cites').then(function (r) {
+            composeCites = (r && r.cites) || [];
+            composeCitesPromise = null;
+            return composeCites;
+          }, function (err) {
+            composeCitesPromise = null;
+            throw err;
+          });
+        }
+        composeCitesPromise.then(function () {
+          if (!form.isConnected) return;
+          fillComposeCites();
+        }).catch(function () {
+          if (!form.isConnected) return;
+          citeSel.innerHTML = '<option value="">No se pudieron cargar los cites</option>';
+        });
+      }
+
+      var syncAgendaFields = function () {
+        agendaFields.hidden = !d.personal;
+        agendaFields.style.display = d.personal ? '' : 'none';
+        if (!d.personal) return;
+
+        if (noteAgendaBoards) {
+          fillNoteAgendaBoards(boardSel, stageSel, d);
+          syncAgendaCite();
+          return;
+        }
+
+        boardSel.disabled = true;
+        stageSel.disabled = true;
+        boardSel.innerHTML = '<option value="">Cargando sub-agendas…</option>';
+        stageSel.innerHTML = '';
+        loadNoteAgendaBoards().then(function () {
+          if (!form.isConnected) return;
+          boardSel.disabled = false;
+          stageSel.disabled = false;
+          fillNoteAgendaBoards(boardSel, stageSel, d);
+          syncAgendaCite();
+        }).catch(function (e) {
+          if (!form.isConnected) return;
+          boardSel.innerHTML = '<option value="">No se pudieron cargar</option>';
+          toast(e.message || 'No se pudieron cargar las sub-agendas de Mi agenda.', true);
+        });
+      };
+      boardSel.addEventListener('change', function () {
+        d.boardId = Number(boardSel.value) || null;
+        d.stageId = null;
+        d.citeId = null;
+        var board = noteAgendaBoardList().filter(function (b) { return b.id === d.boardId; })[0];
+        fillNoteAgendaStages(stageSel, board, d);
+        syncAgendaCite();
+      });
+      stageSel.addEventListener('change', function () {
+        d.stageId = Number(stageSel.value) || null;
+        d.citeId = null;
+        syncAgendaCite();
+      });
+      if (citeSel) {
+        citeSel.addEventListener('change', function () {
+          d.citeId = Number(citeSel.value) || null;
+        });
+      }
       var syncPersonal = function () {
         d.personal = personalInput.checked;
         personalInput.closest('.nk-personal-toggle').classList.toggle('on', d.personal);
         var assignCol = form.querySelector('.nk-assign-col');
         if (assignCol) assignCol.hidden = d.personal;
+        syncAgendaFields();
       };
       personalInput.addEventListener('change', syncPersonal);
       syncPersonal();
@@ -5522,45 +6713,109 @@
       var token = state.chatToken;
       var done = function () {
         if (token !== state.chatToken) return;
-        state.noteDraft = emptyNoteDraft();
+        resetNoteDraft();
         renderNoteComposer();
         loadNotes();
-        toast('Nota registrada. Ya la ve todo el equipo.');
+        toast(d.personal ? 'Nota registrada en Mi agenda.' : 'Nota registrada. Ya la ve todo el equipo.');
+      };
+      var postForm = function (fd) {
+        return fetch(notesUrl, { method: 'POST', body: fd, headers: { 'Accept': 'application/json' }, credentials: 'same-origin' })
+          .then(function (r) {
+            return r.json().catch(function () { return {}; }).then(function (data) {
+              if (!r.ok) throw new Error(data.error || 'No se pudo guardar la nota.');
+              return data;
+            });
+          });
       };
       var submit = function () {
         var text = ta.value.trim();
-        if (!text) { toast('Escribí la nota (o grabá un audio)', true); ta.focus(); return; }
+        if (!text && !d.imageFile) {
+          toast('Escribí la nota, pegá una imagen o grabá un audio', true);
+          ta.focus();
+          return;
+        }
+        if (d.personal && (!d.boardId || !d.stageId)) {
+          toast('Elegí la sub-agenda y la columna de Mi agenda.', true);
+          return;
+        }
+        if (d.personal && citeCol && !citeCol.hidden && !d.citeId) {
+          toast('Elegí el número de cite para esta columna.', true);
+          if (citeSel) citeSel.focus();
+          return;
+        }
         var btn = form.querySelector('.nk-save');
         btn.disabled = true;
-        jsonApi(notesUrl, 'POST', {
-          text: text, due_at: pickers.due(), due_time: pickers.time(), tag_ids: pickers.tags(), pinned: d.pinned,
-          personal: d.personal, assigned_to: d.personal ? [] : assignees(), source_message_id: d.sourceMessageId,
-        })
+        var request;
+        if (d.imageFile) {
+          var fd = new FormData();
+          fd.append('image', d.imageFile);
+          if (text) fd.append('text', text);
+          if (pickers.due()) fd.append('due_at', pickers.due());
+          if (pickers.time()) fd.append('due_time', pickers.time());
+          fd.append('tag_ids', JSON.stringify(pickers.tags()));
+          if (d.pinned) fd.append('pinned', '1');
+          if (d.personal) fd.append('personal', '1');
+          if (d.personal) {
+            fd.append('board_id', String(d.boardId));
+            fd.append('stage_id', String(d.stageId));
+            if (d.citeId) fd.append('cite_id', String(d.citeId));
+          }
+          if (!d.personal && assignees().length) fd.append('assigned_to', JSON.stringify(assignees()));
+          if (d.sourceMessageId) fd.append('source_message_id', String(d.sourceMessageId));
+          request = postForm(fd);
+        } else {
+          request = jsonApi(notesUrl, 'POST', {
+            text: text, due_at: pickers.due(), due_time: pickers.time(), tag_ids: pickers.tags(), pinned: d.pinned,
+            personal: d.personal, assigned_to: d.personal ? [] : assignees(), source_message_id: d.sourceMessageId,
+            board_id: d.personal ? d.boardId : null, stage_id: d.personal ? d.stageId : null,
+            cite_id: d.personal ? d.citeId : null,
+          });
+        }
+        request
           .then(done)
           .catch(function (e) { btn.disabled = false; toast(e.message, true); });
       };
       form.addEventListener('submit', function (ev) { ev.preventDefault(); submit(); });
       ta.addEventListener('keydown', function (e) {
         if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submit(); }
-        if (e.key === 'Escape' && !ta.value.trim()) { e.preventDefault(); state.noteDraft = emptyNoteDraft(); renderNoteComposer(); }
+        if (e.key === 'Escape' && !ta.value.trim() && !d.imageFile) {
+          e.preventDefault();
+          resetNoteDraft();
+          renderNoteComposer();
+        }
       });
       form.querySelector('.nk-cancel').addEventListener('click', function () {
-        state.noteDraft = emptyNoteDraft();
+        resetNoteDraft();
         renderNoteComposer();
       });
       form.querySelector('.nk-rec').appendChild(VoiceRecorder(function (file) {
+        if (d.personal && (!d.boardId || !d.stageId)) {
+          toast('Elegí la sub-agenda y la columna de Mi agenda.', true);
+          return;
+        }
+        if (d.personal && citeCol && !citeCol.hidden && !d.citeId) {
+          toast('Elegí el número de cite para esta columna.', true);
+          if (citeSel) citeSel.focus();
+          return;
+        }
         var fd = new FormData();
         fd.append('audio', file);
+        if (d.imageFile) fd.append('image', d.imageFile);
         if (ta.value.trim()) fd.append('text', ta.value.trim());
         if (pickers.due()) fd.append('due_at', pickers.due());
         if (pickers.time()) fd.append('due_time', pickers.time());
         fd.append('tag_ids', JSON.stringify(pickers.tags()));
         if (d.pinned) fd.append('pinned', '1');
         if (d.personal) fd.append('personal', '1');
+        if (d.personal) {
+          fd.append('board_id', String(d.boardId));
+          fd.append('stage_id', String(d.stageId));
+          if (d.citeId) fd.append('cite_id', String(d.citeId));
+        }
         if (!d.personal && assignees().length) fd.append('assigned_to', JSON.stringify(assignees()));
         if (d.sourceMessageId) fd.append('source_message_id', String(d.sourceMessageId));
-        fetch(notesUrl, { method: 'POST', body: fd, headers: { 'Accept': 'application/json' }, credentials: 'same-origin' })
-          .then(function (r) { if (!r.ok) throw new Error('No se pudo guardar la nota de voz'); done(); })
+        postForm(fd)
+          .then(done)
           .catch(function (e) { toast(e.message, true); });
       }));
     }
@@ -5645,11 +6900,18 @@
     // ── La persona en otras líneas (ficha única) ──
     function loadPerson() {
       if (!state.selectedChat || state.tab === 'group') return Promise.resolve();
+      // No se pisa la ficha mientras hay un formulario de datos abierto.
+      if (state.contactEditing && state.contactEditing === state.selectedSession + '|' + state.selectedChat) {
+        return Promise.resolve();
+      }
       var token = state.chatToken;
       return api('/inbox/' + encodeURIComponent(state.selectedSession) + '/' + encodeURIComponent(state.selectedChat) + '/person')
         .then(function (p) {
           if (token !== state.chatToken) return;
           state.person = p;
+          // La ficha ya puede ofrecer el acceso a Mi agenda si esta persona
+          // tiene notas privadas registradas allí.
+          renderNotesList();
           // La conversación (o la ficha sintética abierta desde un grupo) toma
           // el nombre/programa y, si es compañero, su área de usuario.
           var c = selectedConversation();
@@ -5661,8 +6923,14 @@
               name_source: p.name_source || null,
               name_by: p.name_by || null,
               programas: p.programas || [],
+              prospect: p.prospect || null,
             };
             if (JSON.stringify(c.person) !== before) changed = true;
+            if (p.contact) {
+              var contactBefore = JSON.stringify(c.contact || null);
+              c.contact = Object.assign({}, c.contact || {}, p.contact);
+              if (JSON.stringify(c.contact) !== contactBefore) changed = true;
+            }
             if (p.team && JSON.stringify(c.team || null) !== JSON.stringify(p.team)) {
               c.team = p.team;
               changed = true;
@@ -5697,6 +6965,142 @@
       });
     }
 
+    /** Registro/edición completa de la ficha del contacto desde la conversación. */
+    function bindContactEditor(c) {
+      var trigger = els.contact.querySelector('#person-fill-edit');
+      if (!trigger) return;
+      trigger.addEventListener('click', function () {
+        var p = state.person || {};
+        var ct = c.contact || {};
+        var fill = p.fill || {};
+        var currentName = p.full_name || ct.name || '';
+        var currentEmail = ct.email || (fill.email && fill.email.value) || '';
+        var currentCompany = ct.company || (fill.company && fill.company.value) || '';
+        var currentCi = p.ci || '';
+        var currentProgram = (p.programas && p.programas[0]) || p.programa || c.programa || '';
+        var dlg = document.createElement('dialog');
+        dlg.className = 'agenda-dialog nk-section contact-edit-dialog';
+        dlg.innerHTML = '<div class="agenda-dialog-box">' +
+          '<div class="agenda-dialog-head"><div><h5>Datos del contacto</h5>' +
+            '<p>Registrá o completá los datos disponibles. El teléfono queda asociado a esta conversación.</p></div>' +
+            '<button type="button" class="agenda-dialog-x" data-close aria-label="Cerrar"><span class="ri-close-line"></span></button></div>' +
+          '<div class="agenda-dialog-body">' +
+            '<div class="ag-grid2">' +
+              '<div class="ag-field"><label class="ag-label" for="ce-name">Nombre completo</label>' +
+                '<input class="form-control form-control-sm" id="ce-name" maxlength="120" placeholder="Apellidos, Nombres" value="' + escapeHtml(currentName) + '" /></div>' +
+              '<div class="ag-field"><label class="ag-label" for="ce-phone">Teléfono</label>' +
+                '<input class="form-control form-control-sm" id="ce-phone" value="' + escapeHtml(ct.phone || '') + '" readonly /></div>' +
+              '<div class="ag-field"><label class="ag-label" for="ce-email">Email</label>' +
+                '<input class="form-control form-control-sm" id="ce-email" type="email" maxlength="160" placeholder="correo@ejemplo.com" value="' + escapeHtml(currentEmail) + '" /></div>' +
+              '<div class="ag-field"><label class="ag-label" for="ce-company">Empresa</label>' +
+                '<input class="form-control form-control-sm" id="ce-company" maxlength="120" placeholder="Empresa o institución" value="' + escapeHtml(currentCompany) + '" /></div>' +
+              '<div class="ag-field"><label class="ag-label" for="ce-ci">Carnet de identidad <small>· opcional</small></label>' +
+                '<input class="form-control form-control-sm" id="ce-ci" maxlength="40" placeholder="Ej.: 12345678 LP" value="' + escapeHtml(currentCi) + '" /></div>' +
+              '<div class="ag-field"><label class="ag-label" for="ce-programa">Programa</label>' +
+                '<select class="form-select form-select-sm" id="ce-programa"><option value="">Sin programa</option></select>' +
+                '<input class="form-control form-control-sm" id="ce-programa-new" maxlength="160" placeholder="Nombre del programa nuevo" hidden /></div>' +
+            '</div>' +
+          '</div>' +
+          '<div class="agenda-dialog-foot"><button type="button" class="btn btn-light btn-sm" data-close>Cancelar</button>' +
+            '<button type="button" class="btn btn-primary btn-sm" id="ce-save"><span class="ri-save-3-line"></span> Guardar contacto</button></div>' +
+        '</div>';
+        document.body.appendChild(dlg);
+        document.documentElement.classList.add('nk-assign-open');
+        state.contactEditing = c.session_id + '|' + c.chat_id;
+        var close = function () {
+          state.contactEditing = null;
+          document.documentElement.classList.remove('nk-assign-open');
+          if (dlg.open) dlg.close();
+          if (dlg.parentNode) dlg.parentNode.removeChild(dlg);
+        };
+        dlg.addEventListener('close', function () {
+          state.contactEditing = null;
+          document.documentElement.classList.remove('nk-assign-open');
+          if (dlg.parentNode) dlg.parentNode.removeChild(dlg);
+        });
+        dlg.addEventListener('click', function (ev) { if (ev.target === dlg) close(); });
+        Array.prototype.forEach.call(dlg.querySelectorAll('[data-close]'), function (b) {
+          b.addEventListener('click', close);
+        });
+        var nameInput = dlg.querySelector('#ce-name');
+        var emailInput = dlg.querySelector('#ce-email');
+        var companyInput = dlg.querySelector('#ce-company');
+        var ciInput = dlg.querySelector('#ce-ci');
+        var programSelect = dlg.querySelector('#ce-programa');
+        var programNew = dlg.querySelector('#ce-programa-new');
+        var saveBtn = dlg.querySelector('#ce-save');
+        programSelect.disabled = true;
+        saveBtn.disabled = true;
+        var fillPrograms = function () {
+          programSelect.disabled = false;
+          fillProgramSelect(programSelect, programNew, currentProgram, false);
+          saveBtn.disabled = false;
+        };
+        loadPersonPrograms().then(fillPrograms).catch(fillPrograms);
+        programSelect.addEventListener('change', function () {
+          syncProgramNew(programSelect, programNew);
+          if (programSelect.value === '__new') programNew.focus();
+        });
+        // Enter pasa al siguiente campo en vez de cerrar el diálogo.
+        var dialogFields = function () {
+          return [nameInput, emailInput, companyInput, ciInput, programSelect, programNew]
+            .filter(function (el) { return el && !el.hidden && !el.disabled; });
+        };
+        var focusNextDialog = function (current) {
+          var list = dialogFields();
+          var i = list.indexOf(current);
+          var next = list[i + 1];
+          if (next) next.focus();
+          else saveBtn.focus();
+        };
+        [nameInput, emailInput, companyInput, ciInput, programNew].forEach(function (input) {
+          input.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') { e.preventDefault(); focusNextDialog(input); }
+            if (e.key === 'Escape') { e.preventDefault(); close(); }
+          });
+        });
+        dlg.querySelector('#ce-save').addEventListener('click', function (ev) {
+          var save = ev.currentTarget;
+          var name = nameInput.value.trim();
+          var email = emailInput.value.trim();
+          var company = companyInput.value.trim();
+          var ci = ciInput.value.trim();
+          var programa = resolveProgramValue(programSelect, programNew);
+          if (programSelect.value === '__new' && !programa) {
+            toast('Escribí el nombre del programa nuevo.', true);
+            programNew.focus();
+            return;
+          }
+          if (!name && !email && !company && !ci && !programa) {
+            toast('Registrá al menos un dato del contacto.', true);
+            nameInput.focus();
+            return;
+          }
+          save.disabled = true;
+          jsonApi('/inbox/' + encodeURIComponent(c.session_id) + '/' + encodeURIComponent(c.chat_id) + '/profile', 'PUT', {
+            name: name,
+            email: email,
+            company: company,
+            ci: ci,
+            programa: programa,
+          })
+            .then(function () {
+              if (programa && personProgramsCache && personProgramsCache.indexOf(programa) === -1) personProgramsCache.push(programa);
+              close();
+              toast('Datos del contacto guardados.');
+              window.dispatchEvent(new CustomEvent('esam:contact-updated', { detail: { contactId: c.contact && c.contact.id } }));
+            })
+            .catch(function (err) {
+              save.disabled = false;
+              toast((err && err.message) || 'No se pudieron guardar los datos.', true);
+            });
+        });
+        dlg.showModal();
+        nameInput.focus();
+        nameInput.select();
+      });
+    }
+
     function renderPerson() {
       var p = state.person;
       var fillBox = els.contact.querySelector('#person-fill');
@@ -5720,8 +7124,25 @@
         ? '<div class="pf-row pf-progs"><span class="pf-label">' + (progs.length > 1 ? 'Programas' : 'Programa') + '</span><span class="pf-value">' +
             progs.map(function (x) { return '<span class="pf-prog">' + escapeHtml(x) + '</span>'; }).join('') + '</span></div>'
         : inHead ? '' : fillRow('Programa', f.programa);
-      fillBox.innerHTML = fillRow('Nombre', f.name) + fillRow('Email', f.email) + fillRow('Empresa', f.company) + programa;
-      if (section) section.hidden = !fillBox.innerHTML.trim();
+      var ciRow = p.ci
+        ? '<div class="pf-row pf-ci"><span class="pf-label">CI</span><span class="pf-value">' + escapeHtml(p.ci) + '</span></div>'
+        : '';
+      var ct = (conv && conv.contact) || {};
+      var emailRow = ct.email
+        ? '<div class="pf-row"><span class="pf-label">Email</span><span class="pf-value">' + escapeHtml(ct.email) + '</span></div>'
+        : fillRow('Email', f.email);
+      var companyRow = ct.company
+        ? '<div class="pf-row"><span class="pf-label">Empresa</span><span class="pf-value">' + escapeHtml(ct.company) + '</span></div>'
+        : fillRow('Empresa', f.company);
+      fillBox.innerHTML = fillRow('Nombre', f.name) + ciRow + emailRow + companyRow + programa;
+      if (section) section.hidden = false;
+      var editBtn = els.contact.querySelector('#person-fill-edit');
+      if (editBtn) {
+        var needsProfile = !p.full_name && !ct.name && !p.ci && !ct.email && !ct.company &&
+          !(p.programas && p.programas.length) && !p.programa;
+        editBtn.innerHTML = '<span class="' + (needsProfile ? 'ri-user-add-line' : 'ri-pencil-line') + '" aria-hidden="true"></span> ' +
+          (needsProfile ? 'Registrar contacto' : 'Editar datos');
+      }
     }
 
     // Lista: pendientes arriba (por fecha de seguimiento) y resueltas plegadas.
@@ -5741,13 +7162,51 @@
           (today ? '<span class="nk-count warn">' + today + ' hoy</span>' : '') +
           (open.length ? '<span class="nk-count" title="Pendientes">' + open.length + ' pend.</span>' : '');
       }
+      // Accesos directos a los apartados donde vive lo registrado: las notas
+      // del equipo en «Notas y tareas» y las de Mi agenda (privadas o
+      // derivadas). Solo aparecen si hay algo que abrir.
+      var jumps = els.contact.querySelector('#nk-jumps');
+      if (jumps) {
+        var teamNotes = notes.filter(function (n) { return !n.personal; });
+        var agendaNotes = notes.filter(function (n) { return n.agenda_note_id || n.personal; });
+        var personAgenda = state.person && state.person.agenda ? state.person.agenda : null;
+        var jumpHtml = '';
+        if (teamNotes.length) {
+          jumpHtml += '<a class="nk-jump is-notes" href="' +
+            (teamNotes.length === 1 ? '/notes/' + teamNotes[0].id : '/notes') +
+            '" title="Abrir en Notas y tareas"><span class="ri-file-list-3-line" aria-hidden="true"></span>Notas y tareas</a>';
+        }
+        if (agendaNotes.length || (personAgenda && personAgenda.count > 0)) {
+          var firstAgenda = agendaNotes[0] || null;
+          var agNoteId = firstAgenda
+            ? (firstAgenda.agenda_note_id || (firstAgenda.personal ? firstAgenda.id : 0))
+            : (personAgenda ? personAgenda.note_id : 0);
+          var agBoardId = firstAgenda ? firstAgenda.agenda_board_id : (personAgenda ? personAgenda.board_id : 0);
+          var agParams = [];
+          if (agBoardId) agParams.push('board=' + agBoardId);
+          if (agNoteId) agParams.push('note=' + agNoteId);
+          jumpHtml += '<a class="nk-jump is-agenda" href="/agenda' +
+            (agParams.length ? '?' + agParams.join('&') : '') +
+            '" title="Abrir en Mi agenda"><span class="ri-calendar-check-line" aria-hidden="true"></span>Mi agenda' +
+            (personAgenda && personAgenda.count > 1 ? ' · ' + personAgenda.count : '') + '</a>';
+        }
+        var conv = selectedConversation();
+        var historyContact = conv && conv.contact;
+        if (historyContact && historyContact.id) {
+          var historyName = (state.person && state.person.full_name) || convoName(conv) || '';
+          jumpHtml += '<button type="button" class="nk-jump is-history" data-contact-history="' + historyContact.id +
+            '" data-contact-name="' + escapeHtml(historyName) +
+            '" title="Ver todo el historial del contacto: notas, cambios y agenda"><span class="ri-route-line" aria-hidden="true"></span>Historial</button>';
+        }
+        jumps.innerHTML = jumpHtml;
+      }
       if (!notes.length) {
         list.innerHTML = '<div class="nk-empty"><span class="ri-sticky-note-add-line" aria-hidden="true"></span>' +
           '<p>Todavía no hay notas sobre esta persona.</p>' +
           '<small>Registrá lo que no hay que olvidar: así cualquier compañero puede continuar la atención.</small></div>';
         return;
       }
-      var card = function (n) { return NoteKit.cardHtml(n, { currentSession: state.selectedSession, onGotoMessage: true }); };
+      var card = function (n) { return NoteKit.cardHtml(n, { currentSession: state.selectedSession, onGotoMessage: true, showAgenda: true, showOpenLinks: true }); };
       var pinnedOpen = open.filter(function (n) { return n.pinned; });
       var restOpen = open.filter(function (n) { return !n.pinned; });
       var groupTitle = function (label, count) { return '<div class="nk-group-title">' + label + ' <span>' + count + '</span></div>'; };
@@ -5786,6 +7245,7 @@
       notas: { label: 'Notas', icon: 'ri-file-list-3-line' },
       asistencia: { label: 'Asistencia', icon: 'ri-calendar-check-line' },
       programa: { label: 'Programa', icon: 'ri-graduation-cap-line' },
+      prospecto: { label: 'Prospecto', icon: 'ri-user-star-line' },
       marketing: { label: 'Marketing', icon: 'ri-megaphone-line' },
       otros: { label: 'Otros', icon: 'ri-mail-line' },
     };
@@ -5861,10 +7321,13 @@
       }).join('');
       var items = d.items || [];
       if (!items.length) {
+        var isGroupCtx = /@g\.us$/.test(state.selectedChat || '');
         return '<div class="ps-areas">' + areas + '</div>' +
           '<div class="cg-empty"><span class="ri-mail-send-line" aria-hidden="true"></span>' +
-          '<p>El sistema todavía no le envió mensajes a esta persona.</p>' +
-          '<small>Acá aparecen las cobranzas, notas, avisos de inasistencia y mensajes de programa enviados desde cronogramas o el panel.</small></div>';
+          '<p>' + (isGroupCtx ? 'El sistema todavía no envió mensajes a este grupo.' : 'El sistema todavía no le envió mensajes a esta persona.') + '</p>' +
+          '<small>' + (isGroupCtx
+            ? 'Acá aparecen los avisos y mensajes masivos enviados al grupo desde cronogramas o el panel.'
+            : 'Acá aparecen las cobranzas, notas, avisos de inasistencia y mensajes de programa enviados desde cronogramas o el panel.') + '</small></div>';
       }
       var cats = Object.keys(SEND_CATS).filter(function (k) { return (d.byCategory || {})[k]; });
       var f = state.sendsFilter || 'todos';
@@ -6018,10 +7481,17 @@
       if (c) { openChat(c.session_id, c.chat_id, true); return; }
       var phone = (person && person.phone) || memberPhone(jid);
       var contactName = name || (person && person.full_name) || null;
-      openChat(state.selectedSession, jid, true, {
+      // Los chats individuales se guardan siempre como @c.us. Así no se crea
+      // otra conversación cuando el mismo número llega como @s.whatsapp.net.
+      var target = jid;
+      if (!/@g\.us$/.test(jid) && !/@lid$/.test(jid)) {
+        var digits = String(jid).replace(/@.*$/, '').replace(/\D+/g, '');
+        if (digits) target = digits + '@c.us';
+      }
+      openChat(state.selectedSession, target, true, {
         id: 0,
         session_id: state.selectedSession,
-        chat_id: jid,
+        chat_id: target,
         status: 'open',
         unread_count: 0,
         last_message_text: null,
@@ -6093,6 +7563,7 @@
           var tab = btn.getAttribute('data-ctab');
           if (!tab || tab === state.contactTab) return;
           state.contactTab = tab;
+          state.contactEditing = null;
           if (tab === 'groups' && state.contactGroups === null && !state.contactGroupsLoading) {
             loadContactGroups();
             return;
@@ -6203,6 +7674,10 @@
     function renderContact() {
       var c = selectedConversation();
       if (!c) return;
+      // Mientras se registran o editan datos, no se reemplaza la ficha: los
+      // eventos en vivo (mensajes, acuses, cambios de otra línea) la borraban
+      // y el formulario se cerraba a mitad de la escritura.
+      if (state.contactEditing && state.contactEditing === c.session_id + '|' + c.chat_id) return;
       var name = convoName(c);
       var ct = c.contact || {};
       var isGroupOpen = isGroupChat(c);
@@ -6245,7 +7720,9 @@
         (flagsHtml ? '<div class="contact-flags">' + flagsHtml + '</div>' : '');
 
       var infoBody = '<div class="panel-section" id="person-fill-section">' +
-          '<h6><span class="ri-id-card-line" aria-hidden="true"></span> Datos de la persona</h6>' +
+          '<div class="pf-head"><h6><span class="ri-id-card-line" aria-hidden="true"></span> Datos de la persona</h6>' +
+            '<button type="button" class="pf-edit" id="person-fill-edit"><span class="ri-user-add-line" aria-hidden="true"></span> Registrar contacto</button>' +
+          '</div>' +
           '<div class="person-fill" id="person-fill"></div>' +
         '</div>' +
         membersHtml +
@@ -6260,38 +7737,42 @@
               '<span class="cm-v">' + (timeAgo(c.last_message_at) || '—') + '</span></div>' +
           '</div></div>';
 
-      // En una persona (no en un grupo) la ficha tiene tres solapas: sus datos,
-      // los envíos del sistema y los grupos donde está.
-      var tabsHtml = '';
-      var bodyHtml = infoBody;
-      if (!isGroupOpen) {
-        var activeGroups = state.contactTab === 'groups';
-        var activeSends = state.contactTab === 'sends';
-        var activeInfo = !activeGroups && !activeSends;
-        var groupCount = Array.isArray(state.contactGroups) ? state.contactGroups.length : null;
-        var sendCount = state.contactSends ? state.contactSends.items.length : null;
-        tabsHtml = '<div class="contact-tabs" role="tablist" aria-label="Ficha de la persona">' +
-          '<button type="button" class="contact-tab' + (activeInfo ? ' active' : '') + '" data-ctab="info" role="tab" aria-selected="' + activeInfo + '">' +
-            '<span class="ri-user-line" aria-hidden="true"></span> Información</button>' +
-          '<button type="button" class="contact-tab' + (activeSends ? ' active' : '') + '" data-ctab="sends" role="tab" aria-selected="' + activeSends + '" title="Mensajes que le envió el sistema: cobranzas, notas, asistencias">' +
-            '<span class="ri-mail-send-line" aria-hidden="true"></span> Envíos' +
-            (sendCount !== null ? ' <span class="contact-tab-count">' + sendCount + '</span>' : '') +
-          '</button>' +
-          '<button type="button" class="contact-tab' + (activeGroups ? ' active' : '') + '" data-ctab="groups" role="tab" aria-selected="' + activeGroups + '">' +
-            '<span class="ri-group-line" aria-hidden="true"></span> Grupos' +
-            (groupCount !== null ? ' <span class="contact-tab-count">' + groupCount + '</span>' : '') +
-          '</button></div>';
-        bodyHtml = '<div class="contact-tab-panel" id="contact-info"' + (activeInfo ? '' : ' hidden') + '>' + infoBody + '</div>' +
-          '<div class="contact-tab-panel contact-sends" id="contact-sends"' + (activeSends ? '' : ' hidden') + '>' + contactSendsHtml() + '</div>' +
-          '<div class="contact-tab-panel contact-groups" id="contact-groups"' + (activeGroups ? '' : ' hidden') + '>' +
-            contactGroupsHtml() + '</div>';
-      }
+      // La ficha de una persona tiene tres solapas: datos, envíos y grupos.
+      // La de un grupo tiene dos: datos y el historial de envíos al grupo.
+      if (isGroupOpen && state.contactTab === 'groups') state.contactTab = 'info';
+      var activeSends = state.contactTab === 'sends';
+      var activeGroups = !isGroupOpen && state.contactTab === 'groups';
+      var activeInfo = !activeSends && !activeGroups;
+      var groupCount = Array.isArray(state.contactGroups) ? state.contactGroups.length : null;
+      var sendCount = state.contactSends ? state.contactSends.items.length : null;
+      var tabsHtml = '<div class="contact-tabs" role="tablist" aria-label="' + (isGroupOpen ? 'Ficha del grupo' : 'Ficha de la persona') + '">' +
+        '<button type="button" class="contact-tab' + (activeInfo ? ' active' : '') + '" data-ctab="info" role="tab" aria-selected="' + activeInfo + '">' +
+          '<span class="ri-' + (isGroupOpen ? 'group' : 'user') + '-line" aria-hidden="true"></span> Información</button>' +
+        '<button type="button" class="contact-tab' + (activeSends ? ' active' : '') + '" data-ctab="sends" role="tab" aria-selected="' + activeSends + '" title="' +
+          (isGroupOpen ? 'Mensajes masivos que el sistema envió a este grupo' : 'Mensajes que le envió el sistema: cobranzas, notas, asistencias') + '">' +
+          '<span class="ri-mail-send-line" aria-hidden="true"></span> Envíos' +
+          (sendCount !== null ? ' <span class="contact-tab-count">' + sendCount + '</span>' : '') +
+        '</button>' +
+        (!isGroupOpen
+          ? '<button type="button" class="contact-tab' + (activeGroups ? ' active' : '') + '" data-ctab="groups" role="tab" aria-selected="' + activeGroups + '">' +
+              '<span class="ri-group-line" aria-hidden="true"></span> Grupos' +
+              (groupCount !== null ? ' <span class="contact-tab-count">' + groupCount + '</span>' : '') +
+            '</button>'
+          : '') +
+        '</div>';
+      var bodyHtml = '<div class="contact-tab-panel" id="contact-info"' + (activeInfo ? '' : ' hidden') + '>' + infoBody + '</div>' +
+        '<div class="contact-tab-panel contact-sends" id="contact-sends"' + (activeSends ? '' : ' hidden') + '>' + contactSendsHtml() + '</div>' +
+        (!isGroupOpen
+          ? '<div class="contact-tab-panel contact-groups" id="contact-groups"' + (activeGroups ? '' : ' hidden') + '>' +
+              contactGroupsHtml() + '</div>'
+          : '');
 
       els.contact.innerHTML =
         '<button type="button" class="contact-close" id="contact-close" aria-label="Cerrar la ficha"><span class="ri-close-line"></span></button>' +
         heroHtml + tabsHtml + bodyHtml;
 
       bindNameEditor(c);
+      bindContactEditor(c);
       bindContactPhoneCopy();
       var closeBtn = els.contact.querySelector('#contact-close');
       if (closeBtn) closeBtn.addEventListener('click', function () { root.classList.add('contact-hidden'); });
@@ -6333,8 +7814,8 @@
       });
     }
 
-    // Nombre de la persona en la ficha. Si cronogramas no mandó datos, se puede
-    // registrar a mano; queda por número y lo ven todas las líneas.
+    // Nombre y programa de la persona en la ficha. Si cronogramas no mandó
+    // datos, se pueden registrar a mano; quedan por número y los ven todos.
     function nameBlockHtml(c) {
       var ct = c.contact || {};
       var p = c.person || {};
@@ -6347,18 +7828,25 @@
           '<div class="contact-name">' + escapeHtml(c.team.name) + '</div>' +
           (ct.name && ct.name !== c.team.name ? '<div class="contact-waname">WhatsApp: ' + escapeHtml(ct.name) + '</div>' : '');
       }
+      var progs = p.programas && p.programas.length ? p.programas : (p.programa ? [p.programa] : []);
       var src = p.name_source === 'manual'
         ? '<div class="contact-namesrc">Registrado' + (p.name_by ? ' por ' + escapeHtml(p.name_by) : '') + ' en el panel</div>'
         : '';
-      if (!p.full_name) {
-        return '<div class="contact-name">' + escapeHtml(shown || 'Sin nombre') + '</div>' +
+      var prospectSrc = p.prospect
+        ? '<div class="contact-prospect"><span class="ri-user-star-line" aria-hidden="true"></span> Prospecto' +
+            (p.prospect.estado_label ? ' · ' + escapeHtml(p.prospect.estado_label) : '') +
+            (p.prospect.programa ? ' · ' + escapeHtml(p.prospect.programa) : '') + '</div>'
+        : '';
+      var incomplete = !p.full_name || !progs.length;
+      if (incomplete) {
+        return '<div class="contact-name">' + escapeHtml(shown || 'Sin nombre') + '</div>' + src + prospectSrc +
           '<button type="button" class="btn btn-sm btn-soft-primary contact-name-add" data-name-edit>' +
-            '<span class="ri-user-add-line" aria-hidden="true"></span> Registrar nombre</button>' +
+            '<span class="ri-user-add-line" aria-hidden="true"></span> Registrar datos</button>' +
           '<div class="contact-name-form" hidden></div>';
       }
       return '<div class="contact-name">' + escapeHtml(shown) +
-          ' <button type="button" class="contact-name-edit" data-name-edit title="Editar nombre" aria-label="Editar nombre">' +
-          '<span class="ri-pencil-line" aria-hidden="true"></span></button></div>' + src +
+          ' <button type="button" class="contact-name-edit" data-name-edit title="Editar nombre, programa y carnet de identidad" aria-label="Editar nombre, programa y carnet de identidad">' +
+          '<span class="ri-pencil-line" aria-hidden="true"></span></button></div>' + src + prospectSrc +
         '<div class="contact-name-form" hidden></div>';
     }
 
@@ -6368,58 +7856,126 @@
       if (!trigger || !form) return;
       var sessionId = c.session_id, chatId = c.chat_id;
       trigger.addEventListener('click', function () {
-        var current = (c.person && c.person.full_name) || '';
+        var person = state.person || c.person || {};
+        var currentName = person.full_name || '';
+        var currentProgram = (person.programas && person.programas[0]) || person.programa || c.programa || '';
         form.innerHTML =
-          '<input type="text" class="form-control form-control-sm" maxlength="120" placeholder="Apellidos, Nombres" />' +
+          '<input type="text" class="form-control form-control-sm contact-profile-name" maxlength="120" placeholder="Apellidos, Nombres" />' +
+          '<input type="text" class="form-control form-control-sm contact-profile-ci" maxlength="40" placeholder="Carnet de identidad (opcional)" />' +
+          '<select class="form-select form-select-sm contact-profile-programa" aria-label="Programa"></select>' +
+          '<input type="text" class="form-control form-control-sm contact-profile-programa-new" maxlength="160" placeholder="Nombre del programa nuevo" hidden />' +
           '<div class="contact-name-actions">' +
             '<button type="button" class="btn btn-sm btn-primary" data-save>Guardar</button>' +
             '<button type="button" class="btn btn-sm btn-light" data-cancel>Cancelar</button>' +
-            (current ? '<button type="button" class="btn btn-sm btn-link text-danger" data-clear title="Quitar el nombre registrado">Quitar</button>' : '') +
           '</div>' +
-          '<small class="text-muted">Lo verán todos los que atiendan este número, desde cualquier línea.</small>';
+          '<small class="text-muted">Elegí un programa existente o «Otro programa…». El nombre y el programa los verán todos los usuarios y líneas.</small>';
         form.hidden = false;
         trigger.hidden = true;
-        var input = form.querySelector('input');
-        input.value = current;
-        input.focus();
-        input.select();
-        var close = function () { form.hidden = true; form.innerHTML = ''; trigger.hidden = false; };
-        var save = function (value) {
+        state.contactEditing = sessionId + '|' + chatId;
+        var nameInput = form.querySelector('.contact-profile-name');
+        var ciInput = form.querySelector('.contact-profile-ci');
+        var progSelect = form.querySelector('.contact-profile-programa');
+        var progNew = form.querySelector('.contact-profile-programa-new');
+        nameInput.value = currentName;
+        ciInput.value = person.ci || '';
+        var initialCi = ciInput.value.trim();
+        var syncNewProgram = function () {
+          var isNew = progSelect.value === '__new';
+          progNew.hidden = !isNew;
+          if (isNew) progNew.focus();
+        };
+        var setProgramOptions = function (programs) {
+          var selected = progSelect.value;
+          var list = [];
+          [currentProgram].concat(programs || []).forEach(function (p) {
+            var value = String(p || '').replace(/\s+/g, ' ').trim();
+            if (value && list.indexOf(value) === -1) list.push(value);
+          });
+          progSelect.innerHTML = '<option value="">Sin programa</option>' +
+            list.map(function (p) { return '<option value="' + escapeHtml(p) + '">' + escapeHtml(p) + '</option>'; }).join('') +
+            '<option value="__new">Otro programa…</option>';
+          progSelect.value = selected || currentProgram || '';
+          syncNewProgram();
+        };
+        setProgramOptions(personProgramsCache);
+        loadPersonPrograms().then(function (list) { setProgramOptions(list); }).catch(function () { setProgramOptions(null); });
+        progSelect.addEventListener('change', syncNewProgram);
+        nameInput.focus();
+        nameInput.select();
+        var close = function () { state.contactEditing = null; form.hidden = true; form.innerHTML = ''; trigger.hidden = false; };
+        var save = function () {
+          var name = nameInput.value.trim();
+          var ci = ciInput.value.trim();
+          var programa = progSelect.value === '__new' ? progNew.value.trim() : progSelect.value.trim();
+          if (progSelect.value === '__new' && programa) {
+            // Si lo escrito coincide con un programa ya registrado, se usa el
+            // nombre existente para evitar duplicados por mayúsculas/acentos.
+            var match = null;
+            Array.prototype.some.call(progSelect.options, function (opt) {
+              if (opt.value && opt.value !== '__new' && foldText(opt.value) === foldText(programa)) {
+                match = opt.value;
+                return true;
+              }
+              return false;
+            });
+            if (match) programa = match;
+          }
+          if (progSelect.value === '__new' && !programa) {
+            toast('Escribí el nombre del programa nuevo.', true);
+            progNew.focus();
+            return;
+          }
+          if (!name && !programa && !ci && !initialCi) {
+            toast('Registrá al menos el nombre, el programa o el carnet de identidad.', true);
+            nameInput.focus();
+            return;
+          }
+          var payload = { name: name, programa: programa };
+          // Solo se envía el CI si realmente se cambió: así una edición de
+          // nombre/programa nunca borra un carnet que no se estaba mostrando.
+          if (ci !== initialCi) payload.ci = ci;
           var btns = form.querySelectorAll('button');
           Array.prototype.forEach.call(btns, function (b) { b.disabled = true; });
-          jsonApi('/inbox/' + encodeURIComponent(sessionId) + '/' + encodeURIComponent(chatId) + '/name', 'PUT', { name: value })
+          jsonApi('/inbox/' + encodeURIComponent(sessionId) + '/' + encodeURIComponent(chatId) + '/profile', 'PUT', payload)
             .then(function (d) {
-              var person = (d && d.person) || { full_name: null, programas: [] };
+              var updated = (d && d.person) || { full_name: null, programas: [] };
+              if (programa && personProgramsCache && personProgramsCache.indexOf(programa) === -1) personProgramsCache.push(programa);
               // Misma persona en otras líneas de la lista: se actualiza ya.
               var key = String(chatId).replace(/@.*$/, '').replace(/\D+/g, '').slice(-8);
               state.conversations.forEach(function (x) {
-                if (x.session_id === sessionId && x.chat_id === chatId) x.person = person;
-                else if (key && !/@g\.us$/.test(x.chat_id) && String(x.chat_id).replace(/@.*$/, '').replace(/\D+/g, '').slice(-8) === key) x.person = person;
+                if (x.session_id === sessionId && x.chat_id === chatId) x.person = updated;
+                else if (key && !/@g\.us$/.test(x.chat_id) && String(x.chat_id).replace(/@.*$/, '').replace(/\D+/g, '').slice(-8) === key) x.person = updated;
               });
-              toast(value ? 'Nombre registrado' : 'Nombre quitado');
+              toast('Datos de la persona registrados');
               var opened = selectedConversation();
               var headName = els.pane.querySelector('.chat-header .chat-id .name');
               if (opened && headName && opened.session_id === sessionId && opened.chat_id === chatId) headName.textContent = convoName(opened);
+              state.contactEditing = null;
               renderList();
               renderContact();
               loadPerson();
             })
             .catch(function (err) {
               Array.prototype.forEach.call(btns, function (b) { b.disabled = false; });
-              toast((err && err.message) || 'No se pudo guardar el nombre.', true);
+              toast((err && err.message) || 'No se pudieron guardar los datos.', true);
             });
         };
-        form.querySelector('[data-save]').addEventListener('click', function () {
-          var v = input.value.trim();
-          if (!v) { input.focus(); return; }
-          save(v);
-        });
+        form.querySelector('[data-save]').addEventListener('click', save);
         form.querySelector('[data-cancel]').addEventListener('click', close);
-        var clr = form.querySelector('[data-clear]');
-        if (clr) clr.addEventListener('click', function () { save(''); });
-        input.addEventListener('keydown', function (e) {
-          if (e.key === 'Enter') { e.preventDefault(); form.querySelector('[data-save]').click(); }
-          if (e.key === 'Escape') close();
+        var formFields = function () {
+          return [nameInput, ciInput, progSelect, progNew].filter(function (el) { return el && !el.hidden && !el.disabled; });
+        };
+        var focusNextField = function (current) {
+          var list = formFields();
+          var i = list.indexOf(current);
+          var next = list[i + 1];
+          if (next) next.focus();
+        };
+        [nameInput, ciInput, progNew].forEach(function (input) {
+          input.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') { e.preventDefault(); focusNextField(input); }
+            if (e.key === 'Escape') { e.preventDefault(); close(); }
+          });
         });
       });
     }
@@ -6593,6 +8149,15 @@
           es.addEventListener(evt, function (e) {
             try {
               var d = JSON.parse(e.data);
+              // Un mensaje borrado en WhatsApp: se conserva y se marca en el hilo abierto.
+              if (evt === 'message' && d && d.action === 'revoked' && d.chatId === state.selectedChat) {
+                var target = state.messages.filter(function (m) { return m.wa_message_id === d.messageId; })[0];
+                if (target) {
+                  target.revoked_at = d.revoked_at || new Date().toISOString();
+                  target.revoked_scope = d.revoked_scope || 'revoke';
+                  renderThread('keep');
+                }
+              }
               if (d && d.chatId && state.selectedChat && d.chatId !== state.selectedChat) { queue(); return; }
             } catch (_) {}
             queue();
@@ -6729,6 +8294,7 @@
   function initNotes() {
     var root = document.getElementById('notes-page');
     if (!root) return;
+    window.addEventListener('esam:contact-updated', function () { loadNotes(); });
 
     var STATUS = [
       { key: 'overdue', label: 'Vencidas', icon: 'ri-alarm-warning-line', tone: 'danger' },
@@ -6782,8 +8348,8 @@
     try { if (localStorage.getItem('notes-section') === 'modules') st.section = 'modules'; } catch (_) {}
     var defaultArea = root.getAttribute('data-marketing-asesor') === '1' ? 'marketing' : 'all';
     try { st.area = localStorage.getItem('notes-area') || defaultArea; } catch (_) { st.area = defaultArea; }
-    st.group = 'estado';
-    try { st.group = localStorage.getItem('notes-group') || 'estado'; } catch (_) {}
+    st.group = 'registro-mes';
+    try { st.group = localStorage.getItem('notes-group') || 'registro-mes'; } catch (_) {}
     els.group = root.querySelector('#notes-group');
     if (els.group) {
       if (!els.group.querySelector('option[value="' + st.group + '"]')) st.group = 'estado';
@@ -6986,8 +8552,8 @@
             if (els.group) els.group.value = 'equipo';
             try { localStorage.setItem('notes-group', st.group); } catch (_) {}
           } else if (st.group === 'equipo') {
-            st.group = 'estado';
-            if (els.group) els.group.value = 'estado';
+            st.group = 'registro-mes';
+            if (els.group) els.group.value = 'registro-mes';
             try { localStorage.setItem('notes-group', st.group); } catch (_) {}
           }
           try { localStorage.setItem('notes-area', st.area); } catch (_) {}
@@ -7326,7 +8892,7 @@
 
     function openAgendaCopyDialog(note) {
       loadAgendaBoards(true).then(function (data) {
-        var boards = (data && data.boards) || [];
+        var boards = ((data && data.boards) || []).filter(function (b) { return b.can_edit !== false; });
         if (!boards.length) {
           toast('Primero creá una sub-agenda en Mi agenda.', true);
           return;
@@ -7503,6 +9069,17 @@
         var rd = relDay(day);
         return { key: 'r' + day, title: dayTitle(day), sort: day, tone: 'reg', sub: rd ? 'Registradas ' + rd.toLowerCase() : '' };
       }
+      if (g === 'registro-mes') {
+        var rMonth = ymdOf(n.created_at).slice(0, 7);
+        var rp = rMonth.split('-');
+        var rName = MONTHS[+rp[1] - 1] || '';
+        return { key: 'rm' + rp[0] + rp[1], title: rName.charAt(0).toUpperCase() + rName.slice(1) + ' ' + rp[0],
+          sort: rp[0] + rp[1], tone: 'reg', icon: 'ri-calendar-line', sub: 'Mes de registro' };
+      }
+      if (g === 'gestion') {
+        var gy = ymdOf(n.created_at).slice(0, 4);
+        return { key: 'g' + gy, title: 'Gestión ' + gy, sort: gy, tone: 'reg', icon: 'ri-calendar-2-line', sub: 'Año de registro' };
+      }
       if (g === 'area') {
         var a = areaOf(n);
         var i = areaInfo(a);
@@ -7520,6 +9097,11 @@
         var sk = currentStageOf(n);
         var info = stageInfo(sk);
         return { key: 's' + sk, title: info.stage.label, sort: String(info.index), tone: 'st-' + sk, icon: info.stage.icon };
+      }
+      if (g === 'programa') {
+        var prog = String(n.programa || '').trim();
+        if (!prog) return { key: 'p__none', title: 'Sin programa', sort: '9999', tone: 'none', icon: 'ri-graduation-cap-line' };
+        return { key: 'p' + foldText(prog), title: prog, sort: '0' + foldText(prog), tone: 'area', icon: 'ri-graduation-cap-line' };
       }
       return null;
     }
@@ -7595,7 +9177,7 @@
         groups[k].push(n);
       });
       if (custom) {
-        var desc = st.group === 'registro';
+        var desc = st.group === 'registro' || st.group === 'registro-mes' || st.group === 'gestion';
         order.sort(function (a, b) {
           var x = infos[a].sort, y = infos[b].sort;
           // Sin fecha siempre al final.
@@ -7745,7 +9327,7 @@
     function boardCard(n) {
       var due = n.due_at ? NoteKit.dueState(n) : null;
       var contact = n.contact_name || (n.contact_phone ? '+' + n.contact_phone : String(n.chat_id || '').split('@')[0]);
-      var text = (n.note_text || (n.audio_path ? 'Nota de voz' : '')).replace(/\s+/g, ' ');
+      var text = (n.note_text || (n.audio_path ? 'Nota de voz' : n.image_path ? 'Imagen adjunta' : '')).replace(/\s+/g, ' ');
       var tags = (n.tags || []).map(function (t) { return '<span class="pl-tag" style="--tag:' + t.color + '" title="' + escapeHtml(t.name) + '">' + escapeHtml(t.name) + '</span>'; }).join('');
       var movable = canMove(n);
       var info = stageInfo(currentStageOf(n));
@@ -7771,11 +9353,16 @@
         '</div>' +
         (n.prospect_meta ? '<div class="pl-prospect">' + NoteKit.prospectBadge(n, showAdvisor()) + '</div>' : '') +
         (text ? '<div class="pl-text">' + escapeHtml(text.slice(0, 220)) + '</div>' : '') +
+        (n.image_path
+          ? '<a class="pl-image js-lightbox" href="/inbox/notes/' + n.id + '/image" title="Ver la imagen de la nota">' +
+              '<img src="/inbox/notes/' + n.id + '/image" alt="Imagen de la nota" loading="lazy" decoding="async"></a>'
+          : '') +
         (n.contact_result && n.contacted_at ? '<div class="pl-result"><span class="ri-chat-check-line"></span> ' + escapeHtml(n.contact_result.slice(0, 140)) + '</div>' : '') +
         (tags ? '<div class="pl-tags">' + tags + '</div>' : '') +
         (st.area === 'all' || st.area === 'admin' ? '<div class="pl-area-row">' + areaBadge(n) + '</div>' : '') +
         '<div class="pl-vig">' + NoteKit.vigenciaHtml(n) + '</div>' +
         '<div class="pl-foot">' +
+          (n.person_ci ? '<span class="pl-ci" title="Carnet de identidad"><span class="ri-id-card-line"></span> CI ' + escapeHtml(n.person_ci) + '</span>' : '') +
           (n.due_at ? '<span class="pl-due pl-due-date" title="Fecha de seguimiento"><span class="ri-calendar-event-line"></span> ' + escapeHtml(NoteKit.fmtDay(n.due_at) + (n.due_time ? ' · ' + n.due_time : '')) + '</span>' : '') +
           (n.assigned_name ? '<span class="pl-who" title="Responsable"><span class="ri-user-received-2-line"></span> ' + escapeHtml(n.assigned_name) + '</span>'
             : '<span class="pl-who" title="Registró"><span class="ri-user-line"></span> ' + escapeHtml(n.author_name || 'Equipo') + '</span>') +
@@ -8216,18 +9803,36 @@
   function initAgenda() {
     var root = document.getElementById('agenda-page');
     if (!root) return;
+    window.addEventListener('esam:contact-updated', function () { loadBoards(); });
+    // Enlaces desde la ficha del contacto: abrir una sub-agenda y resaltar
+    // la nota que se registró allí.
+    var focusParams = new URLSearchParams(location.search || '');
+    var focusBoardId = Number(focusParams.get('board')) || 0;
+    var focusNoteId = Number(focusParams.get('note')) || 0;
     var els = {
       boards: document.getElementById('agenda-boards'),
       stats: document.getElementById('agenda-stats'),
       board: document.getElementById('agenda-board'),
       search: document.getElementById('agenda-search'),
+      group: document.getElementById('agenda-group'),
       newBtn: document.getElementById('agenda-new'),
     };
-    var state = { boards: [], activeId: null, notes: [], q: '', view: 'board', filter: 'all', loadingBoards: true, loadingNotes: false };
+    var state = { boards: [], activeId: null, notes: [], q: '', view: 'board', filter: 'all', group: 'registro-mes', loadingBoards: true, loadingNotes: false };
+    var groupValues = ['columna', 'programa', 'registro-mes', 'gestion'];
     try {
       var savedView = localStorage.getItem('agenda-view');
       if (savedView === 'list' || savedView === 'board') state.view = savedView;
+      var savedGroup = localStorage.getItem('agenda-group');
+      if (groupValues.indexOf(savedGroup) !== -1) state.group = savedGroup;
     } catch (e) { /* sin storage */ }
+    if (els.group) {
+      els.group.value = state.group;
+      els.group.addEventListener('change', function () {
+        state.group = groupValues.indexOf(els.group.value) !== -1 ? els.group.value : 'columna';
+        try { localStorage.setItem('agenda-group', state.group); } catch (e) { /* sin storage */ }
+        renderBoard();
+      });
+    }
 
     function saveActive() {
       try { localStorage.setItem('agenda-board', String(state.activeId || '')); } catch (e) { /* sin storage */ }
@@ -8258,6 +9863,68 @@
       return n.contact_name || n.contact_phone || String(n.chat_id || '').split('@')[0] || 'Contacto';
     }
 
+    function noteProgram(n) {
+      return String(n.programa || '').trim();
+    }
+
+    function ymdOf(iso) {
+      var d = new Date(iso);
+      if (isNaN(d.getTime())) return '';
+      var p = function (n) { return String(n).padStart(2, '0'); };
+      return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+    }
+
+    var MONTHS = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+
+    function monthTitle(ymd) {
+      var p = String(ymd || '').split('-');
+      var name = MONTHS[Number(p[1]) - 1] || '';
+      if (!name) return 'Sin mes de registro';
+      return name.charAt(0).toUpperCase() + name.slice(1) + ' ' + p[0];
+    }
+
+    function noteGroups(notes) {
+      if (state.group === 'columna') return [{ key: 'all', title: null, notes: notes }];
+      var groups = Object.create(null);
+      notes.forEach(function (n) {
+        var key, title, sort, icon;
+        if (state.group === 'programa') {
+          var programa = noteProgram(n);
+          key = 'p' + (programa ? foldText(programa) : '__none');
+          title = programa || 'Sin programa';
+          sort = programa ? foldText(programa) : '9999';
+          icon = 'ri-graduation-cap-line';
+        } else if (state.group === 'registro-mes') {
+          var ymd = ymdOf(n.created_at);
+          var month = ymd ? ymd.slice(0, 7) : '';
+          key = 'm' + (month || '__none');
+          title = month ? monthTitle(month) : 'Sin fecha de registro';
+          sort = month || '9999';
+          icon = 'ri-calendar-line';
+        } else {
+          var year = ymdOf(n.created_at).slice(0, 4);
+          key = 'g' + (year || '__none');
+          title = year ? 'Gestión ' + year : 'Sin gestión';
+          sort = year || '9999';
+          icon = 'ri-calendar-2-line';
+        }
+        var group = groups[key] || (groups[key] = { key: key, title: title, sort: sort, icon: icon, notes: [] });
+        group.notes.push(n);
+      });
+      var list = Object.keys(groups).map(function (k) { return groups[k]; });
+      list.sort(function (a, b) {
+        if (state.group === 'programa') {
+          if (a.sort === '9999') return 1;
+          if (b.sort === '9999') return -1;
+          return a.sort.localeCompare(b.sort, 'es');
+        }
+        if (a.sort === '9999') return 1;
+        if (b.sort === '9999') return -1;
+        return a.sort < b.sort ? 1 : a.sort > b.sort ? -1 : 0;
+      });
+      return list;
+    }
+
     function dueHtml(n) {
       if (!n.due_at) return '';
       var diff = NoteKit.daysFromToday(n.due_at);
@@ -8275,12 +9942,24 @@
     }
 
     function cardHtml(n) {
+      var board = activeBoard();
+      var canEdit = !!(board && board.can_edit);
+      var isOwner = !!(board && board.permission === 'owner');
       var stage = stageForNote(n);
       var name = contactName(n);
       var phone = n.contact_phone && n.contact_phone !== name ? fmtPhone(n.contact_phone) : '';
       var chatUrl = '/conversations/' + encodeURIComponent(n.chat_id || '');
       var done = stageDone(n, stage);
       var overdue = !done && n.due_at && NoteKit.daysFromToday(n.due_at) < 0;
+      var audit = '<div class="ag-audit">' +
+        '<span title="Persona que registró la nota"><span class="ri-user-add-line" aria-hidden="true"></span> Registró: ' +
+          escapeHtml(n.author_name || 'Sin dato') + '</span>' +
+        (n.last_stage_by
+          ? '<span title="Último cambio de columna"><span class="ri-drag-move-2-line" aria-hidden="true"></span> Movió: ' +
+              escapeHtml(n.last_stage_by) +
+              (n.last_stage_at && ymdOf(n.last_stage_at) ? ' · ' + escapeHtml(NoteKit.fmtDay(ymdOf(n.last_stage_at))) : '') + '</span>'
+          : '') +
+        '</div>';
       return '<article class="ag-card' + (done ? ' is-done' : '') + (overdue ? ' is-overdue' : '') + '" data-id="' + n.id + '">' +
         '<div class="ag-card-top">' +
           '<a class="ag-contact" href="' + chatUrl + '" title="Abrir la conversación con ' + escapeHtml(name) + '">' +
@@ -8292,20 +9971,50 @@
         '</div>' +
         (n.note_text ? '<p class="ag-text">' + linkifyHtml(escapeHtml(n.note_text)) + '</p>' : '<p class="ag-text is-muted">Nota de voz</p>') +
         (n.audio_path ? '<audio class="ag-audio" controls preload="none" src="/inbox/notes/' + n.id + '/audio"></audio>' : '') +
+        (n.image_path
+          ? '<a class="ag-image js-lightbox" href="/inbox/notes/' + n.id + '/image" title="Ver la imagen de la nota">' +
+              '<img src="/inbox/notes/' + n.id + '/image" alt="Imagen de la nota" loading="lazy" decoding="async"></a>'
+          : '') +
         '<div class="ag-meta">' + dueHtml(n) + tagList(n) +
+          (n.cite_number
+            ? '<span class="ag-cite" title="Cite del último movimiento"><span class="ri-file-list-3-line" aria-hidden="true"></span>Cite ' +
+                escapeHtml(n.cite_number) + (n.cite_concept ? ' · ' + escapeHtml(citeConceptLabel(n.cite_concept)) : '') + '</span>'
+            : '') +
+          (n.person_ci
+            ? '<span class="ag-ci" title="Carnet de identidad"><span class="ri-id-card-line" aria-hidden="true"></span>CI ' + escapeHtml(n.person_ci) + '</span>'
+            : '') +
+          (noteProgram(n) ? '<span class="ag-programa" title="Programa"><span class="ri-graduation-cap-line" aria-hidden="true"></span>' + escapeHtml(noteProgram(n)) + '</span>' : '') +
           (n.agenda_source_note_id
             ? '<a class="ag-source" href="/notes/' + n.agenda_source_note_id + '" title="Abrir la nota original en Notas y tareas">' +
                 '<span class="ri-links-line" aria-hidden="true"></span>Desde Notas</a>'
             : '') +
         '</div>' +
+        audit +
         '<div class="ag-card-foot">' +
-          '<select class="form-select form-select-sm ag-stage" data-id="' + n.id + '" aria-label="Mover a otra columna">' +
-            stages().map(function (s) {
-              return '<option value="' + s.id + '"' + (s.id === (stage ? stage.id : 0) ? ' selected' : '') + '>' + escapeHtml(s.name) + '</option>';
-            }).join('') +
-          '</select>' +
-          '<button type="button" class="ag-icon-btn ag-move" data-id="' + n.id + '" title="Mover a otra sub-agenda" aria-label="Mover a otra sub-agenda">' +
-            '<span class="ri-folder-transfer-line" aria-hidden="true"></span></button>' +
+          (canEdit
+            ? '<select class="form-select form-select-sm ag-stage" data-id="' + n.id + '" aria-label="Mover a otra columna">' +
+                stages().map(function (s) {
+                  return '<option value="' + s.id + '"' + (s.id === (stage ? stage.id : 0) ? ' selected' : '') + '>' + escapeHtml(s.name) + '</option>';
+                }).join('') +
+              '</select>'
+            : '<span class="ag-stage-static"><span class="ag-stage-dot" aria-hidden="true"></span>' +
+                escapeHtml(stage ? stage.name : 'Sin columna') + '</span>') +
+          (isOwner
+            ? '<button type="button" class="ag-icon-btn ag-edit" data-id="' + n.id + '" title="Editar la nota" aria-label="Editar la nota">' +
+                '<span class="ri-pencil-line" aria-hidden="true"></span></button>'
+            : '') +
+          (n.contact_id
+            ? '<button type="button" class="ag-icon-btn ag-history" data-contact-history="' + n.contact_id + '" data-contact-name="' + escapeHtml(name) +
+                '" title="Historial completo del contacto" aria-label="Historial completo del contacto"><span class="ri-route-line" aria-hidden="true"></span></button>'
+            : '') +
+          (isOwner
+            ? '<button type="button" class="ag-icon-btn ag-delete" data-id="' + n.id + '" title="Eliminar nota" aria-label="Eliminar nota">' +
+                '<span class="ri-delete-bin-6-line" aria-hidden="true"></span></button>'
+            : '') +
+          (canEdit
+            ? '<button type="button" class="ag-icon-btn ag-move" data-id="' + n.id + '" title="Mover a otra sub-agenda" aria-label="Mover a otra sub-agenda">' +
+                '<span class="ri-folder-transfer-line" aria-hidden="true"></span></button>'
+            : '') +
           '<a class="ag-icon-btn ag-open" href="' + chatUrl + '" title="Abrir la conversación" aria-label="Abrir la conversación">' +
             '<span class="ri-arrow-right-up-line" aria-hidden="true"></span></a>' +
         '</div>' +
@@ -8351,23 +10060,67 @@
       });
     }
 
+    function deleteEmptyBoard(board) {
+      if (!board) return;
+      if (Number(board.notes || 0) > 0) {
+        toast('Solo se puede eliminar una sub-agenda vacía.', true);
+        return;
+      }
+      if (state.boards.length <= 1) {
+        toast('No podés eliminar la única sub-agenda.', true);
+        return;
+      }
+      if (!window.confirm('¿Eliminar la sub-agenda «' + board.name + '»? Está vacía.')) return;
+      jsonApi('/agenda/boards/' + board.id, 'DELETE')
+        .then(function (res) {
+          state.boards = res.boards || [];
+          if (state.activeId === board.id) state.activeId = state.boards[0] ? state.boards[0].id : null;
+          saveActive();
+          loadBoards();
+          toast('Sub-agenda eliminada.');
+        })
+        .catch(function (e) { toast(e.message, true); });
+    }
+
     function renderBoards() {
       if (!els.boards) return;
       if (state.loadingBoards && !state.boards.length) {
         els.boards.innerHTML = '<div class="agenda-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Cargando sub-agendas…</div>';
         return;
       }
+      var active = activeBoard();
+      var isOwner = !!(active && active.permission === 'owner');
+      var canDelete = isOwner && state.boards.length > 1 && Number(active.notes || 0) === 0;
       els.boards.innerHTML = '<div class="np-sections" role="tablist" aria-label="Sub-agendas">' +
         state.boards.map(function (b) {
           var on = b.id === state.activeId;
-          return '<button type="button" class="np-section' + (on ? ' is-on' : '') + '" data-board="' + b.id + '" role="tab" aria-selected="' + on + '">' +
-            '<span class="ri-folder-3-line" aria-hidden="true"></span> ' + escapeHtml(b.name) +
+          var shared = b.permission !== 'owner';
+          return '<button type="button" class="np-section' + (on ? ' is-on' : '') + (shared ? ' is-shared' : '') +
+            '" data-board="' + b.id + '" role="tab" aria-selected="' + on + '" title="' +
+            (shared ? 'Compartida por ' + escapeHtml(b.owner_name || 'otro usuario') : 'Tu sub-agenda') + '">' +
+            '<span class="' + (shared ? 'ri-share-forward-line' : 'ri-folder-3-line') + '" aria-hidden="true"></span> ' +
+            '<span class="ag-tab-name">' + escapeHtml(b.name) +
+              (shared ? '<small>' + escapeHtml(b.owner_name || 'Compartida') + ' · ' +
+                (b.can_edit ? 'Edición' : 'Solo lectura') + '</small>' : '') +
+            '</span>' +
             '<span class="np-section-count">' + (b.notes || 0) + '</span></button>';
         }).join('') +
         '</div>' +
         '<div class="ag-board-actions">' +
-          '<button type="button" class="ag-board-btn" id="ag-board-settings" title="Editar nombre y columnas de esta sub-agenda">' +
-            '<span class="ri-settings-3-line" aria-hidden="true"></span> Columnas</button>' +
+          (isOwner
+            ? '<button type="button" class="ag-board-btn" id="ag-board-settings" title="Editar nombre y columnas de esta sub-agenda">' +
+                '<span class="ri-settings-3-line" aria-hidden="true"></span> Columnas</button>' +
+              '<button type="button" class="ag-board-btn" id="ag-board-share" title="Compartir esta sub-agenda con usuarios o áreas">' +
+                '<span class="ri-share-forward-line" aria-hidden="true"></span> Compartir</button>'
+            : (active
+              ? '<span class="ag-board-shared-note" title="El dueño administra esta sub-agenda">' +
+                  '<span class="ri-lock-line" aria-hidden="true"></span> ' +
+                  (active.can_edit ? 'Compartida con edición' : 'Compartida solo lectura') + '</span>'
+              : '')) +
+          (canDelete
+            ? '<button type="button" class="ag-board-btn is-danger" id="ag-board-delete-empty" title="Eliminar esta sub-agenda vacía">' +
+                '<span class="ri-delete-bin-6-line" aria-hidden="true"></span> Eliminar</button>'
+            : '') +
           '<button type="button" class="ag-board-btn" id="ag-board-new">' +
             '<span class="ri-add-line" aria-hidden="true"></span> Nueva sub-agenda</button>' +
         '</div>';
@@ -8389,6 +10142,10 @@
       });
       var settings = document.getElementById('ag-board-settings');
       if (settings) settings.addEventListener('click', function () { openBoardDialog(activeBoard()); });
+      var share = document.getElementById('ag-board-share');
+      if (share) share.addEventListener('click', function () { openShareDialog(activeBoard()); });
+      var delEmpty = document.getElementById('ag-board-delete-empty');
+      if (delEmpty) delEmpty.addEventListener('click', function () { deleteEmptyBoard(activeBoard()); });
       var add = document.getElementById('ag-board-new');
       if (add) add.addEventListener('click', function () { openBoardDialog(null); });
     }
@@ -8414,9 +10171,16 @@
         return;
       }
       el.innerHTML = '<div class="ag-side-board">' +
-        '<span class="ag-side-ico" aria-hidden="true"><span class="ri-folder-3-line"></span></span>' +
+        '<span class="ag-side-ico" aria-hidden="true"><span class="' + (b.shared ? 'ri-share-forward-line' : 'ri-folder-3-line') + '"></span></span>' +
         '<div class="ag-side-copy"><b>' + escapeHtml(b.name) + '</b>' +
-          '<span>' + (b.stages ? b.stages.length : 0) + ' columnas · ' + (b.notes || 0) + ' notas</span></div>' +
+          '<span>' + (b.stages ? b.stages.length : 0) + ' columnas · ' + (b.notes || 0) + ' notas' +
+            (b.shared ? ' · de ' + escapeHtml(b.owner_name || 'otro usuario') : '') + '</span>' +
+          (b.shared
+            ? '<span class="ag-side-perm ' + (b.can_edit ? 'is-edit' : 'is-view') + '">' +
+                '<span class="' + (b.can_edit ? 'ri-edit-line' : 'ri-eye-line') + '" aria-hidden="true"></span> ' +
+                (b.can_edit ? 'Puede editar' : 'Solo lectura') + '</span>'
+            : '') +
+        '</div>' +
       '</div>';
     }
 
@@ -8424,6 +10188,17 @@
       return '<div class="agenda-empty"><span class="ri-folder-add-line" aria-hidden="true"></span>' +
         '<h6>Creá tu primera sub-agenda</h6><p>Agrupá tus procesos por tipo y definí las columnas del pipeline.</p>' +
         '<button type="button" class="btn btn-primary btn-sm" id="ag-empty-new-board"><span class="ri-add-line"></span> Nueva sub-agenda</button></div>';
+    }
+
+    function cardsByGroup(notes) {
+      if (state.group === 'columna') return notes.map(cardHtml).join('');
+      return noteGroups(notes).map(function (g) {
+        return '<div class="ag-prog-group">' +
+          '<div class="ag-prog-head"><span class="' + g.icon + '" aria-hidden="true"></span>' +
+            '<b>' + escapeHtml(g.title) + '</b><span>' + g.notes.length + '</span></div>' +
+          g.notes.map(cardHtml).join('') +
+        '</div>';
+      }).join('');
     }
 
     function renderList(notes) {
@@ -8445,7 +10220,7 @@
             (stage.is_done ? '<span class="ag-col-done ri-check-line" title="Columna final del proceso" aria-hidden="true"></span>' : '') +
             '<span class="ag-col-count">' + listNotes.length + '</span>' +
           '</header>' +
-          '<div class="ag-list-cards">' + listNotes.map(cardHtml).join('') + '</div>' +
+          '<div class="ag-list-cards">' + cardsByGroup(listNotes) + '</div>' +
         '</section>';
       }).join('') + '</div>';
     }
@@ -8466,33 +10241,46 @@
         return;
       }
       var list = stages();
+      var canEdit = !!board.can_edit;
+      var sharedHint = board.shared
+        ? '<div class="ag-share-banner' + (canEdit ? '' : ' is-readonly') + '">' +
+            '<span class="' + (canEdit ? 'ri-edit-line' : 'ri-eye-line') + '" aria-hidden="true"></span>' +
+            '<div><b>' + escapeHtml(board.name) + '</b> · compartida por ' + escapeHtml(board.owner_name || 'otro usuario') +
+              '<span>' + (canEdit
+                ? 'Podés agregar y mover notas; las columnas y los permisos los administra el dueño.'
+                : 'Solo lectura. El dueño puede darte permiso de edición.') + '</span></div></div>'
+        : '';
       if (!list.length) {
-        els.board.innerHTML = '<div class="agenda-empty"><span class="ri-layout-column-line" aria-hidden="true"></span>' +
+        els.board.innerHTML = sharedHint + '<div class="agenda-empty"><span class="ri-layout-column-line" aria-hidden="true"></span>' +
           '<h6>Esta sub-agenda no tiene columnas</h6><p>Configurá las etapas del pipeline para empezar.</p>' +
-          '<button type="button" class="btn btn-primary btn-sm" id="ag-empty-config"><span class="ri-settings-3-line"></span> Configurar columnas</button></div>';
+          (canEdit && !board.shared
+            ? '<button type="button" class="btn btn-primary btn-sm" id="ag-empty-config"><span class="ri-settings-3-line"></span> Configurar columnas</button>'
+            : '') + '</div>';
         var cfg = document.getElementById('ag-empty-config');
         if (cfg) cfg.addEventListener('click', function () { openBoardDialog(board); });
         return;
       }
       if (state.loadingNotes && !state.notes.length) {
-        els.board.innerHTML = '<div class="agenda-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Cargando notas…</div>';
+        els.board.innerHTML = sharedHint + '<div class="agenda-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Cargando notas…</div>';
         return;
       }
       var notes = visibleNotes();
       if (state.view === 'list') {
-        els.board.innerHTML = renderList(notes);
+        els.board.innerHTML = sharedHint + renderList(notes);
         bindBoardCards();
         return;
       }
       var hint = '';
       if (!state.notes.length) {
         hint = '<div class="ag-board-empty-hint"><span class="ri-information-line" aria-hidden="true"></span> ' +
-          'Todavía no hay notas en esta sub-agenda. Usá «Nueva nota» o el botón + de una columna.</div>';
+          (canEdit
+            ? 'Todavía no hay notas en esta sub-agenda. Usá «Nueva nota» o el botón + de una columna.'
+            : 'Todavía no hay notas en esta sub-agenda compartida.') + '</div>';
       } else if (!notes.length) {
         hint = '<div class="ag-board-empty-hint"><span class="ri-filter-off-line" aria-hidden="true"></span> ' +
           'No hay notas con este filtro. Elegí «En total» para verlas todas.</div>';
       }
-      els.board.innerHTML = hint + '<div class="ag-columns">' + list.map(function (stage) {
+      els.board.innerHTML = sharedHint + hint + '<div class="ag-columns">' + list.map(function (stage) {
         var listNotes = notes.filter(function (n) {
           var s = stageForNote(n);
           return !!s && s.id === stage.id;
@@ -8506,8 +10294,10 @@
             '<span class="ag-col-count">' + listNotes.length + '</span>' +
           '</header>' +
           '<div class="ag-col-body">' +
-            (listNotes.length ? listNotes.map(cardHtml).join('') : '<div class="ag-col-empty">Sin notas</div>') +
-            '<button type="button" class="ag-col-add" data-stage="' + stage.id + '"><span class="ri-add-line" aria-hidden="true"></span> Agregar nota</button>' +
+            (listNotes.length ? cardsByGroup(listNotes) : '<div class="ag-col-empty">Sin notas</div>') +
+            (canEdit
+              ? '<button type="button" class="ag-col-add" data-stage="' + stage.id + '"><span class="ri-add-line" aria-hidden="true"></span> Agregar nota</button>'
+              : '') +
           '</div></section>';
       }).join('') + '</div>';
       bindBoardCards();
@@ -8525,6 +10315,9 @@
       api('/agenda/boards')
         .then(function (d) {
           state.boards = (d && d.boards) || [];
+          if (focusBoardId && state.boards.some(function (b) { return b.id === focusBoardId; })) {
+            state.activeId = focusBoardId;
+          }
           var saved = 0;
           try { saved = Number(localStorage.getItem('agenda-board')) || 0; } catch (e) { /* sin storage */ }
           if (!state.activeId || !state.boards.some(function (b) { return b.id === state.activeId; })) {
@@ -8553,12 +10346,23 @@
           state.loadingNotes = false;
           renderStats();
           renderBoard();
+          focusAgendaNote();
         })
         .catch(function (e) {
           state.loadingNotes = false;
           els.board.innerHTML = '<div class="agenda-empty"><span class="ri-error-warning-line" aria-hidden="true"></span>' +
             '<h6>No se pudo cargar la sub-agenda</h6><p>' + escapeHtml(e.message || 'Intentá de nuevo.') + '</p></div>';
         });
+    }
+
+    function focusAgendaNote() {
+      if (!focusNoteId) return;
+      var card = els.board.querySelector('.ag-card[data-id="' + focusNoteId + '"]');
+      if (!card) return;
+      focusNoteId = 0;
+      card.classList.add('is-focus');
+      try { card.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) { card.scrollIntoView(); }
+      setTimeout(function () { card.classList.remove('is-focus'); }, 5000);
     }
 
     function updateLocal(updated) {
@@ -8568,13 +10372,181 @@
       renderBoard();
     }
 
+    /* ── Cites (pagos a la universidad) ──────────────────────────────────── */
+    var citesPromise = null;
+    var CITE_CONCEPTS = { Inscripcion: 'Inscripción', Matricula: 'Matrícula', Colegiatura: 'Colegiatura', Certificacion: 'Certificación' };
+
+    function loadCites(force) {
+      if (force) citesPromise = null;
+      if (!citesPromise) {
+        citesPromise = api('/agenda/cites').then(function (d) {
+          state.cites = (d && d.cites) || [];
+          state.citesSyncedAt = (d && d.synced_at) || null;
+          return state.cites;
+        }).catch(function (e) {
+          citesPromise = null;
+          throw e;
+        });
+      }
+      return citesPromise;
+    }
+
+    function boardUsesCites(board) {
+      return !!(board && Number(board.uses_cites) === 1);
+    }
+
+    function citeConceptLabel(concepto) {
+      var raw = String(concepto || '').split(',')[0].trim();
+      return CITE_CONCEPTS[raw] || raw || '';
+    }
+
+    function citeLabel(c) {
+      return 'Cite ' + c.nombre + (c.concepto ? ' · ' + citeConceptLabel(c.concepto) : '');
+    }
+
+    function citeOptions(cites, selected) {
+      var head = '<option value="">Elegí un cite…</option>';
+      return head + (cites || []).map(function (c) {
+        return '<option value="' + c.id + '"' + (Number(selected) === Number(c.id) ? ' selected' : '') + '>' +
+          escapeHtml(citeLabel(c)) + '</option>';
+      }).join('');
+    }
+
+    function filterCites(cites, q) {
+      var needle = foldText(String(q || '').trim());
+      if (!needle) return cites || [];
+      return (cites || []).filter(function (c) {
+        return foldText(citeLabel(c) + ' ' + (c.nombre || '') + ' ' + (c.concepto || '')).indexOf(needle) !== -1;
+      });
+    }
+
     function changeStage(note, stageId, select) {
       var stage = stageById(stageId);
       if (!stage || stage.id === note.agenda_stage_id) return;
-      select.disabled = true;
-      jsonApi('/agenda/notes/' + note.id + '/stage', 'POST', { board_id: state.activeId, stage_id: stage.id })
-        .then(function (updated) { updateLocal(updated); })
-        .catch(function (e) { select.disabled = false; select.value = note.agenda_stage_id; toast(e.message, true); });
+      openStageCommentDialog(note, stage, activeBoard(), function (comment, citeId, done, btn) {
+        jsonApi('/agenda/notes/' + note.id + '/stage', 'POST', {
+          board_id: state.activeId,
+          stage_id: stage.id,
+          comment: comment,
+          cite_id: citeId || null,
+        })
+          .then(function (updated) {
+            done();
+            updateLocal(updated);
+            toast('Nota movida a «' + stage.name + '».');
+          })
+          .catch(function (e) { btn.disabled = false; toast(e.message, true); });
+      }, function () {
+        if (select) select.value = note.agenda_stage_id;
+      });
+    }
+
+    /**
+     * Pide el detalle obligatorio (y el cite, si la sub-agenda lo exige) antes
+     * de mover una nota de columna.
+     */
+    function openStageCommentDialog(note, stage, board, onSave, onCancel) {
+      var needsCite = boardUsesCites(board) && Number(stage.requires_cite) === 1;
+      var ready = needsCite ? loadCites() : Promise.resolve(state.cites || []);
+      ready.then(function (cites) {
+        var dlg = document.createElement('dialog');
+        dlg.className = 'agenda-dialog nk-section';
+        var citeField = needsCite
+          ? '<div class="ag-field" id="ag-stage-cite-field">' +
+              '<label class="ag-label" for="ag-stage-cite">N° de cite *</label>' +
+              '<input type="text" class="form-control form-control-sm mb-1" id="ag-stage-cite-search" placeholder="Buscar cite…" autocomplete="off">' +
+              '<select class="form-select form-select-sm" id="ag-stage-cite" aria-label="Cite">' +
+                citeOptions(cites, note.cite_folio_id) +
+              '</select>' +
+              '<div class="ag-help" id="ag-stage-cite-help">' +
+                (cites.length
+                  ? 'Solo se muestran los cites habilitados en Cronogramas › Folios.'
+                  : 'No hay cites habilitados. Cargalos en Cronogramas › Folios y sincronizá.') +
+              '</div></div>'
+          : '';
+        dlg.innerHTML = '<div class="agenda-dialog-box agenda-dialog-sm">' +
+          '<div class="agenda-dialog-head"><div><h5>Mover a «' + escapeHtml(stage.name) + '»</h5>' +
+            '<p>' + (needsCite
+              ? 'Elegí el cite del pago y registrá el detalle del seguimiento. Queda en el historial con fecha y usuario.'
+              : 'Registrá el detalle del seguimiento. Queda en el historial con fecha y usuario.') + '</p></div>' +
+            '<button type="button" class="agenda-dialog-x" data-close aria-label="Cerrar"><span class="ri-close-line"></span></button></div>' +
+          '<div class="agenda-dialog-body">' +
+            citeField +
+            '<div class="ag-field"><label class="ag-label" for="ag-stage-comment">Detalle del movimiento *</label>' +
+              '<textarea class="form-control" id="ag-stage-comment" rows="4" maxlength="1000" placeholder="Ej.: Se envió la documentación y queda en revisión."></textarea>' +
+              '<div class="ag-help">Obligatorio para cambiar de columna.</div></div>' +
+          '</div>' +
+          '<div class="agenda-dialog-foot"><button type="button" class="btn btn-light btn-sm" data-close>Cancelar</button>' +
+            '<button type="button" class="btn btn-primary btn-sm" id="ag-stage-save">Mover y guardar</button></div>' +
+        '</div>';
+        document.body.appendChild(dlg);
+        document.documentElement.classList.add('nk-assign-open');
+        var ta = dlg.querySelector('#ag-stage-comment');
+        var citeSel = dlg.querySelector('#ag-stage-cite');
+        var citeSearch = dlg.querySelector('#ag-stage-cite-search');
+        var save = dlg.querySelector('#ag-stage-save');
+        var closed = false;
+        var saved = false;
+        var cancelNotified = false;
+        var notifyCancel = function () {
+          if (cancelNotified) return;
+          cancelNotified = true;
+          if (onCancel) onCancel();
+        };
+        var close = function (cancelled) {
+          if (closed) return;
+          closed = true;
+          document.documentElement.classList.remove('nk-assign-open');
+          if (dlg.open) dlg.close();
+          if (dlg.parentNode) dlg.parentNode.removeChild(dlg);
+          if (cancelled) notifyCancel();
+        };
+        dlg.addEventListener('close', function () {
+          document.documentElement.classList.remove('nk-assign-open');
+          if (dlg.parentNode) dlg.parentNode.removeChild(dlg);
+          if (!saved) notifyCancel();
+        });
+        dlg.addEventListener('click', function (e) { if (e.target === dlg) close(true); });
+        Array.prototype.forEach.call(dlg.querySelectorAll('[data-close]'), function (b) {
+          b.addEventListener('click', function () { close(true); });
+        });
+        if (needsCite && !cites.length) save.disabled = true;
+        if (citeSearch && citeSel) {
+          citeSearch.addEventListener('input', function () {
+            var current = citeSel.value;
+            var filtered = filterCites(cites, citeSearch.value);
+            citeSel.innerHTML = citeOptions(filtered, current);
+            if (current && !filtered.some(function (c) { return String(c.id) === String(current); })) {
+              citeSel.value = '';
+            }
+          });
+        }
+        save.addEventListener('click', function () {
+          var comment = ta.value.trim();
+          if (!comment) {
+            toast('Escribí el detalle del movimiento.', true);
+            ta.focus();
+            return;
+          }
+          var citeId = null;
+          if (needsCite) {
+            if (!cites.length) { toast('No hay cites habilitados. Cargalos en Cronogramas › Folios.', true); return; }
+            citeId = Number(citeSel && citeSel.value) || null;
+            if (!citeId) {
+              toast('Elegí el número de cite.', true);
+              if (citeSel) citeSel.focus();
+              return;
+            }
+          }
+          save.disabled = true;
+          onSave(comment, citeId, function () { saved = true; close(false); }, save);
+        });
+        dlg.showModal();
+        ta.focus();
+      }).catch(function (e) {
+        if (onCancel) onCancel();
+        toast((e && e.message) || 'No se pudieron cargar los cites.', true);
+      });
     }
 
     function bindBoardCards() {
@@ -8592,6 +10564,20 @@
           if (note) openMoveDialog(note);
         });
       });
+      Array.prototype.forEach.call(els.board.querySelectorAll('.ag-edit'), function (btn) {
+        btn.addEventListener('click', function () {
+          var id = Number(btn.getAttribute('data-id'));
+          var note = state.notes.filter(function (n) { return n.id === id; })[0];
+          if (note) openAgendaEdit(note);
+        });
+      });
+      Array.prototype.forEach.call(els.board.querySelectorAll('.ag-delete'), function (btn) {
+        btn.addEventListener('click', function () {
+          var id = Number(btn.getAttribute('data-id'));
+          var note = state.notes.filter(function (n) { return n.id === id; })[0];
+          if (note) confirmDeleteAgendaNote(note);
+        });
+      });
       Array.prototype.forEach.call(els.board.querySelectorAll('.ag-col-add'), function (btn) {
         btn.addEventListener('click', function () {
           openAgendaDialog(state.activeId, Number(btn.getAttribute('data-stage')));
@@ -8600,7 +10586,7 @@
     }
 
     function fillBoardSelect(select, selected) {
-      select.innerHTML = state.boards.map(function (b) {
+      select.innerHTML = state.boards.filter(function (b) { return b.can_edit !== false; }).map(function (b) {
         return '<option value="' + b.id + '"' + (b.id === selected ? ' selected' : '') + '>' + escapeHtml(b.name) + '</option>';
       }).join('');
     }
@@ -8629,6 +10615,13 @@
             '<select class="form-select form-select-sm" id="ag-move-board"></select></div>' +
           '<div class="ag-field"><label class="ag-label" for="ag-move-stage">Columna</label>' +
             '<select class="form-select form-select-sm" id="ag-move-stage"></select></div>' +
+          '<div class="ag-field" id="ag-move-cite-field" style="display:none;">' +
+            '<label class="ag-label" for="ag-move-cite">N° de cite *</label>' +
+            '<select class="form-select form-select-sm" id="ag-move-cite"></select>' +
+            '<div class="ag-help">Solo se muestran los cites habilitados en Cronogramas › Folios.</div></div>' +
+          '<div class="ag-field"><label class="ag-label" for="ag-move-comment">Detalle del movimiento *</label>' +
+            '<textarea class="form-control" id="ag-move-comment" rows="3" maxlength="1000" placeholder="Ej.: Se recibió el comprobante y pasa a revisión."></textarea>' +
+            '<div class="ag-help">Obligatorio si la nota cambia de columna. Queda en su historial.</div></div>' +
         '</div>' +
         '<div class="agenda-dialog-foot"><button type="button" class="btn btn-light btn-sm" data-close>Cancelar</button>' +
           '<button type="button" class="btn btn-primary btn-sm" id="ag-move-save">Mover</button></div>' +
@@ -8637,9 +10630,42 @@
       document.documentElement.classList.add('nk-assign-open');
       var boardSel = dlg.querySelector('#ag-move-board');
       var stageSel = dlg.querySelector('#ag-move-stage');
+      var citeField = dlg.querySelector('#ag-move-cite-field');
+      var citeSel = dlg.querySelector('#ag-move-cite');
+      var moveCites = [];
       fillBoardSelect(boardSel, note.agenda_board_id || state.activeId);
       fillStageSelect(stageSel, boardSel.value, note.agenda_stage_id);
-      boardSel.addEventListener('change', function () { fillStageSelect(stageSel, boardSel.value, null); });
+      function refreshCiteField() {
+        var target = state.boards.filter(function (b) { return b.id === Number(boardSel.value); })[0];
+        var targetStage = ((target && target.stages) || []).filter(function (s) {
+          return s.id === Number(stageSel.value);
+        })[0];
+        var need = boardUsesCites(target) && !!targetStage && Number(targetStage.requires_cite) === 1;
+        citeField.style.display = need ? '' : 'none';
+        if (!need) return;
+        citeSel.innerHTML = citeOptions(moveCites, note.cite_folio_id);
+        if (!moveCites.length) {
+          citeSel.innerHTML = '<option value="">No hay cites habilitados</option>';
+        }
+      }
+      var anyCiteBoard = state.boards.some(function (b) { return boardUsesCites(b); });
+      if (anyCiteBoard) {
+        loadCites().then(function (list) {
+          moveCites = list || [];
+          refreshCiteField();
+        }).catch(function () {
+          moveCites = [];
+          refreshCiteField();
+          toast('No se pudieron cargar los cites.', true);
+        });
+      } else {
+        refreshCiteField();
+      }
+      boardSel.addEventListener('change', function () {
+        fillStageSelect(stageSel, boardSel.value, null);
+        refreshCiteField();
+      });
+      stageSel.addEventListener('change', refreshCiteField);
       var close = function () {
         document.documentElement.classList.remove('nk-assign-open');
         if (dlg.open) dlg.close();
@@ -8652,12 +10678,39 @@
       dlg.addEventListener('click', function (e) { if (e.target === dlg) close(); });
       Array.prototype.forEach.call(dlg.querySelectorAll('[data-close]'), function (b) { b.addEventListener('click', close); });
       var save = dlg.querySelector('#ag-move-save');
+      var commentEl = dlg.querySelector('#ag-move-comment');
       save.addEventListener('click', function () {
         var boardId = Number(boardSel.value);
         var stageId = Number(stageSel.value);
         if (!boardId || !stageId) { toast('Elegí una columna.', true); return; }
+        var changed = Number(note.agenda_board_id) !== boardId || Number(note.agenda_stage_id) !== stageId;
+        if (!changed) {
+          close();
+          toast('La nota ya está en esa columna.');
+          return;
+        }
+        var comment = commentEl.value.trim();
+        if (!comment) {
+          toast('Escribí el detalle del movimiento.', true);
+          commentEl.focus();
+          return;
+        }
+        var targetBoard = state.boards.filter(function (b) { return b.id === boardId; })[0];
+        var targetStage = ((targetBoard && targetBoard.stages) || []).filter(function (s) { return s.id === stageId; })[0];
+        var needsCite = boardUsesCites(targetBoard) && !!targetStage && Number(targetStage.requires_cite) === 1;
+        var citeId = needsCite ? (Number(citeSel.value) || null) : null;
+        if (needsCite && !citeId) {
+          toast('Elegí el número de cite.', true);
+          citeSel.focus();
+          return;
+        }
         save.disabled = true;
-        jsonApi('/agenda/notes/' + note.id + '/stage', 'POST', { board_id: boardId, stage_id: stageId })
+        jsonApi('/agenda/notes/' + note.id + '/stage', 'POST', {
+          board_id: boardId,
+          stage_id: stageId,
+          comment: comment,
+          cite_id: citeId,
+        })
           .then(function () {
             close();
             state.activeId = boardId;
@@ -8669,6 +10722,241 @@
           .catch(function (e) { save.disabled = false; toast(e.message, true); });
       });
       dlg.showModal();
+    }
+
+    /** Elimina una nota de Mi agenda (papelera), con confirmación y deshacer. */
+    function confirmDeleteAgendaNote(note) {
+      var preview = note.note_text || (note.image_path ? 'Imagen adjunta' : note.audio_path ? 'Nota de voz' : 'Sin texto');
+      if (preview.length > 180) preview = preview.slice(0, 177) + '…';
+      var dlg = document.createElement('dialog');
+      dlg.className = 'agenda-dialog nk-section';
+      dlg.innerHTML = '<div class="agenda-dialog-box agenda-dialog-sm">' +
+        '<div class="agenda-dialog-head"><div><h5>Eliminar nota</h5>' +
+          '<p>' + escapeHtml(contactName(note)) + ' · la nota se enviará a la papelera.</p></div>' +
+          '<button type="button" class="agenda-dialog-x" data-close aria-label="Cerrar"><span class="ri-close-line"></span></button></div>' +
+        '<div class="agenda-dialog-body">' +
+          '<div class="ag-delete-preview">«' + escapeHtml(preview) + '»</div>' +
+          '<div class="ag-help">Podés deshacerlo inmediatamente después de eliminarla.</div>' +
+        '</div>' +
+        '<div class="agenda-dialog-foot"><button type="button" class="btn btn-light btn-sm" data-close>Cancelar</button>' +
+          '<button type="button" class="btn btn-danger btn-sm" id="ag-delete-confirm"><span class="ri-delete-bin-6-line"></span> Eliminar</button></div>' +
+      '</div>';
+      document.body.appendChild(dlg);
+      document.documentElement.classList.add('nk-assign-open');
+      var close = function () {
+        document.documentElement.classList.remove('nk-assign-open');
+        if (dlg.open) dlg.close();
+        if (dlg.parentNode) dlg.parentNode.removeChild(dlg);
+      };
+      dlg.addEventListener('close', function () {
+        document.documentElement.classList.remove('nk-assign-open');
+        if (dlg.parentNode) dlg.parentNode.removeChild(dlg);
+      });
+      dlg.addEventListener('click', function (ev) { if (ev.target === dlg) close(); });
+      Array.prototype.forEach.call(dlg.querySelectorAll('[data-close]'), function (b) {
+        b.addEventListener('click', close);
+      });
+      var confirm = dlg.querySelector('#ag-delete-confirm');
+      confirm.addEventListener('click', function () {
+        confirm.disabled = true;
+        api('/inbox/notes/' + note.id, { method: 'DELETE' })
+          .then(function () {
+            close();
+            state.notes = state.notes.filter(function (n) { return n.id !== note.id; });
+            renderStats();
+            renderBoard();
+            loadBoards();
+            toast('Nota eliminada', false, {
+              label: 'Deshacer',
+              run: function () {
+                jsonApi('/inbox/notes/' + note.id + '/restore', 'POST')
+                  .then(function () {
+                    loadBoards();
+                    toast('Nota restaurada');
+                  })
+                  .catch(function (e) { toast(e.message, true); });
+              },
+            });
+          })
+          .catch(function (e) {
+            confirm.disabled = false;
+            toast((e && e.message) || 'No se pudo eliminar la nota.', true);
+          });
+      });
+      dlg.showModal();
+      confirm.focus();
+    }
+
+    /** Edita el texto y la imagen de una nota directamente desde Mi agenda. */
+    function openAgendaEdit(note) {
+      var dlg = document.createElement('dialog');
+      dlg.className = 'agenda-dialog nk-section';
+      var noteBoard = state.boards.filter(function (b) { return Number(b.id) === Number(note.agenda_board_id); })[0] || activeBoard();
+      var noteStage = ((noteBoard && noteBoard.stages) || []).filter(function (s) {
+        return Number(s.id) === Number(note.agenda_stage_id);
+      })[0];
+      // El cite solo se edita cuando la columna actual lo exige.
+      var canSetCite = boardUsesCites(noteBoard) && !!noteStage && Number(noteStage.requires_cite) === 1;
+      var existingUrl = note.image_path ? '/inbox/notes/' + note.id + '/image' : '';
+      dlg.innerHTML = '<div class="agenda-dialog-box">' +
+        '<div class="agenda-dialog-head"><div><h5>Editar nota</h5>' +
+          '<p>' + escapeHtml(contactName(note)) + (noteProgram(note) ? ' · ' + escapeHtml(noteProgram(note)) : '') +
+            (note.person_ci ? ' · CI ' + escapeHtml(note.person_ci) : '') + '</p></div>' +
+          '<button type="button" class="agenda-dialog-x" data-close aria-label="Cerrar"><span class="ri-close-line"></span></button></div>' +
+        '<div class="agenda-dialog-body">' +
+          '<div class="ag-field"><label class="ag-label" for="ag-edit-text">Nota</label>' +
+            '<textarea class="form-control" id="ag-edit-text" rows="5" maxlength="4000">' + escapeHtml(note.note_text || '') + '</textarea></div>' +
+          (canSetCite
+            ? '<div class="ag-field"><label class="ag-label" for="ag-edit-cite">N° de cite</label>' +
+                '<select class="form-select form-select-sm" id="ag-edit-cite"><option value="">Cargando cites…</option></select>' +
+                '<div class="ag-help">Podés agregar o cambiar el cite de esta tarjeta sin moverla de columna.</div></div>'
+            : '') +
+          '<div class="ag-field"><label class="ag-label">Imagen <span class="ag-help-inline">· Ctrl+V o archivo · máx. 15 MB</span></label>' +
+            (existingUrl
+              ? '<div class="ag-existing-image" data-existing>' +
+                  '<a class="js-lightbox" href="' + existingUrl + '" title="Ver la imagen actual"><img src="' + existingUrl + '" alt="Imagen actual de la nota"></a>' +
+                  '<button type="button" class="btn btn-sm btn-light" id="ag-edit-image-remove">Quitar imagen</button>' +
+                '</div>'
+              : '') +
+            '<div class="ag-new-image" id="ag-edit-image-new" hidden></div>' +
+            '<input type="file" id="ag-edit-image-input" accept="image/*" hidden />' +
+            '<button type="button" class="btn btn-sm btn-light" id="ag-edit-image-pick"><span class="ri-image-add-line" aria-hidden="true"></span> Elegir imagen</button>' +
+            '<div class="ag-help" id="ag-edit-image-hint">También podés pegar una captura con Ctrl+V.</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="agenda-dialog-foot"><button type="button" class="btn btn-soft-danger btn-sm me-auto" id="ag-edit-delete"><span class="ri-delete-bin-6-line"></span> Eliminar</button>' +
+          '<button type="button" class="btn btn-light btn-sm" data-close>Cancelar</button>' +
+          '<button type="button" class="btn btn-primary btn-sm" id="ag-edit-save">Guardar cambios</button></div>' +
+      '</div>';
+      document.body.appendChild(dlg);
+      document.documentElement.classList.add('nk-assign-open');
+      var ta = dlg.querySelector('#ag-edit-text');
+      var citeSel = dlg.querySelector('#ag-edit-cite');
+      var citeReady = !citeSel;
+      if (citeSel) {
+        loadCites().then(function (cites) {
+          var current = Number(note.cite_folio_id) || null;
+          var hasCurrent = current && (cites || []).some(function (c) { return Number(c.id) === current; });
+          var html = '<option value="">Sin cite</option>';
+          if (current && !hasCurrent) {
+            html += '<option value="' + current + '">Cite ' + escapeHtml(note.cite_number || '') + ' (no habilitado)</option>';
+          }
+          html += (cites || []).map(function (c) {
+            return '<option value="' + c.id + '">' + escapeHtml(citeLabel(c)) + '</option>';
+          }).join('');
+          citeSel.innerHTML = html;
+          citeSel.value = current ? String(current) : '';
+          citeReady = true;
+        }).catch(function () {
+          citeSel.innerHTML = '<option value="">No se pudieron cargar los cites</option>';
+          citeSel.disabled = true;
+        });
+      }
+      var input = dlg.querySelector('#ag-edit-image-input');
+      var newBox = dlg.querySelector('#ag-edit-image-new');
+      var existing = dlg.querySelector('[data-existing]');
+      var hint = dlg.querySelector('#ag-edit-image-hint');
+      var editFile = null;
+      var editUrl = '';
+      var removeExisting = false;
+      var renderImage = function () {
+        if (existing) existing.hidden = removeExisting;
+        if (editUrl) {
+          newBox.hidden = false;
+          newBox.innerHTML = '<a class="js-lightbox" href="' + editUrl + '" title="Ver la imagen nueva"><img src="' + editUrl + '" alt="Imagen nueva"></a>' +
+            '<button type="button" class="btn btn-sm btn-light" id="ag-edit-image-new-remove">Quitar</button>';
+          newBox.querySelector('#ag-edit-image-new-remove').addEventListener('click', function () {
+            if (editUrl) URL.revokeObjectURL(editUrl);
+            editFile = null;
+            editUrl = '';
+            renderImage();
+          });
+        } else {
+          newBox.hidden = true;
+          newBox.innerHTML = '';
+        }
+        if (hint) {
+          hint.textContent = removeExisting
+            ? 'La imagen actual se quitará al guardar.'
+            : 'También podés pegar una captura con Ctrl+V (máx. 15 MB).';
+        }
+      };
+      var pick = function (file) {
+        if (!NoteKit.validNoteImage(file)) return;
+        if (editUrl) URL.revokeObjectURL(editUrl);
+        editFile = file;
+        editUrl = URL.createObjectURL(file);
+        removeExisting = false;
+        renderImage();
+      };
+      dlg.querySelector('#ag-edit-image-pick').addEventListener('click', function () { input.click(); });
+      input.addEventListener('change', function () {
+        if (input.files && input.files[0]) pick(input.files[0]);
+        input.value = '';
+      });
+      var removeBtn = dlg.querySelector('#ag-edit-image-remove');
+      if (removeBtn) removeBtn.addEventListener('click', function () { removeExisting = true; renderImage(); });
+      ta.addEventListener('paste', function (ev) {
+        var file = NoteKit.imagePasteFile(ev);
+        if (!file) return;
+        ev.preventDefault();
+        pick(file);
+      });
+      renderImage();
+      var close = function () {
+        if (editUrl) URL.revokeObjectURL(editUrl);
+        document.documentElement.classList.remove('nk-assign-open');
+        if (dlg.open) dlg.close();
+        if (dlg.parentNode) dlg.parentNode.removeChild(dlg);
+      };
+      dlg.addEventListener('close', function () {
+        document.documentElement.classList.remove('nk-assign-open');
+        if (dlg.parentNode) dlg.parentNode.removeChild(dlg);
+      });
+      dlg.addEventListener('click', function (e) { if (e.target === dlg) close(); });
+      Array.prototype.forEach.call(dlg.querySelectorAll('[data-close]'), function (b) { b.addEventListener('click', close); });
+      dlg.querySelector('#ag-edit-delete').addEventListener('click', function () {
+        close();
+        confirmDeleteAgendaNote(note);
+      });
+      var save = dlg.querySelector('#ag-edit-save');
+      save.addEventListener('click', function () {
+        var text = ta.value.trim();
+        var hasImage = !!editFile || (!!note.image_path && !removeExisting);
+        if (!text && !note.audio_path && !hasImage) {
+          toast('La nota no puede quedar vacía.', true);
+          ta.focus();
+          return;
+        }
+        save.disabled = true;
+        var saveText = function () { return jsonApi('/inbox/notes/' + note.id, 'PUT', { text: text }); };
+        var currentCite = Number(note.cite_folio_id) || null;
+        var saveCite = function () {
+          if (!citeSel || !citeReady) return Promise.resolve();
+          var nextCite = Number(citeSel.value) || null;
+          if (nextCite === currentCite) return Promise.resolve();
+          return jsonApi('/agenda/notes/' + note.id + '/cite', 'POST', { cite_id: nextCite });
+        };
+        var chain;
+        if (editFile) {
+          chain = NoteKit.uploadNoteImage(note.id, editFile).then(saveText);
+        } else if (removeExisting && note.image_path) {
+          chain = saveText().then(function () { return NoteKit.deleteNoteImage(note.id); });
+        } else {
+          chain = saveText();
+        }
+        chain
+          .then(saveCite)
+          .then(function () {
+            close();
+            loadNotes();
+            toast('Nota actualizada.');
+          })
+          .catch(function (e) { save.disabled = false; toast(e.message, true); });
+      });
+      dlg.showModal();
+      ta.focus();
+      ta.setSelectionRange(ta.value.length, ta.value.length);
     }
 
     function openAgendaDialog(defaultBoardId, defaultStageId) {
@@ -8828,10 +11116,187 @@
       search.focus();
     }
 
+    /** Comparte una sub-agenda por usuario o por área (solo el dueño). */
+    function openShareDialog(board) {
+      if (!board || board.permission !== 'owner') {
+        toast('Solo el dueño puede compartir esta sub-agenda.', true);
+        return;
+      }
+      var dlg = document.createElement('dialog');
+      dlg.className = 'agenda-dialog nk-section';
+      dlg.innerHTML = '<div class="agenda-dialog-box">' +
+        '<div class="agenda-dialog-head"><div><h5>Compartir sub-agenda</h5>' +
+          '<p>«' + escapeHtml(board.name) + '» · elegí quién puede verla y quién puede agregar o mover notas.</p></div>' +
+          '<button type="button" class="agenda-dialog-x" data-close aria-label="Cerrar"><span class="ri-close-line"></span></button></div>' +
+        '<div class="agenda-dialog-body">' +
+          '<div class="ag-share-current" id="ag-share-current"><div class="agenda-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Cargando permisos…</div></div>' +
+          '<div class="ag-share-add">' +
+            '<div class="ag-share-types" role="tablist" aria-label="Tipo de permiso">' +
+              '<button type="button" class="ag-share-type is-on" data-share-type="user" role="tab" aria-selected="true">' +
+                '<span class="ri-user-line" aria-hidden="true"></span> Usuario</button>' +
+              '<button type="button" class="ag-share-type" data-share-type="area" role="tab" aria-selected="false">' +
+                '<span class="ri-team-line" aria-hidden="true"></span> Área</button>' +
+            '</div>' +
+            '<div class="ag-share-form">' +
+              '<select class="form-select form-select-sm" id="ag-share-principal" aria-label="Usuario o área"></select>' +
+              '<select class="form-select form-select-sm" id="ag-share-permission" aria-label="Permiso">' +
+                '<option value="view">Solo lectura</option>' +
+                '<option value="edit">Puede editar</option>' +
+              '</select>' +
+              '<button type="button" class="btn btn-primary btn-sm" id="ag-share-add">' +
+                '<span class="ri-add-line" aria-hidden="true"></span> Agregar</button>' +
+            '</div>' +
+            '<div class="ag-help">El permiso directo de un usuario prevalece sobre el de su área. «Editar» permite agregar y mover notas, no cambiar columnas ni permisos.</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="agenda-dialog-foot"><button type="button" class="btn btn-light btn-sm" data-close>Cerrar</button></div>' +
+      '</div>';
+      document.body.appendChild(dlg);
+      document.documentElement.classList.add('nk-assign-open');
+      var currentBox = dlg.querySelector('#ag-share-current');
+      var principalSel = dlg.querySelector('#ag-share-principal');
+      var permissionSel = dlg.querySelector('#ag-share-permission');
+      var addBtn = dlg.querySelector('#ag-share-add');
+      var shareType = 'user';
+      var options = { users: [], areas: [] };
+      var shares = [];
+
+      var close = function () {
+        document.documentElement.classList.remove('nk-assign-open');
+        if (dlg.open) dlg.close();
+        if (dlg.parentNode) dlg.parentNode.removeChild(dlg);
+      };
+      dlg.addEventListener('close', function () {
+        document.documentElement.classList.remove('nk-assign-open');
+        if (dlg.parentNode) dlg.parentNode.removeChild(dlg);
+      });
+      dlg.addEventListener('click', function (e) { if (e.target === dlg) close(); });
+      Array.prototype.forEach.call(dlg.querySelectorAll('[data-close]'), function (b) { b.addEventListener('click', close); });
+
+      function fillPrincipals() {
+        var list = shareType === 'area' ? options.areas : options.users;
+        principalSel.innerHTML = list.length
+          ? list.map(function (item) {
+              var value = shareType === 'area' ? item.key : item.id;
+              var label = shareType === 'area' ? item.label : (item.name + (item.area_label ? ' · ' + item.area_label : ''));
+              return '<option value="' + escapeHtml(String(value)) + '">' + escapeHtml(label) + '</option>';
+            }).join('')
+          : '<option value="">Sin opciones disponibles</option>';
+        addBtn.disabled = !list.length;
+      }
+
+      function bindShares() {
+        Array.prototype.forEach.call(currentBox.querySelectorAll('[data-share-id]'), function (row) {
+          var id = Number(row.getAttribute('data-share-id'));
+          var sel = row.querySelector('select');
+          var del = row.querySelector('.ag-share-remove');
+          if (sel) {
+            sel.addEventListener('change', function () {
+              sel.disabled = true;
+              jsonApi('/agenda/boards/' + board.id + '/shares', 'POST', {
+                principal_type: row.getAttribute('data-share-type'),
+                principal_id: row.getAttribute('data-share-principal'),
+                permission: sel.value,
+              })
+                .then(function (res) {
+                  shares = (res && res.shares) || shares;
+                  renderShares();
+                  toast('Permiso actualizado.');
+                })
+                .catch(function (e) { sel.disabled = false; toast(e.message, true); });
+            });
+          }
+          if (del) {
+            del.addEventListener('click', function () {
+              if (!window.confirm('¿Quitar el permiso de «' + row.getAttribute('data-share-name') + '»?')) return;
+              del.disabled = true;
+              jsonApi('/agenda/boards/' + board.id + '/shares/' + id, 'DELETE')
+                .then(function (res) {
+                  shares = (res && res.shares) || [];
+                  renderShares();
+                  toast('Permiso quitado.');
+                })
+                .catch(function (e) { del.disabled = false; toast(e.message, true); });
+            });
+          }
+        });
+      }
+
+      function renderShares() {
+        if (!shares.length) {
+          currentBox.innerHTML = '<div class="ag-share-empty"><span class="ri-lock-line" aria-hidden="true"></span>' +
+            '<div><b>Esta sub-agenda es privada</b><span>Solo vos podés verla. Agregá un usuario o un área para compartirla.</span></div></div>';
+          return;
+        }
+        currentBox.innerHTML = '<div class="ag-share-list">' + shares.map(function (s) {
+          var isArea = s.principal_type === 'area';
+          return '<div class="ag-share-row" data-share-id="' + s.id + '" data-share-type="' + s.principal_type +
+            '" data-share-principal="' + escapeHtml(s.principal_id) + '" data-share-name="' + escapeHtml(s.principal_name) + '">' +
+            '<span class="ag-share-ico ' + (isArea ? 'ri-team-line' : 'ri-user-line') + '" aria-hidden="true"></span>' +
+            '<span class="ag-share-who"><b>' + escapeHtml(s.principal_name) + '</b>' +
+              '<small>' + (isArea ? 'Área' : 'Usuario') + '</small></span>' +
+            '<select class="form-select form-select-sm" aria-label="Permiso de ' + escapeHtml(s.principal_name) + '">' +
+              '<option value="view"' + (s.permission === 'view' ? ' selected' : '') + '>Solo lectura</option>' +
+              '<option value="edit"' + (s.permission === 'edit' ? ' selected' : '') + '>Puede editar</option>' +
+            '</select>' +
+            '<button type="button" class="ag-icon-btn ag-share-remove" title="Quitar permiso" aria-label="Quitar permiso">' +
+              '<span class="ri-delete-bin-6-line" aria-hidden="true"></span></button>' +
+          '</div>';
+        }).join('') + '</div>';
+        bindShares();
+      }
+
+      Array.prototype.forEach.call(dlg.querySelectorAll('[data-share-type]'), function (btn) {
+        btn.addEventListener('click', function () {
+          shareType = btn.getAttribute('data-share-type') === 'area' ? 'area' : 'user';
+          Array.prototype.forEach.call(dlg.querySelectorAll('[data-share-type]'), function (b) {
+            var on = b === btn;
+            b.classList.toggle('is-on', on);
+            b.setAttribute('aria-selected', String(on));
+          });
+          fillPrincipals();
+        });
+      });
+
+      addBtn.addEventListener('click', function () {
+        if (!principalSel.value) { toast('Elegí un usuario o un área.', true); return; }
+        addBtn.disabled = true;
+        jsonApi('/agenda/boards/' + board.id + '/shares', 'POST', {
+          principal_type: shareType,
+          principal_id: principalSel.value,
+          permission: permissionSel.value,
+        })
+          .then(function (res) {
+            shares = (res && res.shares) || shares;
+            renderShares();
+            addBtn.disabled = false;
+            toast('Permiso guardado.');
+          })
+          .catch(function (e) { addBtn.disabled = false; toast(e.message, true); });
+      });
+
+      Promise.all([
+        api('/agenda/share-options'),
+        api('/agenda/boards/' + board.id + '/shares'),
+      ]).then(function (res) {
+        options = res[0] || options;
+        shares = (res[1] && res[1].shares) || [];
+        fillPrincipals();
+        renderShares();
+      }).catch(function (e) {
+        currentBox.innerHTML = '<div class="ag-share-empty"><span class="ri-error-warning-line" aria-hidden="true"></span>' +
+          '<div><b>No se pudieron cargar los permisos</b><span>' + escapeHtml(e.message || 'Intentá de nuevo.') + '</span></div></div>';
+      });
+
+      dlg.showModal();
+    }
+
     function openBoardDialog(board) {
       var editing = !!board;
       var rows = editing
-        ? board.stages.map(function (s) { return { id: s.id, name: s.name, color: s.color }; })
+        ? board.stages.map(function (s) {
+            return { id: s.id, name: s.name, color: s.color, requires_cite: Number(s.requires_cite) === 1 };
+          })
         : [
             { name: 'Solicitaron', color: '#64748b' },
             { name: 'En revisión', color: '#045474' },
@@ -8847,6 +11312,9 @@
         '<div class="agenda-dialog-body">' +
           '<div class="ag-field"><label class="ag-label" for="ag-board-name">Nombre</label>' +
             '<input class="form-control form-control-sm" id="ag-board-name" maxlength="80" placeholder="Ej.: Solicitud de titulaciones" value="' + (editing ? escapeHtml(board.name) : '') + '"></div>' +
+          '<div class="ag-field"><label class="ag-check"><input type="checkbox" id="ag-board-uses-cites"' + (editing && Number(board.uses_cites) === 1 ? ' checked' : '') + '> ' +
+            'Permite cites (pagos a la universidad)</label>' +
+            '<div class="ag-help">Si está activo, marcá abajo en qué columnas se exige un cite al entrar. Los cites se administran en Cronogramas › Folios.</div></div>' +
           (editing
             ? '<div class="ag-field"><label class="ag-label">Columnas del pipeline</label><div class="ag-stage-rows" id="ag-stage-rows"></div>' +
               '<button type="button" class="ag-board-btn" id="ag-stage-add"><span class="ri-add-line"></span> Agregar columna</button></div>'
@@ -8854,7 +11322,7 @@
               '<textarea class="form-control" id="ag-board-stages" rows="5" placeholder="Una por línea…"></textarea></div>') +
         '</div>' +
         '<div class="agenda-dialog-foot">' +
-          (editing && state.boards.length > 1 ? '<button type="button" class="btn btn-soft-danger btn-sm me-auto" id="ag-board-delete"><span class="ri-delete-bin-6-line me-1"></span>Eliminar</button>' : '') +
+          (editing && state.boards.length > 1 && Number(board.notes || 0) === 0 ? '<button type="button" class="btn btn-soft-danger btn-sm me-auto" id="ag-board-delete"><span class="ri-delete-bin-6-line me-1"></span>Eliminar</button>' : '') +
           '<button type="button" class="btn btn-light btn-sm" data-close>Cancelar</button>' +
           '<button type="button" class="btn btn-primary btn-sm" id="ag-board-save">' + (editing ? 'Guardar cambios' : 'Crear sub-agenda') + '</button></div>' +
       '</div>';
@@ -8873,6 +11341,7 @@
       Array.prototype.forEach.call(dlg.querySelectorAll('[data-close]'), function (b) { b.addEventListener('click', close); });
       var stagesBox = dlg.querySelector('#ag-stage-rows');
       var nameInput = dlg.querySelector('#ag-board-name');
+      var usesCitesInput = dlg.querySelector('#ag-board-uses-cites');
       var textarea = dlg.querySelector('#ag-board-stages');
       if (textarea) textarea.value = rows.map(function (r) { return r.name; }).join('\n');
 
@@ -8883,6 +11352,9 @@
             '<span class="ag-stage-num">' + (i + 1) + '</span>' +
             '<input class="form-control form-control-sm ag-stage-name" value="' + escapeHtml(r.name) + '" maxlength="60" aria-label="Nombre de la columna ' + (i + 1) + '">' +
             '<input type="color" class="form-control form-control-color ag-stage-color" value="' + escapeHtml(r.color || '#64748b') + '" title="Color de la columna">' +
+            '<label class="ag-stage-cite" title="Exigir cite al entrar a esta columna">' +
+              '<input type="checkbox" class="form-check-input ag-stage-cite-cb"' + (r.requires_cite ? ' checked' : '') + '>' +
+              '<span class="ri-file-list-3-line" aria-hidden="true"></span></label>' +
             '<button type="button" class="ag-icon-btn ag-stage-up" title="Subir" aria-label="Subir"><span class="ri-arrow-up-line"></span></button>' +
             '<button type="button" class="ag-icon-btn ag-stage-down" title="Bajar" aria-label="Bajar"><span class="ri-arrow-down-line"></span></button>' +
             '<button type="button" class="ag-icon-btn ag-stage-del" title="Eliminar columna" aria-label="Eliminar columna"><span class="ri-delete-bin-6-line"></span></button>' +
@@ -8891,6 +11363,7 @@
         Array.prototype.forEach.call(stagesBox.querySelectorAll('.ag-stage-row'), function (row, i) {
           row.querySelector('.ag-stage-name').addEventListener('input', function (e) { rows[i].name = e.target.value; });
           row.querySelector('.ag-stage-color').addEventListener('input', function (e) { rows[i].color = e.target.value; });
+          row.querySelector('.ag-stage-cite-cb').addEventListener('change', function (e) { rows[i].requires_cite = e.target.checked; });
           row.querySelector('.ag-stage-up').addEventListener('click', function () {
             if (i === 0) return;
             var tmp = rows[i - 1]; rows[i - 1] = rows[i]; rows[i] = tmp; renderRows();
@@ -8905,12 +11378,39 @@
             renderRows();
           });
         });
+        syncCiteAvailability();
       }
+      function syncCiteAvailability() {
+        var uses = !!(usesCitesInput && usesCitesInput.checked);
+        Array.prototype.forEach.call(dlg.querySelectorAll('.ag-stage-cite-cb'), function (cb) {
+          cb.disabled = !uses;
+        });
+        Array.prototype.forEach.call(dlg.querySelectorAll('.ag-stage-cite'), function (label) {
+          label.classList.toggle('is-off', !uses);
+        });
+      }
+
       renderRows();
+      syncCiteAvailability();
+      if (usesCitesInput) {
+        usesCitesInput.addEventListener('change', function () {
+          if (this.checked && editing) {
+            // Al activar los cites, se marcan todas las columnas por defecto:
+            // el dueño puede destildar las que no los pidan.
+            var any = rows.some(function (r) { return r.requires_cite; });
+            if (!any) {
+              rows.forEach(function (r) { r.requires_cite = true; });
+              renderRows();
+            }
+          }
+          syncCiteAvailability();
+        });
+      }
       var addStage = dlg.querySelector('#ag-stage-add');
       if (addStage) addStage.addEventListener('click', function () {
-        rows.push({ name: 'Nueva columna', color: '#64748b' });
+        rows.push({ name: 'Nueva columna', color: '#64748b', requires_cite: !!(usesCitesInput && usesCitesInput.checked) });
         renderRows();
+        syncCiteAvailability();
       });
 
       var save = dlg.querySelector('#ag-board-save');
@@ -8923,7 +11423,10 @@
           save.disabled = true;
           jsonApi('/agenda/boards/' + board.id, 'PUT', {
             name: name,
-            stages: rows.map(function (r) { return { id: r.id, name: r.name.trim(), color: r.color }; }).filter(function (r) { return !!r.name; }),
+            uses_cites: !!(usesCitesInput && usesCitesInput.checked),
+            stages: rows.map(function (r) {
+              return { id: r.id, name: r.name.trim(), color: r.color, requires_cite: !!r.requires_cite };
+            }).filter(function (r) { return !!r.name; }),
           })
             .then(function (res) {
               close();
@@ -8939,7 +11442,11 @@
           var lines = (textarea.value || '').split(/\r?\n/).map(function (x) { return x.trim(); }).filter(Boolean);
           if (!lines.length) { toast('Agregá al menos una columna.', true); textarea.focus(); return; }
           save.disabled = true;
-          jsonApi('/agenda/boards', 'POST', { name: name, stages: lines })
+          jsonApi('/agenda/boards', 'POST', {
+            name: name,
+            uses_cites: !!(usesCitesInput && usesCitesInput.checked),
+            stages: lines,
+          })
             .then(function (res) {
               close();
               state.boards = res.boards || state.boards;
@@ -8955,7 +11462,11 @@
 
       var del = dlg.querySelector('#ag-board-delete');
       if (del) del.addEventListener('click', function () {
-        if (!window.confirm('¿Eliminar «' + board.name + '»? Las notas se moverán a la primera columna de otra sub-agenda.')) return;
+        if (Number(board.notes || 0) > 0) {
+          toast('Solo se puede eliminar una sub-agenda vacía.', true);
+          return;
+        }
+        if (!window.confirm('¿Eliminar la sub-agenda «' + board.name + '»? Está vacía.')) return;
         del.disabled = true;
         jsonApi('/agenda/boards/' + board.id, 'DELETE')
           .then(function (res) {
@@ -8981,7 +11492,17 @@
         searchTimer = setTimeout(loadNotes, 250);
       });
     }
-    if (els.newBtn) els.newBtn.addEventListener('click', function () { openAgendaDialog(state.activeId, null); });
+    if (els.newBtn) els.newBtn.addEventListener('click', function () {
+      var active = activeBoard();
+      var fallback = state.boards.filter(function (b) { return b.can_edit !== false; })[0];
+      var defaultBoard = active && active.can_edit ? state.activeId : (fallback ? fallback.id : null);
+      if (!defaultBoard) {
+        toast('Creá una sub-agenda propia para guardar notas.', true);
+        openBoardDialog(null);
+        return;
+      }
+      openAgendaDialog(defaultBoard, null);
+    });
 
     var viewButtons = Array.prototype.slice.call(document.querySelectorAll('[data-ag-view]'));
     function syncViewButtons() {
@@ -9295,9 +11816,37 @@
     update();
   })();
 
+  function initCites() {
+    var root = document.getElementById('cites-page');
+    if (!root) return;
+    var table = root.querySelector('#cites-table');
+    if (!table) return;
+    var search = root.querySelector('#cites-search');
+    var status = root.querySelector('#cites-status-filter');
+    var empty = root.querySelector('#cites-empty-filter');
+    var rows = Array.prototype.slice.call(table.querySelectorAll('tbody .cite-row'));
+    if (!rows.length) return;
+    var apply = function () {
+      var q = foldText(String(search && search.value || '').trim());
+      var st = status ? status.value : '';
+      var shown = 0;
+      rows.forEach(function (row) {
+        var hay = foldText(row.getAttribute('data-search') || '');
+        var ok = (!q || hay.indexOf(q) !== -1) && (!st || row.getAttribute('data-status') === st);
+        row.hidden = !ok;
+        if (ok) shown++;
+      });
+      if (empty) empty.hidden = shown !== 0;
+    };
+    if (search) search.addEventListener('input', apply);
+    if (status) status.addEventListener('change', apply);
+    apply();
+  }
+
   initInbox();
   initNotes();
   initAgenda();
+  initCites();
   initReminders();
   initNotifications();
   initMessageAlerts();

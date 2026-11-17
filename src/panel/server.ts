@@ -10,11 +10,16 @@ import { batchDetailPage, batchesPage } from './batches-view.js';
 import { mobileSections, registerMobileApi } from './mobile-api.js';
 import { pushEnabled, registerDevice, removeDevice } from '../core/push.js';
 import { batchEngagement, batchesEngagement, followUpTargets, FOLLOW_UP_LABEL, type FollowUpMode } from '../core/batch-engagement.js';
+import { describeSendError, type SendErrorKind } from '../core/send-errors.js';
 import { connectionHelp, lineVerdictCard, linesHealthCard, linesHealthPage, linesOverview } from './lines-view.js';
 import { lineVerdict, sendBlockedReason } from '../core/line-verdict.js';
 import { applyLineFix, lineIssues, type LineFixAction } from '../core/line-health.js';
 import { massActivity, massActivityCsv } from '../core/mass-activity.js';
 import { card, connectionCard, connectionDiagnosis, emptyState, fmtDate, insight, kvList, safeJson, sectionHead, statusBadge, table, type ConnectionDiagnosis } from './views.js';
+import { citeById, citeUsageRows, citesSyncedAt, listCites } from '../core/cites.js';
+import { listNotesByCite } from '../core/contacts.js';
+import { permissionFor as agendaPermissionFor } from '../core/agenda.js';
+import { renderCiteDetailPage, renderCitesPage, type CiteUsage } from './cites-view.js';
 import { countNewContactsToday, getPolicy, limitState } from '../core/anti-ban.js';
 import { cancelGroup, canDecide, confirmGroup, getGroup, pendingGroupsFor, type ConfirmGroup } from '../core/batch-confirm.js';
 import { nowIso } from '../util/async.js';
@@ -39,6 +44,7 @@ import {
   type PeriodSlug,
   type ReportsTabSlug,
 } from './urls.js';
+import { resolvePanelRange } from './period-filter.js';
 import { sessionCookieHeader, sessionStore, clearCookieHeader } from '../auth/sessions.js';
 import { verifySsoToken, safeNext } from '../auth/sso.js';
 import { unreadCount } from '../core/notifications.js';
@@ -151,6 +157,20 @@ function resolveChatParam(
 const INBOX_WHERE = `chat_id NOT LIKE '%@broadcast' AND chat_id NOT LIKE '%@newsletter'`;
 
 /**
+ * ¿El usuario puede ver una nota con cite en el registro? Los administradores
+ * ven todo; el resto, lo propio y lo de sub-agendas compartidas con su usuario
+ * o su área (mismo criterio que la agenda).
+ */
+function citeNoteVisible(
+  user: UserRow,
+  row: { user_id?: number | null; agenda_board_id?: number | null },
+): boolean {
+  if (esamEsAdmin(user)) return true;
+  if (row.user_id != null && Number(row.user_id) === Number(user.id)) return true;
+  return !!(row.agenda_board_id && agendaPermissionFor(user.id, row.agenda_board_id));
+}
+
+/**
  * Página «Mi agenda»: notas privadas del usuario y pipeline personal por
  * etapas. El contenido lo arma `initAgenda()` en public/app.js.
  */
@@ -171,6 +191,12 @@ export function renderAgendaPage(): string {
             <span class="ri-search-line" aria-hidden="true"></span>
             <input type="search" id="agenda-search" placeholder="Buscar por nota, contacto o número…" autocomplete="off" />
           </label>
+          <select id="agenda-group" class="form-select form-select-sm" aria-label="Agrupar por" title="Cómo se agrupan las notas dentro de cada columna">
+            <option value="columna">Agrupar: columna</option>
+            <option value="programa">Agrupar: programa</option>
+            <option value="registro-mes">Agrupar: mes de registro</option>
+            <option value="gestion">Agrupar: gestión (año)</option>
+          </select>
         </div>
         <div class="agenda-board" id="agenda-board" aria-live="polite">
           <div class="agenda-loading"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span> Cargando tu agenda…</div>
@@ -237,9 +263,12 @@ export function renderNotesPage(opts: { focusId?: number; status?: string; marke
             <option value="dia">Agrupar: día de seguimiento</option>
             <option value="mes">Agrupar: mes de seguimiento</option>
             <option value="registro">Agrupar: día de registro</option>
+            <option value="registro-mes">Agrupar: mes de registro</option>
+            <option value="gestion">Agrupar: gestión (año)</option>
             <option value="area">Agrupar: área</option>
             <option value="equipo">Agrupar: área del equipo</option>
             <option value="etapa">Agrupar: etapa</option>
+            <option value="programa">Agrupar: programa</option>
           </select>
           <label class="np-mine"><input type="checkbox" class="form-check-input" id="notes-mine" /> Registradas por mí</label>
           <label class="np-mine"><input type="checkbox" class="form-check-input" id="notes-assigned" /> Asignadas a mí</label>
@@ -1211,11 +1240,66 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     requireUser,
     requireSection('batches'),
     ah(async (req: AuthedRequest, res) => {
+      // La lista se abre en el mes en curso. Las pestañas y el rango permiten
+      // revisar meses anteriores o todo el historial sin cargar todo de golpe.
+      const range = resolvePanelRange(req.query.period, req.query.from, req.query.to);
+      const before = positiveInt(req.query.before);
+      const rangeWhere: string[] = [];
+      const rangeParams: unknown[] = [];
+      if (range.fromIso) {
+        rangeWhere.push('b.created_at >= ?');
+        rangeParams.push(range.fromIso);
+      }
+      if (range.toIso) {
+        rangeWhere.push('b.created_at < ?');
+        rangeParams.push(range.toIso);
+      }
+      const periodWhere = rangeWhere.length ? `WHERE ${rangeWhere.join(' AND ')}` : '';
+      const pageWhere = before
+        ? `${periodWhere ? `${periodWhere} AND` : 'WHERE'} b.id < ?`
+        : periodWhere;
       const rows = withRequester(
         all<any>(
           `SELECT b.*, s.owner_name AS line_owner, s.name AS line_name, COALESCE(s.phone, s.expected_phone) AS line_phone
-             FROM batches b LEFT JOIN sessions s ON s.id = b.session_id ORDER BY b.created_at DESC, b.id DESC LIMIT 200`,
+             FROM batches b LEFT JOIN sessions s ON s.id = b.session_id
+             ${pageWhere}
+             ORDER BY b.created_at DESC, b.id DESC LIMIT 201`,
+          ...rangeParams,
+          ...(before ? [before] : []),
         ),
+      );
+      const hasMore = rows.length > 200;
+      const pageRows = hasMore ? rows.slice(0, 200) : rows;
+      // Resumen de fallos por lote para mostrarlo ya en la lista, sin abrir
+      // cada detalle: la causa más frecuente y cuántos destinatarios afecta.
+      const failureHints = new Map<number, { kind: SendErrorKind; title: string; count: number }>();
+      if (pageRows.length) {
+        const failRows = all<{ batch_id: number; chat_id: string; error: string | null }>(
+          `SELECT batch_id, chat_id, error FROM batch_items
+            WHERE batch_id IN (${pageRows.map(() => '?').join(',')}) AND status = 'failed'`,
+          ...pageRows.map((r: any) => Number(r.id)),
+        );
+        const byBatch = new Map<number, Map<SendErrorKind, { title: string; count: number }>>();
+        for (const f of failRows) {
+          const info = describeSendError(f.error, f.chat_id);
+          const kinds = byBatch.get(f.batch_id) ?? new Map<SendErrorKind, { title: string; count: number }>();
+          const cur = kinds.get(info.kind) ?? { title: info.title, count: 0 };
+          cur.count++;
+          kinds.set(info.kind, cur);
+          byBatch.set(f.batch_id, kinds);
+        }
+        for (const [id, kinds] of byBatch) {
+          let best: { kind: SendErrorKind; title: string; count: number } | null = null;
+          for (const [kind, value] of kinds) {
+            if (!best || value.count > best.count) best = { kind, ...value };
+          }
+          if (best) failureHints.set(id, best);
+        }
+      }
+      const periodStats = get<{ c: number; sent: number | null; failed: number | null }>(
+        `SELECT COUNT(*) AS c, COALESCE(SUM(b.sent), 0) AS sent, COALESCE(SUM(b.failed), 0) AS failed
+           FROM batches b ${periodWhere}`,
+        ...rangeParams,
       );
       // Indicadores del día (desde las 00:00 locales del servidor).
       const dayStart = new Date();
@@ -1244,8 +1328,17 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
            </form>`
         : '';
       today.active = active;
-      const eng = batchesEngagement(rows.filter((r: any) => r.sent > 0).map((r: any) => Number(r.id)));
-      const body = pendingCard + stopAll + batchesPage(rows, today, eng);
+      const eng = batchesEngagement(pageRows.filter((r: any) => r.sent > 0).map((r: any) => Number(r.id)));
+      const body = pendingCard + stopAll + batchesPage(pageRows, today, eng, {
+        range,
+        hasMore,
+        nextBefore: hasMore && pageRows.length ? Number(pageRows[pageRows.length - 1].id) : null,
+        summary: {
+          batches: Number(periodStats?.c ?? 0),
+          sent: Number(periodStats?.sent ?? 0),
+          failed: Number(periodStats?.failed ?? 0),
+        },
+      }, failureHints);
       sendPage(req, res, 'Lotes', 'batches', body, {
         subtitle: 'Envíos masivos por día: quién los pidió, desde qué línea y cómo avanzan, en vivo.',
         activeHref: '/batches',
@@ -1814,6 +1907,43 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     });
   });
 
+  // ── Cites: registro de pagos a la universidad y contactos asociados ─────────
+  app.get('/cites', requireUser, requireSection('conversations'), (req: AuthedRequest, res: Response) => {
+    const user = req.user!;
+    const admin = esamEsAdmin(user);
+    const cites = listCites({ enabledOnly: false });
+    const usage = new Map<number, CiteUsage>();
+    for (const row of citeUsageRows()) {
+      if (!citeNoteVisible(user, row)) continue;
+      const current = usage.get(row.cite_folio_id) ?? { notes: 0, last_at: null };
+      current.notes += 1;
+      const at = String(row.created_at ?? '');
+      if (at && (!current.last_at || at > current.last_at)) current.last_at = at;
+      usage.set(row.cite_folio_id, current);
+    }
+    sendPage(req, res, 'Cites', 'conversations', renderCitesPage(cites, usage, citesSyncedAt(), !admin), {
+      subtitle: 'Cites de pago a la universidad y los contactos registrados en cada uno.',
+      activeHref: '/cites',
+    });
+  });
+
+  app.get('/cites/:id', requireUser, requireSection('conversations'), (req: AuthedRequest, res: Response) => {
+    const id = positiveInt(req.params.id);
+    const cite = id ? citeById(id) : undefined;
+    if (!cite) {
+      res.status(404).send(pageHtml(req, res, 'Cite no encontrado', 'conversations',
+        emptyState('ri-question-line', 'Cite no encontrado', 'El cite solicitado no existe o ya no está disponible.')));
+      return;
+    }
+    const user = req.user!;
+    const notes = listNotesByCite(cite.id).filter((note) => citeNoteVisible(user, note));
+    sendPage(req, res, 'Cite ' + cite.nombre, 'conversations', renderCiteDetailPage(cite, notes, citesSyncedAt()), {
+      subtitle: 'Detalle del cite y contactos registrados con todo su seguimiento.',
+      activeHref: '/cites',
+      actions: '<a class="btn btn-sm btn-light" href="/cites"><span class="ri-arrow-left-line me-1"></span>Volver a cites</a>',
+    });
+  });
+
   app.get('/notes/estado/:status', requireUser, requireSection('conversations'), (req: AuthedRequest, res: Response) => {
     const status = String(req.params.status);
     if (!isOneOf(status, NOTE_STATUSES)) {
@@ -2141,52 +2271,8 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     res.redirect(302, reportsUrl());
   });
 
-  for (const path of ['/reports/:tab/:period', '/reports/:tab/:period/:session']) {
-    app.get(
-      path,
-      requireUser,
-      requireSection('reports'),
-      ah(async (req: AuthedRequest, res) => {
-        const tab = String(req.params.tab);
-        const period = String(req.params.period);
-        if (!isOneOf(tab, REPORTS_TABS) || !isOneOf(period, PERIOD_SLUGS)) {
-          res.status(404).send(pageHtml(req, res, 'Ruta no encontrada', 'reports', emptyState('ri-question-line', 'Ruta no encontrada', 'La pestaña o el período no existen.')));
-          return;
-        }
-        const sessionParam = req.params.session ? validSessionId(req.params.session) : '';
-        if (req.params.session && !sessionParam) {
-          res.status(404).send(pageHtml(req, res, 'Número no encontrado', 'reports', emptyState('ri-smartphone-line', 'Número no encontrado', 'El identificador de la línea no es válido.')));
-          return;
-        }
-        renderReportsPage(req, res, tab as ReportsTabSlug, period as PeriodSlug, sessionParam ?? '');
-      }),
-    );
-  }
-
-  app.get(
-    '/reports/export.csv',
-    requireUser,
-    requireSection('reports'),
-    ah(async (req: AuthedRequest, res) => {
-      const view = buildReports(req);
-      res.setHeader('Content-Disposition', `attachment; filename="reporte-${view.period.from}_${view.period.to}.csv"`);
-      res.type('text/csv; charset=utf-8').send(reportsCsv(view));
-    }),
-  );
-
-  // CSV de la actividad de envíos masivos (resumen por persona + registro de lotes).
-  app.get(
-    '/reports/masivos.csv',
-    requireUser,
-    requireSection('reports'),
-    ah(async (req: AuthedRequest, res) => {
-      const { scope } = followupScope(req, true);
-      const period = resolvePeriod({ period: qstr(req, 'period'), from: qstr(req, 'from'), to: qstr(req, 'to') }, '30d');
-      res.setHeader('Content-Disposition', `attachment; filename="envios-masivos-${period.from}_${period.to}.csv"`);
-      res.type('text/csv; charset=utf-8').send(massActivityCsv(massActivity(scope.sessionId ? [scope.sessionId] : scope.sessionIds, period), period.label));
-    }),
-  );
-
+  // Las rutas de ficha van antes de /reports/:tab/:period. Si se registran
+  // después, Express interpreta "users" como pestaña y la ficha da 404.
   const renderReportUserPage = (
     req: AuthedRequest,
     res: Response,
@@ -2299,6 +2385,53 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     );
   }
 
+  for (const path of ['/reports/:tab/:period', '/reports/:tab/:period/:session']) {
+    app.get(
+      path,
+      requireUser,
+      requireSection('reports'),
+      ah(async (req: AuthedRequest, res) => {
+        const tab = String(req.params.tab);
+        const period = String(req.params.period);
+        if (!isOneOf(tab, REPORTS_TABS) || !isOneOf(period, PERIOD_SLUGS)) {
+          res.status(404).send(pageHtml(req, res, 'Ruta no encontrada', 'reports', emptyState('ri-question-line', 'Ruta no encontrada', 'La pestaña o el período no existen.')));
+          return;
+        }
+        const sessionParam = req.params.session ? validSessionId(req.params.session) : '';
+        if (req.params.session && !sessionParam) {
+          res.status(404).send(pageHtml(req, res, 'Número no encontrado', 'reports', emptyState('ri-smartphone-line', 'Número no encontrado', 'El identificador de la línea no es válido.')));
+          return;
+        }
+        renderReportsPage(req, res, tab as ReportsTabSlug, period as PeriodSlug, sessionParam ?? '');
+      }),
+    );
+  }
+
+  app.get(
+    '/reports/export.csv',
+    requireUser,
+    requireSection('reports'),
+    ah(async (req: AuthedRequest, res) => {
+      const view = buildReports(req);
+      res.setHeader('Content-Disposition', `attachment; filename="reporte-${view.period.from}_${view.period.to}.csv"`);
+      res.type('text/csv; charset=utf-8').send(reportsCsv(view));
+    }),
+  );
+
+  // CSV de la actividad de envíos masivos (resumen por persona + registro de lotes).
+  app.get(
+    '/reports/masivos.csv',
+    requireUser,
+    requireSection('reports'),
+    ah(async (req: AuthedRequest, res) => {
+      const { scope } = followupScope(req, true);
+      const period = resolvePeriod({ period: qstr(req, 'period'), from: qstr(req, 'from'), to: qstr(req, 'to') }, '30d');
+      res.setHeader('Content-Disposition', `attachment; filename="envios-masivos-${period.from}_${period.to}.csv"`);
+      res.type('text/csv; charset=utf-8').send(massActivityCsv(massActivity(scope.sessionId ? [scope.sessionId] : scope.sessionIds, period), period.label));
+    }),
+  );
+
+
   // ── Políticas (anti-baneo) ───────────────────────────────────────────────────
 
   app.get(
@@ -2335,6 +2468,7 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     requireSection,
     sessions: () => manager.list(),
     runner,
+    manager,
   });
 
   // ── 404 amigable ────────────────────────────────────────────────────────────

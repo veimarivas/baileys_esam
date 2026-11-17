@@ -20,6 +20,7 @@ import { linkedToOtherNumber, resolveUserLine } from '../core/line-resolver.js';
 import { lineVerdict, sendBlockedReason } from '../core/line-verdict.js';
 import { batchEngagement, summarizeEngagement } from '../core/batch-engagement.js';
 import { ProspectError, removeProspect, upsertProspect } from '../core/prospects.js';
+import { replaceCites } from '../core/cites.js';
 import { ModuleFollowupError, upsertModuleFollowup } from '../core/module-followups.js';
 import { panelBus } from '../panel/events.js';
 import type { SessionRow } from '../types.js';
@@ -271,13 +272,22 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
 
   app.get(
     '/api/v1/groups',
-    ah(async (_req, res) => {
-      const row = manager.primary();
+    ah(async (req, res) => {
+      const account = String(req.query?.account ?? req.query?.uid ?? '').trim();
+      const phone = String(req.query?.phone ?? '').trim();
+      let row: SessionRow | undefined;
+      try {
+        row = account || phone ? resolveUserLine(manager.list(), account || null, phone || null) : manager.primary();
+      } catch (err) {
+        res.status(422).json({ message: (err as Error).message });
+        return;
+      }
       if (!row) {
         res.json({ groups: [] });
         return;
       }
       try {
+        await manager.start(row.id);
         const groups = await manager.groups(row.id);
         res.json({
           groups: groups.map((g) => ({ id: g.id, name: g.name, participants: g.participantCount })),
@@ -311,6 +321,43 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
         await manager.start(row.id); // no-op si el socket ya está abierto
         const info = await manager.groupJoinInfo(row.id, code);
         res.json({ id: info.id, name: info.name });
+      } catch (err) {
+        res.status(502).json({ message: (err as Error).message });
+      }
+    }),
+  );
+
+  app.post(
+    '/api/v1/groups/check',
+    ah(async (req, res) => {
+      const group = String(req.body?.group ?? req.body?.chat_id ?? '').trim();
+      if (!group.endsWith('@g.us')) {
+        res.status(422).json({ message: 'El ID del grupo debe terminar en @g.us.' });
+        return;
+      }
+      const account = String(req.body?.account ?? '').trim();
+      const phone = String(req.body?.phone ?? '').trim();
+      let row: SessionRow | undefined;
+      try {
+        row = account || phone ? resolveUserLine(manager.list(), account || null, phone || null) : readyPrimary();
+      } catch (err) {
+        res.status(422).json({ message: (err as Error).message });
+        return;
+      }
+      if (!row || row.status !== 'ready') {
+        res.status(422).json({
+          message: 'No hay una línea de WhatsApp conectada para verificar este grupo. Conectá la línea y volvé a intentar.',
+        });
+        return;
+      }
+      try {
+        await manager.start(row.id);
+        const info = await manager.groupInfo(row.id, group);
+        res.json({
+          ok: true,
+          ...info,
+          line: { id: row.id, phone: row.phone, owner: row.owner_name },
+        });
       } catch (err) {
         res.status(502).json({ message: (err as Error).message });
       }
@@ -418,6 +465,29 @@ export function createApiApp(manager: SessionManager, runner: BatchRunner) {
         status: fresh.status,
         expected_phone: fresh.expected_phone,
       });
+    }),
+  );
+
+  // ── Cites (folios de pago a la universidad) ────────────────────────────────
+  // Cronogramas los administra en /admin/folios y los sincroniza acá. Las
+  // sub-agendas que lo exigen eligen uno habilitado al mover una tarjeta.
+
+  app.put(
+    '/api/v1/cites',
+    ah(async (req, res) => {
+      const raw = req.body?.cites;
+      if (!Array.isArray(raw)) {
+        res.status(422).json({ message: 'Falta la lista de cites (cites).' });
+        return;
+      }
+      try {
+        const count = replaceCites(raw);
+        audit('cites.synced', { count });
+        res.json({ ok: true, count });
+      } catch (err) {
+        logger.warn({ err: (err as Error).message }, 'No se pudo sincronizar la lista de cites');
+        res.status(500).json({ message: (err as Error).message });
+      }
     }),
   );
 

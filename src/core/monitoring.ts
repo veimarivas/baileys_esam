@@ -152,6 +152,7 @@ export interface MonitoringData {
 /** Etiquetas legibles por tipo de envío (meta.tipo de los lotes de cronogramas). */export const TIPO_LABELS: Record<string, string> = {
   participantes: 'Masivos (programas)',
   grupo: 'Grupos de programa',
+  prospectos: 'Prospectos (marketing)',
   cobranza: 'Seguimiento contable',
   notas: 'Módulos / notas',
   inbox: 'Bandeja ESAM',
@@ -305,7 +306,7 @@ export function monitoringData(filters: MonitoringFilters = {}, chartDays = 14, 
   const optProgramas = new Set<string>();
   const optAreas = new Set<string>();
   const optUsers = new Map<string, string>();
-  const optTipos = new Set<string>(['participantes', 'grupo', 'cobranza', 'notas', 'inbox']);
+  const optTipos = new Set<string>(['participantes', 'grupo', 'prospectos', 'cobranza', 'notas', 'inbox']);
   for (const b of all<{ meta: string | null; session_id: string | null }>(
     `SELECT meta, session_id FROM batches b WHERE 1 = 1${sessionSql}`,
     ...(sessionIds ?? []),

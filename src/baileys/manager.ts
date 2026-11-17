@@ -20,7 +20,7 @@ import { alertSessionDown } from '../core/notifications.js';
 import { lidForPhone, resolveChatId } from '../core/lid.js';
 import { metaJson, pollMeta, contactPreview } from '../core/message-meta.js';
 import { panelBus } from '../panel/events.js';
-import type { OutboundSender, SessionRow } from '../types.js';
+import type { GroupSendCheck, OutboundSender, SessionRow } from '../types.js';
 
 /** Tamaño máximo de media que se envía inline en el webhook (base64). */
 const INLINE_MEDIA_LIMIT = 4 * 1024 * 1024;
@@ -203,6 +203,7 @@ export class SessionManager implements OutboundSender {
       this.enqueueInbound(sessionId, async () => this.onChatUnread(sessionId, u.chatId, u.unreadCount)),
     );
     session.on('ack', (ack: { messageId: string; status: string }) => void this.onAck(sessionId, ack));
+    session.on('revoked', (r: { messageId: string; chatId: string; scope: 'revoke' | 'delete' }) => void this.onRevoked(sessionId, r));
     session.on('presence', (p: { chatId: string; typing: boolean }) => void this.onPresence(sessionId, p));
     session.on('contact-name', (c: { chatId: string; name: string }) => this.onContactName(sessionId, c.chatId, c.name));
 
@@ -271,6 +272,10 @@ export class SessionManager implements OutboundSender {
     return (await this.instance(sessionId)).groupParticipants(chatId);
   }
 
+  async groupInfo(sessionId: string, chatId: string): Promise<GroupSendCheck> {
+    return (await this.instance(sessionId)).groupInfo(chatId);
+  }
+
   async groupsForPhone(sessionId: string, phoneKey: string) {
     return (await this.instance(sessionId)).groupsForPhone(phoneKey);
   }
@@ -301,6 +306,7 @@ export class SessionManager implements OutboundSender {
     contactName?: string | null,
     opts: SendOptions = {},
   ) {
+    chatId = resolveChatId(chatId);
     const quote = this.quoteRef(sessionId, opts.quoteWaId);
     let result: { messageId?: string };
     try {
@@ -326,6 +332,7 @@ export class SessionManager implements OutboundSender {
     contactName?: string | null,
     sendOpts: SendOptions = {},
   ) {
+    chatId = resolveChatId(chatId);
     const quote = this.quoteRef(sessionId, sendOpts.quoteWaId);
     const name = opts.name.slice(0, 120);
     const phone = opts.phone.replace(/\D+/g, '');
@@ -379,6 +386,7 @@ export class SessionManager implements OutboundSender {
     contactName?: string | null,
     sendOpts: SendOptions = {},
   ) {
+    chatId = resolveChatId(chatId);
     const quote = this.quoteRef(sessionId, sendOpts.quoteWaId);
     let result: { messageId?: string };
     try {
@@ -430,6 +438,7 @@ export class SessionManager implements OutboundSender {
     contactName?: string | null,
     sendOpts: SendOptions = {},
   ) {
+    chatId = resolveChatId(chatId);
     const quote = this.quoteRef(sessionId, sendOpts.quoteWaId);
     let mediaPath: string | null = null;
     try {
@@ -475,6 +484,7 @@ export class SessionManager implements OutboundSender {
     emoji: string,
     actorUid: number | null,
   ): Promise<void> {
+    chatId = resolveChatId(chatId);
     const session = await this.requireReady(sessionId);
     const row = get<{ wa_message_id: string | null; direction: string }>(
       'SELECT wa_message_id, direction FROM messages WHERE id = ?',
@@ -577,8 +587,16 @@ export class SessionManager implements OutboundSender {
    */
   private handleSendFailure(sessionId: string, chatId: string, err: unknown): void {
     const message = (err as Error).message;
+    const isGroup = /@g\.us$/i.test(String(chatId ?? ''));
+    const blockLike = looksLikeBlock(message);
     try {
-      if (looksLikeBlock(message)) {
+      // En grupos, «forbidden» casi siempre significa que la línea ya no es
+      // miembro. No es un bloqueo del destinatario: no se toca la confianza.
+      if (isGroup && blockLike) {
+        logger.warn({ sessionId, chatId, err: message }, 'El grupo rechazó el envío: la línea no participa o fue eliminada');
+        return;
+      }
+      if (blockLike) {
         markBlocked(chatId, `Bloqueo detectado al enviar: ${message}`, sessionId);
         resetTrust(sessionId);
         logger.warn({ sessionId, chatId }, 'Posible bloqueo/reporte detectado: destino en lista negra');
@@ -591,6 +609,7 @@ export class SessionManager implements OutboundSender {
 
   /** Envía un sticker WebP desde la biblioteca. */
   async sendStickerFile(sessionId: string, chatId: string, filePath: string) {
+    chatId = resolveChatId(chatId);
     const contents = fs.readFileSync(filePath);
     let stored: string | null = null;
     try {
@@ -612,6 +631,7 @@ export class SessionManager implements OutboundSender {
     chatId: string,
     tag: { contactName?: string | null; programa?: string | null; programaId?: number | null },
   ): void {
+    chatId = resolveChatId(chatId);
     // Por persona (número): así lo ven todas las líneas, no solo la que envió.
     const tagged = tagPerson(chatId, {
       fullName: tag.contactName,
@@ -1480,11 +1500,38 @@ export class SessionManager implements OutboundSender {
     run('UPDATE batch_items SET status = ? WHERE message_id = ? AND status = ?', 'sent', ack.messageId, 'pending');
     panelBus.publish('ack', { sessionId, messageId: ack.messageId, status: ack.status });
     if (ack.status === 'failed') {
-      const row = get<{ chat_id: string }>('SELECT chat_id FROM messages WHERE wa_message_id = ? LIMIT 1', ack.messageId);
-      if (row?.chat_id) markBlocked(row.chat_id, 'Fallo de entrega reportado por WhatsApp', sessionId);
+      // Un acuse fallido no siempre significa bloqueo: puede ser un número sin
+      // WhatsApp, sin conexión o un error temporal. No se agrega a «No enviar»
+      // automáticamente; los bloqueos reales se detectan por el error de envío.
       recomputeHealth(sessionId, { lastError: 'Fallo de entrega reportado por WhatsApp' });
     }
     await dispatchEvent(sessionId, 'message.ack', { messageId: ack.messageId, status: ack.status });
+  }
+
+  private async onRevoked(
+    sessionId: string,
+    r: { messageId: string; chatId: string; scope: 'revoke' | 'delete' },
+  ): Promise<void> {
+    const row = get<{ id: number }>(
+      'SELECT id FROM messages WHERE session_id = ? AND wa_message_id = ? LIMIT 1',
+      sessionId,
+      r.messageId,
+    );
+    if (!row) return;
+    const now = nowIso();
+    run('UPDATE messages SET revoked_at = ?, revoked_scope = ? WHERE id = ?', now, r.scope, row.id);
+    panelBus.publish('message', {
+      sessionId,
+      chatId: r.chatId,
+      action: 'revoked',
+      revoked_at: now,
+      revoked_scope: r.scope,
+    });
+    await dispatchEvent(sessionId, 'message.revoked', {
+      messageId: r.messageId,
+      chatId: r.chatId,
+      scope: r.scope,
+    });
   }
 
   private async onPresence(sessionId: string, p: { chatId: string; typing: boolean }): Promise<void> {
@@ -1626,6 +1673,7 @@ export class SessionManager implements OutboundSender {
       contentMeta?: string | null;
     } = {},
   ): number {
+    chatId = resolveChatId(chatId);
     const row = this.byId(sessionId);
     const occurredAt = timestampSec ? new Date(timestampSec * 1000).toISOString() : nowIso();
     const result = run(
@@ -1664,6 +1712,7 @@ export class SessionManager implements OutboundSender {
     lastText: string | null = null,
     occurredAt: string | null = null,
   ): void {
+    chatId = resolveChatId(chatId);
     const row = this.byId(sessionId);
     let contactId: number | null = null;
     try {

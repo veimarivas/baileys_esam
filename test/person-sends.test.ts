@@ -1,7 +1,7 @@
 import './helpers/temp-env.js';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { classifySend, personSends } from '../src/core/person-sends.js';
+import { classifySend, groupSends, personSends } from '../src/core/person-sends.js';
 import { upsertUser } from '../src/auth/users.js';
 import { run } from '../src/db/index.js';
 import { nowIso } from '../src/util/async.js';
@@ -37,6 +37,8 @@ send({ tipo: 'asistencia', programa: 'Diplomado X', modulo: 'Módulo 2', sesion:
 send({ tipo: 'cobranza', origen: 'recordatorio_automatico' }, 'sent');
 send({ tipo: 'participantes', area: 'academico', programa: 'Diplomado X' }, 'pending');
 send({ tipo: 'notas' }, 'sent', { chat: '59179999999@c.us' }); // otra persona
+const GRUPO = '120363000000000001@g.us';
+send({ tipo: 'grupos', area: 'academico', programa: 'Diplomado X', solicitado_por: 'Rosa Responsable' }, 'sent', { chat: GRUPO });
 // Acuse de lectura del primer envío.
 run(
   `INSERT INTO messages (session_id, chat_id, direction, content_type, body, wa_message_id, status, occurred_at, created_at)
@@ -53,7 +55,7 @@ describe('envíos del sistema a una persona', () => {
   });
 
   it('clasifica por categoría y área', () => {
-    assert.deepEqual(r.byCategory, { cobranza: 2, notas: 1, asistencia: 1, programa: 1, marketing: 0, otros: 0 });
+    assert.deepEqual(r.byCategory, { cobranza: 2, notas: 1, asistencia: 1, programa: 1, prospecto: 0, marketing: 0, otros: 0 });
     const conta = r.areas.find((a) => a.area === 'contabilidad')!;
     const acad = r.areas.find((a) => a.area === 'academico')!;
     assert.equal(conta.total, 2);
@@ -85,8 +87,19 @@ describe('envíos del sistema a una persona', () => {
   it('clasifica los tipos de cronogramas', () => {
     assert.equal(classifySend({ tipo: 'cobranza', modo: 'proximas' }).title, 'Cuotas próximas a vencer');
     assert.equal(classifySend({ tipo: 'prospectos' }).area, 'marketing');
+    assert.equal(classifySend({ tipo: 'prospectos' }).category, 'prospecto');
+    assert.equal(classifySend({ tipo: 'prospectos' }).title, 'Mensaje a prospecto');
     assert.equal(classifySend({ tipo: 'participantes', area: 'contabilidad' }).area, 'contabilidad');
     assert.equal(classifySend({}).category, 'otros');
+  });
+
+  it('el historial de un grupo muestra el envío masivo y su área', () => {
+    const g = groupSends('ps-1', GRUPO);
+    assert.equal(g.items.length, 1);
+    assert.equal(g.items[0].category, 'programa');
+    assert.equal(g.items[0].area, 'academico');
+    assert.equal(g.items[0].title, 'Mensaje al grupo');
+    assert.equal(g.items[0].sender, 'Rosa Responsable');
   });
 });
 

@@ -5,7 +5,15 @@ import { logger } from '../logger.js';
 import { all, get } from '../db/index.js';
 import { config } from '../config.js';
 import { panelBus } from './events.js';
-import { esamEsAdmin, esamPuede, esamSupervisaArea, sessionScopeFor, type UserRow } from '../auth/users.js';
+import {
+  esamEsAdmin,
+  esamEsGerenteSede,
+  esamEsMarketingManager,
+  esamPuede,
+  esamSupervisaArea,
+  sessionScopeFor,
+  type UserRow,
+} from '../auth/users.js';
 import type { SessionManager } from '../baileys/manager.js';
 import * as agenda from '../core/agenda.js';
 import * as conversations from '../core/conversations.js';
@@ -1266,9 +1274,16 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       // La Gerencia y el Supervisor de Marketing ven, además, el seguimiento de
       // todo marketing (prospectos y notas de todos los asesores).
       const admin = esamEsAdmin(user);
-      const ownerId = admin ? null : user.id;
+      const sedeManager = esamEsGerenteSede(user);
+      const marketingManager = esamEsMarketingManager(user);
+      // El gerente de sede ve todo lo de su sede; el de marketing, todo
+      // Marketing dentro de su sede. Sin sede asignada se conserva el
+      // comportamiento anterior (supervisión global de Marketing).
+      const ownerId = admin || sedeManager ? null : user.id;
       const ownerArea = esamSupervisaArea(user);
-      const listScope = admin ? scope : null;
+      const listScope = admin
+        ? null
+        : (sedeManager || (marketingManager && user.sede_id) ? scope : null);
       const notes = listAllNotes({ tagId, status: ids.length ? 'all' : status, q, orderBy, authorId, assignedTo, ids, viewerId: user.id, sessionIds: listScope, ownerId, ownerArea })
         .map((n) => withPermissions(user, n));
       // Vínculo con la copia privada en Mi agenda (si el usuario ya la agregó).

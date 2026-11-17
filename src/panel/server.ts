@@ -502,7 +502,13 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
    */
   const isConnected = (user: UserRow): boolean => {
     const session = sessionForUser(user);
-    return !!session && session.status === 'ready';
+    if (session?.status === 'ready') return true;
+    // Gerentes/supervisores pueden operar aunque su línea propia no sea la
+    // primera de su alcance: alcanza con que haya una línea lista en su sede.
+    const scope = sessionScopeFor(user);
+    const allSessions = manager.list();
+    if (scope === null) return allSessions.some((s) => s.status === 'ready');
+    return scope.some((id) => allSessions.some((s) => s.id === id && s.status === 'ready'));
   };
 
   /** Vista de inicio del usuario: Conexión si aún no vinculó su número. */
@@ -2194,6 +2200,19 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
         .status(404)
         .send(
           pageHtml(req, res, 'Usuario no encontrado', 'reports', emptyState('ri-user-search-line', 'Usuario no encontrado', 'La cuenta pudo haberse eliminado o el enlace no es válido.'), {
+            subtitle: 'Ficha de seguimiento',
+            actions: `<a class="btn btn-soft-secondary btn-sm" href="${reportsUrl({ tab: 'equipo' })}"><i class="ri-arrow-left-line me-1"></i>Volver a Equipo</a>`,
+          }),
+        );
+      return;
+    }
+    // Un gerente solo consulta la ficha de personas de su sede.
+    const viewer = req.user!;
+    if (!esamEsAdmin(viewer) && viewer.sede_id && target.sede_id !== viewer.sede_id) {
+      res
+        .status(404)
+        .send(
+          pageHtml(req, res, 'Usuario no encontrado', 'reports', emptyState('ri-user-search-line', 'Usuario no encontrado', 'La cuenta no pertenece a tu sede.'), {
             subtitle: 'Ficha de seguimiento',
             actions: `<a class="btn btn-soft-secondary btn-sm" href="${reportsUrl({ tab: 'equipo' })}"><i class="ri-arrow-left-line me-1"></i>Volver a Equipo</a>`,
           }),

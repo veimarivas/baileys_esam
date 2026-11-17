@@ -8,6 +8,8 @@ export interface SessionRow {
   owner_name: string | null;
   owner_email: string | null;
   area: string | null;
+  /** Sede a la que pertenece la línea (heredada de su dueño). */
+  sede_id: number | null;
   status: string;
   phone: string | null;
   expected_phone: string | null;

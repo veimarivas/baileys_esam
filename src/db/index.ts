@@ -182,6 +182,22 @@ export function migrate(): void {
   addColumnIfMissing('contact_notes', 'contacted_at', 'TEXT');
   addColumnIfMissing('contact_notes', 'contacted_by', 'INTEGER');
   addColumnIfMissing('contact_notes', 'contact_result', 'TEXT');
+  // Sedes y cargos de usuarios locales (creados desde el panel).
+  addColumnIfMissing('users', 'sede_id', 'INTEGER');
+  addColumnIfMissing('sessions', 'sede_id', 'INTEGER');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_users_sede ON users(sede_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_sede ON sessions(sede_id)');
+  // Heredar sede/área de la línea desde su dueño (para datos ya existentes).
+  db.exec(`UPDATE sessions SET sede_id = (
+      SELECT u.sede_id FROM users u
+       WHERE u.source_uid = sessions.owner_uid OR CAST(u.id AS TEXT) = sessions.owner_uid
+       LIMIT 1)
+    WHERE sede_id IS NULL AND owner_uid IS NOT NULL`);
+  db.exec(`UPDATE sessions SET area = COALESCE(NULLIF(area, ''), (
+      SELECT u.esam_area FROM users u
+       WHERE u.source_uid = sessions.owner_uid OR CAST(u.id AS TEXT) = sessions.owner_uid
+       LIMIT 1))
+    WHERE owner_uid IS NOT NULL`);
   // Notificaciones del panel (campana).
   db.exec(`CREATE TABLE IF NOT EXISTS notifications (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,

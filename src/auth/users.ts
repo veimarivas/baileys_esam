@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { all, get, run } from '../db/index.js';
 import { nowIso } from '../util/async.js';
+import { normalizePhone } from '../core/phone.js';
 
 export interface UserRow {
   id: number;
@@ -15,6 +16,8 @@ export interface UserRow {
   esam_area: string | null;
   esam_numero: string | null;
   esam_roles: string | null;
+  /** Sede a la que pertenece el usuario (usuarios locales y de cronogramas). */
+  sede_id: number | null;
   last_login_at: string | null;
   last_login_ip: string | null;
   login_count: number;
@@ -30,6 +33,16 @@ export interface UserRow {
  */
 export const ESAM_ADMINS = ['Super Admin'];
 
+/** Cargos que se pueden crear desde el panel para usuarios locales. */
+export const LOCAL_CARGOS = [
+  'Gerente General',
+  'Gerente de Marketing',
+  'Supervisor de Marketing',
+  'Asesor de Marketing',
+] as const;
+
+export type LocalCargo = (typeof LOCAL_CARGOS)[number];
+
 export const ROLE_AREAS: Record<string, string> = {
   'Super Admin': 'admin',
   Administrador: 'admin',
@@ -39,6 +52,7 @@ export const ROLE_AREAS: Record<string, string> = {
   'Responsable Académico': 'academico',
   'Asesor de Marketing': 'marketing',
   'Gerencia Marketing': 'marketing',
+  'Gerente de Marketing': 'marketing',
   'Supervisor de Marketing': 'marketing',
 };
 
@@ -79,13 +93,34 @@ export function esamAreas(user: UserRow): string[] {
 }
 
 export function esamEsAdmin(user: UserRow): boolean {
-  if (user.source !== 'cronogramas') return true;
-  return esamRoles(user).some((rol) => ESAM_ADMINS.includes(rol));
+  const roles = esamRoles(user);
+  if (roles.includes('Super Admin')) return true;
+  // Cuenta local inicial (creada antes de los cargos): sigue siendo Super Admin.
+  return user.source === 'local' && roles.length === 0;
+}
+
+/** ¿Es gerente general de una sede? Accede a todas las líneas de su sede. */
+export function esamEsGerenteSede(user: UserRow): boolean {
+  return !esamEsAdmin(user) && esamRoles(user).includes('Gerente General');
+}
+
+/** Gerente o supervisor de Marketing: supervisa el área en su sede. */
+export function esamEsMarketingManager(user: UserRow): boolean {
+  if (esamEsAdmin(user)) return false;
+  const roles = esamRoles(user);
+  return roles.includes('Gerente de Marketing')
+    || roles.includes('Gerencia Marketing')
+    || roles.includes('Supervisor de Marketing');
+}
+
+export function esamEsAsesorMarketing(user: UserRow): boolean {
+  return !esamEsAdmin(user) && esamRoles(user).includes('Asesor de Marketing');
 }
 
 /** Roles de cronogramas que supervisan todo el seguimiento de un área en /notes. */
 const AREA_SUPERVISORS: Record<string, string> = {
   'Gerencia Marketing': 'marketing',
+  'Gerente de Marketing': 'marketing',
   'Supervisor de Marketing': 'marketing',
 };
 
@@ -95,15 +130,24 @@ const AREA_SUPERVISORS: Record<string, string> = {
  */
 export function esamSupervisaArea(user: UserRow): string | null {
   if (esamEsAdmin(user)) return null;
+  if (esamEsMarketingManager(user)) return 'marketing';
   for (const rol of esamRoles(user)) if (AREA_SUPERVISORS[rol]) return AREA_SUPERVISORS[rol];
   return null;
 }
 
+/**
+ * Secciones visibles. El Super Admin ve todo. Los gerentes de sede y de
+ * marketing acceden a las vistas operativas; su alcance de datos se limita en
+ * `sessionScopeFor` a su sede/área.
+ */
 export function esamPuede(user: UserRow, seccion: string): boolean {
   if (esamEsAdmin(user)) return true;
-  // Las áreas de cronogramas ya no habilitan secciones administrativas: solo
-  // el Super Admin las ve (SECTION_AREAS queda como referencia del espejo).
-  return NON_ADMIN_SECTIONS.includes(seccion);
+  const allowed = new Set(NON_ADMIN_SECTIONS);
+  if (esamEsGerenteSede(user) || esamEsMarketingManager(user)) {
+    allowed.add('reports');
+    allowed.add('monitoring');
+  }
+  return allowed.has(seccion);
 }
 
 export function esamHome(user: UserRow): string {
@@ -129,8 +173,9 @@ export function esamAreaName(area: string | null | undefined): string {
 }
 
 export function esamAreaLabel(user: UserRow): string {
-  if (user.source !== 'cronogramas') return 'Administrador local';
   if (esamEsAdmin(user)) return 'Super Admin';
+  const roles = esamRoles(user);
+  if (user.source === 'local') return roles.length ? roles[0] : 'Administrador local';
   const areas = esamAreas(user);
   return areas.length ? esamAreaName(areas[0]) : 'Sin rol';
 }
@@ -148,9 +193,25 @@ export function esamAreaLabel(user: UserRow): string {
  * Para las vistas de Reportes, ver `reportsScopeFor` (el Super Admin ve todo).
  */
 export function sessionScopeFor(user: UserRow): string[] | null {
-  // Solo la cuenta local administra todas las sesiones. Los usuarios de
-  // cronogramas ven exclusivamente su propio número, aunque sean admin.
-  if (user.source === 'local') return null;
+  // La cuenta local principal administra todas las sesiones. Los usuarios de
+  // cronogramas con Super Admin ven su propio número en el historial.
+  if (user.source === 'local' && esamEsAdmin(user)) return null;
+
+  // Gerente General: todas las líneas de su sede.
+  if (esamEsGerenteSede(user) && user.sede_id) {
+    return all<{ id: string }>('SELECT id FROM sessions WHERE sede_id = ?', user.sede_id).map((r) => r.id);
+  }
+
+  // Gerente/Supervisor de Marketing: las líneas de marketing de su sede.
+  if (esamEsMarketingManager(user) && user.sede_id) {
+    const ownerUid = user.source_uid ?? String(user.id);
+    return all<{ id: string }>(
+      `SELECT id FROM sessions
+        WHERE sede_id = ? AND (LOWER(COALESCE(area, '')) = 'marketing' OR owner_uid = ?)`,
+      user.sede_id,
+      ownerUid,
+    ).map((r) => r.id);
+  }
 
   const numero = (user.esam_numero ?? '').replace(/\D+/g, '');
   if (numero) {
@@ -166,7 +227,7 @@ export function sessionScopeFor(user: UserRow): string[] | null {
       })
       .map((r) => r.id);
   }
-  return all<{ id: string }>('SELECT id FROM sessions WHERE owner_uid = ?', user.source_uid ?? '').map((r) => r.id);
+  return all<{ id: string }>('SELECT id FROM sessions WHERE owner_uid = ?', user.source_uid ?? String(user.id)).map((r) => r.id);
 }
 
 /**
@@ -313,12 +374,13 @@ export function ensureLocalAdmin(): void {
   const email = process.env.LOCAL_ADMIN_EMAIL ?? 'admin@baileys.local';
   const password = process.env.LOCAL_ADMIN_PASSWORD ?? 'admin123';
   run(
-    `INSERT INTO users (name, username, email, password, source, esam_autorizado, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'local', 1, ?, ?)`,
+    `INSERT INTO users (name, username, email, password, source, esam_autorizado, esam_roles, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'local', 1, ?, ?, ?)`,
     'Administrador local',
     username,
     email,
     bcrypt.hashSync(password, 10),
+    JSON.stringify(['Super Admin']),
     nowIso(),
     nowIso(),
   );
@@ -330,6 +392,8 @@ interface SessionLite {
   expected_phone: string | null;
   phone: string | null;
   owner_uid: string | null;
+  area?: string | null;
+  sede_id?: number | null;
 }
 
 /**
@@ -351,6 +415,15 @@ export function ensureUserSession(user: UserRow): string | null {
   if (!numero) {
     // Sin número: solo marca como suya la sesión que ya tenga por owner_uid.
     const owned = get<SessionLite>('SELECT id, name, expected_phone, phone, owner_uid FROM sessions WHERE owner_uid = ?', ownerUid);
+    if (owned) {
+      run(
+        'UPDATE sessions SET sede_id = COALESCE(?, sede_id), area = ?, updated_at = ? WHERE id = ?',
+        user.sede_id,
+        user.esam_area,
+        now,
+        owned.id,
+      );
+    }
     return owned?.id ?? null;
   }
 
@@ -366,12 +439,16 @@ export function ensureUserSession(user: UserRow): string | null {
       `UPDATE sessions
          SET owner_uid = ?, owner_name = ?, owner_email = ?,
              expected_phone = COALESCE(NULLIF(expected_phone, ''), ?),
+             sede_id = COALESCE(?, sede_id),
+             area = ?,
              updated_at = ?
        WHERE id = ?`,
       ownerUid,
       user.name,
       user.email,
       numero,
+      user.sede_id,
+      user.esam_area,
       now,
       match.id,
     );
@@ -384,29 +461,173 @@ export function ensureUserSession(user: UserRow): string | null {
   if (existingById) {
     run(
       `UPDATE sessions SET owner_uid = ?, owner_name = ?, owner_email = ?,
-         expected_phone = ?, updated_at = ? WHERE id = ?`,
+         expected_phone = ?, sede_id = COALESCE(?, sede_id), area = ?,
+         updated_at = ? WHERE id = ?`,
       ownerUid,
       user.name,
       user.email,
       numero,
+      user.sede_id,
+      user.esam_area,
       now,
       id,
     );
     return id;
   }
   run(
-    `INSERT INTO sessions (id, name, owner_uid, owner_name, owner_email, expected_phone, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'created', ?, ?)`,
+    `INSERT INTO sessions (id, name, owner_uid, owner_name, owner_email, expected_phone, area, sede_id, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'created', ?, ?)`,
     id,
     user.name ?? `Sesión ${numero}`,
     ownerUid,
     user.name,
     user.email,
     numero,
+    user.esam_area,
+    user.sede_id,
     now,
     now,
   );
   return id;
+}
+
+/**
+ * Propaga sede/área a las líneas del usuario (por `owner_uid` o por número).
+ * Se usa al editar una cuenta para que el alcance por sede quede al día.
+ */
+export function syncUserSessions(user: UserRow): void {
+  const now = nowIso();
+  const ownerUid = user.source_uid ?? String(user.id);
+  const numero = (user.esam_numero ?? '').replace(/\D+/g, '');
+  const sessions = all<SessionLite>('SELECT id, name, expected_phone, phone, owner_uid FROM sessions');
+  for (const s of sessions) {
+    const exp = (s.expected_phone ?? '').replace(/\D+/g, '');
+    const ph = (s.phone ?? '').replace(/\D+/g, '');
+    const phoneMatch = !!numero && (exp === numero || ph === numero);
+    if (s.owner_uid === ownerUid || phoneMatch) {
+      run(
+        'UPDATE sessions SET sede_id = ?, area = ?, updated_at = ? WHERE id = ?',
+        user.sede_id,
+        user.esam_area,
+        now,
+        s.id,
+      );
+    }
+  }
+}
+
+/** Área interna que corresponde a un cargo local (solo Marketing la usa). */
+export function areaForLocalRoles(roles: string[]): string | null {
+  if (roles.some((r) => ROLE_AREAS[r] === 'marketing')) return 'marketing';
+  return null;
+}
+
+export interface LocalUserInput {
+  name: string;
+  username: string;
+  email: string | null;
+  password: string;
+  numero: string;
+  sedeId: number;
+  roles: string[];
+  autorizado?: boolean;
+}
+
+/** Crea una cuenta local (no cronogramas) con cargo y sede. */
+export function createLocalUser(input: LocalUserInput): UserRow {
+  const name = String(input.name ?? '').trim().slice(0, 120);
+  const username = String(input.username ?? '').trim().slice(0, 60);
+  const email = String(input.email ?? '').trim() || null;
+  const password = String(input.password ?? '');
+  const numero = normalizePhone(input.numero);
+  if (!name) throw new Error('Escribí el nombre.');
+  if (!username) throw new Error('Escribí el usuario.');
+  if (!input.sedeId) throw new Error('Elegí una sede.');
+  if (!input.roles.length) throw new Error('Elegí un cargo.');
+  if (input.roles.some((r) => !(LOCAL_CARGOS as readonly string[]).includes(r))) {
+    throw new Error('El cargo elegido no es válido.');
+  }
+  if (password.length < 6) throw new Error('La contraseña debe tener al menos 6 caracteres.');
+  if (!numero || numero.length < 8 || numero.length > 15) throw new Error('El número de WhatsApp no es válido.');
+  if (findByLogin(username)) throw new Error('Ese usuario ya existe.');
+  if (email && findByEmail(email)) throw new Error('Ese correo ya está registrado.');
+  const now = nowIso();
+  const created = run(
+    `INSERT INTO users (name, username, email, password, source, esam_autorizado, esam_area, esam_numero,
+       esam_roles, sede_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'local', ?, ?, ?, ?, ?, ?, ?)`,
+    name,
+    username,
+    email,
+    bcrypt.hashSync(password, 10),
+    input.autorizado === false ? 0 : 1,
+    areaForLocalRoles(input.roles),
+    numero,
+    JSON.stringify(input.roles),
+    input.sedeId,
+    now,
+    now,
+  );
+  const user = findById(created.lastInsertRowid)!;
+  ensureUserSession(user);
+  syncUserSessions(user);
+  return user;
+}
+
+export interface ManagedUserPatch {
+  name?: string;
+  username?: string;
+  email?: string | null;
+  password?: string | null;
+  numero?: string | null;
+  sedeId?: number | null;
+  roles?: string[];
+  autorizado?: boolean;
+  /** En cronogramas el cargo lo actualiza el SSO y no se toca desde el panel. */
+  preserveRoles?: boolean;
+}
+
+/** Actualiza una cuenta desde el panel, respetando el origen cronogramas. */
+export function updateManagedUser(id: number, patch: ManagedUserPatch): UserRow {
+  const current = findById(id);
+  if (!current) throw new Error('Usuario no encontrado.');
+  const username = patch.username !== undefined ? String(patch.username).trim().slice(0, 60) : current.username;
+  const name = patch.name !== undefined ? String(patch.name).trim().slice(0, 120) : current.name;
+  const email = patch.email !== undefined ? (String(patch.email ?? '').trim() || null) : current.email;
+  if (!name) throw new Error('Escribí el nombre.');
+  if (!username) throw new Error('Escribí el usuario.');
+  if (username) {
+    const dup = get<{ id: number }>('SELECT id FROM users WHERE username = ? AND id <> ?', username, id);
+    if (dup) throw new Error('Ese usuario ya existe.');
+  }
+  if (email) {
+    const dup = get<{ id: number }>('SELECT id FROM users WHERE email = ? AND id <> ?', email, id);
+    if (dup) throw new Error('Ese correo ya está registrado.');
+  }
+  const numero = patch.numero !== undefined ? (patch.numero ? normalizePhone(patch.numero) : null) : current.esam_numero;
+  if (numero && (numero.length < 8 || numero.length > 15)) throw new Error('El número de WhatsApp no es válido.');
+  if (patch.password && patch.password.length < 6) throw new Error('La contraseña debe tener al menos 6 caracteres.');
+  const roles = patch.preserveRoles ? esamRoles(current) : (patch.roles ?? esamRoles(current));
+  const area = patch.preserveRoles ? current.esam_area : areaForLocalRoles(roles);
+  const password = patch.password ? bcrypt.hashSync(patch.password, 10) : current.password;
+  run(
+    `UPDATE users SET name = ?, username = ?, email = ?, password = ?, esam_autorizado = ?, esam_area = ?,
+       esam_numero = ?, esam_roles = ?, sede_id = ?, updated_at = ? WHERE id = ?`,
+    name,
+    username,
+    email,
+    password,
+    patch.autorizado !== undefined ? (patch.autorizado ? 1 : 0) : current.esam_autorizado,
+    area,
+    numero,
+    JSON.stringify(roles),
+    patch.sedeId !== undefined ? patch.sedeId : current.sede_id,
+    nowIso(),
+    id,
+  );
+  const user = findById(id)!;
+  syncUserSessions(user);
+  return user;
 }
 
 /** ¿El número vinculado corresponde al autorizado para esa sesión? */

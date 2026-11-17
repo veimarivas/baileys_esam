@@ -6,7 +6,18 @@ import { emptyState, fmtDate, initials } from './views.js';
 import { auditUrl, positiveInt, templatesUrl, type AuditCatSlug } from './urls.js';
 import { setFlash } from './flash.js';
 import { pageHtml, sendPage } from './page.js';
-import { esamAreas, esamEsAdmin, esamRoles, listUsers, type UserRow } from '../auth/users.js';
+import {
+  LOCAL_CARGOS,
+  createLocalUser,
+  esamAreas,
+  esamEsAdmin,
+  esamRoles,
+  findById,
+  listUsers,
+  updateManagedUser,
+  type UserRow,
+} from '../auth/users.js';
+import { createSede, deleteSede, listSedes, renameSede } from '../core/sedes.js';
 import { lastUseByUser } from '../core/user-activity.js';
 import { audit } from '../core/webhooks.js';
 import {
@@ -361,18 +372,185 @@ const USER_AREA_TABS: Array<{ key: string; label: string }> = [
 /** Áreas de un usuario: su área de cronogramas + las áreas de sus roles. */
 function userAreas(u: UserRow): string[] {
   const areas = new Set<string>();
-  if (u.source === 'local') areas.add('admin');
+  if (u.source === 'local' && esamEsAdmin(u)) areas.add('admin');
   if (u.esam_area) areas.add(String(u.esam_area).toLowerCase());
   for (const area of esamAreas(u)) areas.add(area);
   return [...areas];
 }
 
+/** Cuenta autenticada que ejecuta la acción (para auditoría). */
+function usersUserId(req: Request): number | null {
+  return (req as Request & { user?: UserRow }).user?.id ?? null;
+}
+
+/** Selector de sede para formularios de alta y edición. */
+function sedeSelect(selected: number | null, opts: { required?: boolean; emptyLabel?: string } = {}): string {
+  const sedes = listSedes();
+  const required = opts.required ?? false;
+  if (!sedes.length) {
+    return '<select class="form-select" disabled><option value="">Primero creá una sede</option></select>';
+  }
+  const empty = required ? '' : `<option value="">${esc(opts.emptyLabel ?? 'Sin sede')}</option>`;
+  return `<select class="form-select" name="sede_id"${required ? ' required' : ''}>
+    ${empty}${sedes.map((s) => `<option value="${s.id}"${s.id === selected ? ' selected' : ''}>${esc(s.name)}</option>`).join('')}
+  </select>`;
+}
+
+/** Selector de cargo para usuarios locales. */
+function cargoSelect(selected: string | null): string {
+  return `<select class="form-select" name="cargo" required>
+    <option value="">Elegí un cargo</option>
+    ${LOCAL_CARGOS.map((c) => `<option value="${esc(c)}"${c === selected ? ' selected' : ''}>${esc(c)}</option>`).join('')}
+  </select>`;
+}
+
+function renderSedesPanel(sedes: ReturnType<typeof listSedes>, open: boolean): string {
+  const list = sedes.length
+    ? `<div class="adm-sede-list">${sedes.map((s) => `
+        <div class="adm-sede-row">
+          <form method="post" action="/sedes/${s.id}" class="adm-sede-name">
+            <input class="form-control form-control-sm" name="name" value="${esc(s.name)}" maxlength="80" required aria-label="Nombre de la sede"/>
+            <button class="btn btn-sm btn-light" type="submit" title="Guardar nombre"><i class="ri-save-3-line"></i></button>
+          </form>
+          <span class="adm-sede-count">${s.users} usuario${s.users === 1 ? '' : 's'}</span>
+          <form method="post" action="/sedes/${s.id}/delete" ${s.users ? '' : `data-confirm="¿Eliminar la sede «${esc(s.name)}»?"`}>
+            <button class="btn btn-sm btn-soft-danger" type="submit" ${s.users ? 'disabled' : ''} title="${s.users ? 'Tiene usuarios asignados' : 'Eliminar sede'}"><i class="ri-delete-bin-6-line"></i></button>
+          </form>
+        </div>`).join('')}</div>`
+    : '<p class="adm-empty-note">Todavía no hay sedes. Creá la primera para poder asignar usuarios.</p>';
+  return `<details class="adm-tool" id="sedes"${open || !sedes.length ? ' open' : ''}>
+    <summary>
+      <span class="adm-tool-ic"><i class="ri-building-2-line"></i></span>
+      <span class="adm-tool-txt"><b>Sedes</b><small>Agrupá las líneas y los cargos por sede.</small></span>
+      <span class="adm-tool-count">${sedes.length}</span>
+    </summary>
+    <div class="adm-tool-body">
+      ${list}
+      <form method="post" action="/sedes" class="adm-inline-form">
+        <input class="form-control" name="name" maxlength="80" required placeholder="Nombre de la nueva sede" aria-label="Nombre de la nueva sede"/>
+        <button class="btn btn-soft-primary" type="submit"><i class="ri-add-line me-1"></i>Crear sede</button>
+      </form>
+    </div>
+  </details>`;
+}
+
+function renderNewUserPanel(sedes: ReturnType<typeof listSedes>, open: boolean): string {
+  const warning = sedes.length
+    ? ''
+    : '<div class="ab-note ab-warn"><i class="ri-alert-line"></i>Primero creá una sede: cada usuario local debe pertenecer a una.</div>';
+  return `<details class="adm-tool" id="nuevo-usuario"${open ? ' open' : ''}>
+    <summary>
+      <span class="adm-tool-ic"><i class="ri-user-add-line"></i></span>
+      <span class="adm-tool-txt"><b>Nuevo usuario local</b><small>Cuentas que no vienen del sistema de cronogramas.</small></span>
+    </summary>
+    <div class="adm-tool-body">
+      ${warning}
+      <form method="post" action="/users" class="ab-stack">
+        <div class="adm-grid-2">
+          <div class="ab-field"><label class="form-label" for="nu-name">Nombre completo</label>
+            <input class="form-control" id="nu-name" name="name" maxlength="120" required placeholder="Ej.: Ana Pérez"/></div>
+          <div class="ab-field"><label class="form-label" for="nu-user">Usuario</label>
+            <input class="form-control" id="nu-user" name="username" maxlength="60" required autocomplete="off" placeholder="ana.perez"/></div>
+        </div>
+        <div class="adm-grid-2">
+          <div class="ab-field"><label class="form-label" for="nu-email">Correo (opcional)</label>
+            <input class="form-control" id="nu-email" name="email" type="email" maxlength="120" autocomplete="off" placeholder="ana@ejemplo.com"/></div>
+          <div class="ab-field"><label class="form-label" for="nu-phone">WhatsApp</label>
+            <input class="form-control" id="nu-phone" name="numero" inputmode="numeric" required placeholder="59171234567"/></div>
+        </div>
+        <div class="adm-grid-2">
+          <div class="ab-field"><label class="form-label" for="nu-password">Contraseña</label>
+            <input class="form-control" id="nu-password" name="password" type="password" minlength="6" required autocomplete="new-password" placeholder="Mínimo 6 caracteres"/></div>
+          <div class="ab-field"><label class="form-label" for="nu-sede">Sede</label>${sedeSelect(null, { required: true })}</div>
+        </div>
+        <div class="adm-grid-2">
+          <div class="ab-field"><label class="form-label" for="nu-cargo">Cargo</label>${cargoSelect(null)}</div>
+          <div class="ab-field adm-check-field">
+            <label class="form-check"><input class="form-check-input" type="checkbox" name="autorizado" value="1" checked/> <span class="form-check-label">Puede ingresar al panel</span></label>
+          </div>
+        </div>
+        <div class="adm-form-actions">
+          <span class="adm-foot"><i class="ri-information-line"></i>Los usuarios locales no se actualizan desde cronogramas; su cargo y sede se administran acá.</span>
+          <button class="btn btn-primary" type="submit"><i class="ri-user-add-line me-1"></i>Crear usuario</button>
+        </div>
+      </form>
+    </div>
+  </details>`;
+}
+
+function renderUserEdit(u: UserRow): string {
+  const isLocal = u.source === 'local';
+  const isSuper = esamEsAdmin(u);
+  const roles = esamRoles(u);
+  const role = roles[0] ?? '';
+  const roleField = isSuper
+    ? `<div class="adm-readonly"><span class="ab-pill ab-ok"><i class="ri-shield-star-line"></i>Super Admin</span>
+         <small>La cuenta principal mantiene acceso total al panel.</small></div>`
+    : isLocal
+      ? cargoSelect(role)
+      : `<div class="adm-readonly">${roles.length ? roles.map((r) => `<span class="ab-pill ab-info">${esc(r)}</span>`).join(' ') : '<span class="text-muted">Sin cargo</span>'}
+           <small>El cargo de las cuentas de cronogramas se actualiza al iniciar sesión desde ese sistema.</small></div>`;
+  return `<div class="ab-page adm-page">
+    <div class="adm-edit-layout">
+      <div class="card ab-card"><div class="card-body">
+        <div class="ab-card-title"><h5>${esc(u.name ?? u.username ?? 'Cuenta')}</h5>
+          <span>${isLocal ? 'Cuenta local' : 'Cuenta de cronogramas'}${u.sede_id ? '' : ' · sin sede asignada'}</span></div>
+        <form method="post" action="/users/${u.id}" class="ab-stack">
+          <div class="adm-grid-2">
+            <div class="ab-field"><label class="form-label" for="eu-name">Nombre completo</label>
+              <input class="form-control" id="eu-name" name="name" maxlength="120" required value="${esc(u.name ?? '')}" ${isLocal ? '' : 'readonly'}/></div>
+            <div class="ab-field"><label class="form-label" for="eu-user">Usuario</label>
+              <input class="form-control" id="eu-user" name="username" maxlength="60" required value="${esc(u.username ?? '')}" ${isLocal ? '' : 'readonly'} autocomplete="off"/></div>
+          </div>
+          <div class="adm-grid-2">
+            <div class="ab-field"><label class="form-label" for="eu-email">Correo</label>
+              <input class="form-control" id="eu-email" name="email" type="email" maxlength="120" value="${esc(u.email ?? '')}" ${isLocal ? '' : 'readonly'} autocomplete="off"/></div>
+            <div class="ab-field"><label class="form-label" for="eu-phone">WhatsApp</label>
+              <input class="form-control" id="eu-phone" name="numero" inputmode="numeric" value="${esc(u.esam_numero ?? '')}" ${isLocal ? '' : 'readonly'} ${isLocal && !isSuper ? 'required' : ''}/></div>
+          </div>
+          <div class="adm-grid-2">
+            <div class="ab-field"><label class="form-label" for="eu-password">Contraseña</label>
+              <input class="form-control" id="eu-password" name="password" type="password" minlength="6" autocomplete="new-password" placeholder="${isLocal ? 'Dejar en blanco para no cambiarla' : 'Se administra desde cronogramas'}" ${isLocal || isSuper ? '' : 'disabled'}/></div>
+            <div class="ab-field"><label class="form-label" for="eu-sede">Sede</label>${sedeSelect(u.sede_id, { emptyLabel: 'Sin sede', required: isLocal && !isSuper })}</div>
+          </div>
+          <div class="adm-grid-2">
+            <div class="ab-field"><label class="form-label">Cargo</label>${roleField}</div>
+            <div class="ab-field adm-check-field">
+              <label class="form-check"><input class="form-check-input" type="checkbox" name="autorizado" value="1" ${u.esam_autorizado ? 'checked' : ''}/> <span class="form-check-label">Puede ingresar al panel</span></label>
+            </div>
+          </div>
+          <div class="adm-form-actions">
+            <a class="btn btn-light" href="/users">Cancelar</a>
+            <button class="btn btn-primary" type="submit"><i class="ri-save-3-line me-1"></i>Guardar cambios</button>
+          </div>
+        </form>
+      </div></div>
+      <aside class="ab-aside">
+        <div class="card ab-card"><div class="card-body">
+          <div class="ab-card-title"><h5>Alcance de la cuenta</h5><span>Qué puede ver y administrar.</span></div>
+          <ul class="adm-scope-list">
+            <li><b>Super Admin:</b> todas las sedes, usuarios, líneas y reportes.</li>
+            <li><b>Gerente General:</b> todas las líneas y conversaciones de su sede.</li>
+            <li><b>Gerente de Marketing:</b> toda el área de Marketing de su sede.</li>
+            <li><b>Supervisor de Marketing:</b> seguimiento de Marketing de su sede.</li>
+            <li><b>Asesor de Marketing:</b> su propia línea y sus notas.</li>
+          </ul>
+          <p class="adm-foot"><i class="ri-information-line"></i>Las cuentas de cronogramas conservan el cargo que les asigna ese sistema; acá solo se ajustan la sede y la autorización.</p>
+        </div></div>
+      </aside>
+    </div>
+  </div>`;
+}
+
 function renderUsers(req: Request, sessions: SessionRow[]): string {
   const users = listUsers();
+  const sedes = listSedes();
+  const sedeMap = new Map(sedes.map((s) => [s.id, s.name]));
   const rawText = q(req, 'q');
   const text = rawText.toLowerCase();
   const filter = q(req, 'f');
   const area = q(req, 'area') || 'all';
+  const sedeFilter = Number(q(req, 'sede')) || 0;
   const since = new Date(Date.now() - 30 * 86_400_000).toISOString();
   const responses = new Map(
     all<{ uid: number; c: number; chats: number }>(
@@ -403,7 +581,9 @@ function renderUsers(req: Request, sessions: SessionRow[]): string {
   }
 
   const rows = users.filter((u) => {
-    if (text && ![u.name, u.username, u.email, u.esam_area].some((v) => (v ?? '').toLowerCase().includes(text))) return false;
+    const sedeName = u.sede_id ? (sedeMap.get(u.sede_id) ?? '') : '';
+    if (text && ![u.name, u.username, u.email, u.esam_area, sedeName].some((v) => (v ?? '').toLowerCase().includes(text))) return false;
+    if (sedeFilter && u.sede_id !== sedeFilter) return false;
     if (area !== 'all') {
       const areas = userAreas(u);
       if (area === 'sin-area' ? areas.length > 0 : !areas.includes(area)) return false;
@@ -419,13 +599,14 @@ function renderUsers(req: Request, sessions: SessionRow[]): string {
   const admins = users.filter((u) => esamEsAdmin(u)).length;
   const active = users.filter((u) => !isInactive(u)).length;
   const connected = users.filter((u) => lineOf(u)?.session?.status === 'ready').length;
-  const noLine = users.filter((u) => u.source !== 'local' && lineOf(u)?.session?.status !== 'ready').length;
+  const noLine = users.filter((u) => (u.source !== 'local' || !!u.esam_numero) && lineOf(u)?.session?.status !== 'ready').length;
   const unauthorized = users.filter((u) => !u.esam_autorizado).length;
   const chip = (id: string, label: string, n: number) => {
     const params = new URLSearchParams();
     if (id) params.set('f', id);
     if (rawText) params.set('q', rawText);
     if (area !== 'all') params.set('area', area);
+    if (sedeFilter) params.set('sede', String(sedeFilter));
     const query = params.toString();
 
     return `<a class="ab-filter ${filter === id ? 'on' : ''}" href="/users${query ? `?${query}` : ''}">${esc(label)} <span>${n}</span></a>`;
@@ -436,6 +617,7 @@ function renderUsers(req: Request, sessions: SessionRow[]): string {
     if (key !== 'all') params.set('area', key);
     if (filter) params.set('f', filter);
     if (rawText) params.set('q', rawText);
+    if (sedeFilter) params.set('sede', String(sedeFilter));
     const query = params.toString();
 
     return `/users${query ? `?${query}` : ''}`;
@@ -453,15 +635,18 @@ function renderUsers(req: Request, sessions: SessionRow[]): string {
 
   const table = rows.length
     ? `<div class="adm-table-wrap"><table class="table table-hover align-middle mb-0 ab-table adm-users">
-        <thead><tr><th>Persona</th><th>Rol</th><th>Línea de WhatsApp</th><th>Último ingreso</th><th>Última actividad</th><th>Actividad 30 días</th><th>Acceso</th></tr></thead>
+        <thead><tr><th>Persona</th><th>Rol</th><th>Sede</th><th>Línea de WhatsApp</th><th>Último ingreso</th><th>Última actividad</th><th>Actividad 30 días</th><th>Acceso</th><th></th></tr></thead>
         <tbody>${rows
           .map((u, i) => {
             const roles = esamRoles(u);
             const roleCell = roles.length
               ? roles.map((r) => `<span class="ab-pill ab-info">${esc(r)}</span>`).join(' ')
               : esamEsAdmin(u)
-                ? '<span class="ab-pill ab-ok">Administrador</span>'
+                ? '<span class="ab-pill ab-ok">Super Admin</span>'
                 : '<span class="text-muted">—</span>';
+            const sedeCell = u.sede_id
+              ? `<span class="adm-sub">${esc(sedeMap.get(u.sede_id) ?? 'Sede eliminada')}</span>`
+              : '<span class="ab-pill ab-warn">Sin sede</span>';
             const line = lineOf(u);
             const st = line?.session ? SESSION_STATUS[line.session.status] ?? { label: line.session.status, tone: 'mute' } : null;
             const lineCell =
@@ -483,6 +668,7 @@ function renderUsers(req: Request, sessions: SessionRow[]): string {
                   <div class="user-mail">${esc(u.username ?? '')}${u.email ? ` · ${esc(u.email)}` : ''}</div></div>
               </div></td>
               <td data-label="Rol">${roleCell}${u.esam_area ? `<div class="adm-sub">${esc(u.esam_area)}</div>` : ''}</td>
+              <td data-label="Sede">${sedeCell}</td>
               <td data-label="Línea de WhatsApp">${lineCell}</td>
               <td data-label="Último ingreso"><span title="${esc(fmtDate(u.last_login_at))}" class="${inactive ? 'ab-t-warn' : ''}">${esc(relTime(u.last_login_at))}</span>
                 <div class="adm-sub">${u.login_count} ingreso${u.login_count === 1 ? '' : 's'}</div></td>
@@ -491,6 +677,7 @@ function renderUsers(req: Request, sessions: SessionRow[]): string {
               <td data-label="Actividad 30 días">${r || n ? `<b>${r?.c ?? 0}</b> respuestas · ${r?.chats ?? 0} chats<div class="adm-sub">${n} nota${n === 1 ? '' : 's'} registrada${n === 1 ? '' : 's'}</div>` : '<span class="text-muted">Sin actividad</span>'}</td>
               <td data-label="Acceso">${u.esam_autorizado ? '<span class="ab-pill ab-ok"><i class="ri-check-line"></i>Autorizado</span>' : '<span class="ab-pill ab-danger">Sin autorizar</span>'}
                 <div class="adm-sub">${esc(u.source === 'local' ? 'Local' : u.source === 'cronogramas' ? 'Cronogramas' : u.source)}</div></td>
+              <td data-label="Editar"><a class="btn btn-sm btn-soft-secondary" href="/users/${u.id}" title="Editar cuenta, sede y cargo"><span class="ri-pencil-line"></span></a></td>
             </tr>`;
           })
           .join('')}</tbody></table></div>`
@@ -504,6 +691,10 @@ function renderUsers(req: Request, sessions: SessionRow[]): string {
       ${kpi('ri-link-unlink', noLine ? 'warn' : 'mute', 'Sin línea activa', noLine, 'sin vincular o caída', '/users?f=sin-linea')}
       ${kpi('ri-user-forbid-line', unauthorized ? 'danger' : 'mute', 'Sin autorizar', unauthorized, 'no pueden ingresar', unauthorized ? '/users?f=sin-autorizar' : undefined)}
     </div>
+    <div class="adm-tools">
+      ${renderSedesPanel(sedes, q(req, 'panel') === 'sedes')}
+      ${renderNewUserPanel(sedes, q(req, 'panel') === 'nuevo')}
+    </div>
     <div class="card ab-card"><div class="card-body">
       <div class="ab-user-tabs" role="tablist" aria-label="Filtrar usuarios por área">${areaTabs}</div>
       <div class="ab-bl-toolbar">
@@ -511,6 +702,10 @@ function renderUsers(req: Request, sessions: SessionRow[]): string {
           ${filter ? `<input type="hidden" name="f" value="${esc(filter)}"/>` : ''}
           ${area !== 'all' ? `<input type="hidden" name="area" value="${esc(area)}"/>` : ''}
           <i class="ri-search-line"></i><input type="search" name="q" value="${esc(rawText)}" placeholder="Buscar por nombre, usuario, correo o área…" aria-label="Buscar usuarios"/>
+          ${sedes.length ? `<select class="form-select adm-sede-filter" name="sede" aria-label="Filtrar por sede" onchange="this.form.submit()">
+            <option value="">Todas las sedes</option>
+            ${sedes.map((s) => `<option value="${s.id}"${sedeFilter === s.id ? ' selected' : ''}>${esc(s.name)}</option>`).join('')}
+          </select>` : ''}
         </form>
         <div class="ab-filters">
           ${chip('', 'Todos', users.length)}
@@ -521,7 +716,7 @@ function renderUsers(req: Request, sessions: SessionRow[]): string {
         </div>
       </div>
       ${table}
-      <p class="adm-foot"><i class="ri-information-line"></i>Las cuentas, los roles y los números se sincronizan desde cronogramas al iniciar sesión: los cambios se hacen allí. Para vincular un número, la persona escanea el QR en <a href="/settings">Conexión</a>.</p>
+      <p class="adm-foot"><i class="ri-information-line"></i>Las cuentas de <b>cronogramas</b> actualizan su cargo al iniciar sesión desde ese sistema. Las <b>cuentas locales</b> se crean y administran acá con su sede y cargo. Para vincular un número, la persona escanea el QR en <a href="/settings">Conexión</a>.</p>
     </div></div>
   </div>`;
 }
@@ -683,11 +878,154 @@ export function registerAdminRoutes(app: express.Express, ctx: Ctx): void {
     renderAuditPage(req, res, cat);
   });
 
-  // Usuarios
-  app.get('/users', ctx.requireUser, ctx.requireSection('users'), (req: Request, res: Response) => {
+  // Usuarios y sedes
+  const usersGuard = [ctx.requireUser, ctx.requireSection('users')];
+  const backToUsers = (res: Response, msg: string, opts: { kind?: 'ok' | 'error'; panel?: string } = {}) => {
+    setFlash(res, opts.kind ?? 'ok', msg);
+    const panel = opts.panel ? `?panel=${encodeURIComponent(opts.panel)}` : '';
+    return `/users${panel}`;
+  };
+
+  app.get('/users', ...usersGuard, (req: Request, res: Response) => {
     sendPage(req, res, 'Usuarios', 'users', renderUsers(req, ctx.sessions()), {
       subtitle: 'Quién tiene acceso, con qué rol, si su número de WhatsApp está conectado y cuánto atendió.',
     });
+  });
+
+  app.post('/sedes', ...usersGuard, (req: Request, res: Response) => {
+    const name = String(req.body?.name ?? '').trim();
+    try {
+      const id = createSede(name);
+      audit('user.sede_created', { sede_id: id, name, by: usersUserId(req) });
+      res.redirect(backToUsers(res, `Sede «${name}» creada.`));
+    } catch (err) {
+      res.redirect(backToUsers(res, (err as Error).message, { kind: 'error', panel: 'sedes' }));
+    }
+  });
+
+  app.post('/sedes/:id', ...usersGuard, (req: Request, res: Response) => {
+    const id = positiveInt(req.params.id);
+    const name = String(req.body?.name ?? '').trim();
+    try {
+      if (!id) throw new Error('Sede no encontrada.');
+      renameSede(id, name);
+      audit('user.sede_renamed', { sede_id: id, name, by: usersUserId(req) });
+      res.redirect(backToUsers(res, `Sede actualizada: «${name}».`));
+    } catch (err) {
+      res.redirect(backToUsers(res, (err as Error).message, { kind: 'error', panel: 'sedes' }));
+    }
+  });
+
+  app.post('/sedes/:id/delete', ...usersGuard, (req: Request, res: Response) => {
+    const id = positiveInt(req.params.id);
+    try {
+      if (!id) throw new Error('Sede no encontrada.');
+      deleteSede(id);
+      audit('user.sede_deleted', { sede_id: id, by: usersUserId(req) });
+      res.redirect(backToUsers(res, 'Sede eliminada.'));
+    } catch (err) {
+      res.redirect(backToUsers(res, (err as Error).message, { kind: 'error', panel: 'sedes' }));
+    }
+  });
+
+  app.post('/users', ...usersGuard, (req: Request, res: Response) => {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const cargo = String(b.cargo ?? '');
+    try {
+      if (!(LOCAL_CARGOS as readonly string[]).includes(cargo)) throw new Error('Elegí un cargo válido.');
+      const user = createLocalUser({
+        name: String(b.name ?? ''),
+        username: String(b.username ?? ''),
+        email: String(b.email ?? ''),
+        password: String(b.password ?? ''),
+        numero: String(b.numero ?? ''),
+        sedeId: Number(b.sede_id) || 0,
+        roles: [cargo],
+        autorizado: b.autorizado === '1',
+      });
+      audit('user.created', { user_id: user.id, name: user.name, sede_id: user.sede_id, roles: esamRoles(user), by: usersUserId(req) });
+      res.redirect(backToUsers(res, `Usuario «${user.name ?? user.username}» creado.`));
+    } catch (err) {
+      res.redirect(backToUsers(res, (err as Error).message, { kind: 'error', panel: 'nuevo' }));
+    }
+  });
+
+  app.get('/users/:id', ...usersGuard, (req: Request, res: Response) => {
+    const id = positiveInt(req.params.id);
+    const user = id ? findById(id) : undefined;
+    if (!user) {
+      res
+        .status(404)
+        .send(
+          pageHtml(req, res, 'Usuario no encontrado', 'users', emptyState('ri-user-search-line', 'Usuario no encontrado', 'La cuenta no existe o se eliminó.'), {
+            activeHref: '/users',
+          }),
+        );
+      return;
+    }
+    sendPage(req, res, 'Editar usuario', 'users', renderUserEdit(user), {
+      subtitle: `Sede, cargo y acceso de ${user.name ?? user.username ?? 'la cuenta'}.`,
+      activeHref: '/users',
+    });
+  });
+
+  app.post('/users/:id', ...usersGuard, (req: Request, res: Response) => {
+    const id = positiveInt(req.params.id);
+    const target = id ? findById(id) : undefined;
+    if (!target) {
+      res.redirect(backToUsers(res, 'Usuario no encontrado.', { kind: 'error' }));
+      return;
+    }
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const me = usersUserId(req);
+    const autorizado = b.autorizado === '1';
+    const sedeId = Number(b.sede_id) || null;
+    const isLocal = target.source === 'local';
+    const isSuper = esamEsAdmin(target);
+    try {
+      if (me === target.id && !autorizado) throw new Error('No podés quitarte tu propio acceso al panel.');
+      if (isLocal && !isSuper) {
+        const cargo = String(b.cargo ?? '');
+        if (!(LOCAL_CARGOS as readonly string[]).includes(cargo)) throw new Error('Elegí un cargo válido.');
+        if (!String(b.numero ?? '').trim()) throw new Error('Escribí el número de WhatsApp.');
+        updateManagedUser(target.id, {
+          name: String(b.name ?? ''),
+          username: String(b.username ?? ''),
+          email: String(b.email ?? ''),
+          password: String(b.password ?? '') || null,
+          numero: String(b.numero ?? ''),
+          sedeId,
+          roles: [cargo],
+          autorizado,
+        });
+      } else {
+        // Super Admin y cuentas de cronogramas: el rol no se toca desde acá.
+        updateManagedUser(target.id, {
+          sedeId,
+          autorizado,
+          preserveRoles: true,
+          ...(isSuper
+            ? {
+                name: String(b.name ?? ''),
+                username: String(b.username ?? ''),
+                email: String(b.email ?? ''),
+                password: String(b.password ?? '') || null,
+                numero: String(b.numero ?? ''),
+              }
+            : {}),
+        });
+      }
+      const updated = findById(target.id);
+      audit('user.updated', {
+        user_id: target.id,
+        sede_id: updated?.sede_id ?? null,
+        roles: updated ? esamRoles(updated) : [],
+        by: me,
+      });
+      res.redirect(backToUsers(res, 'Cambios guardados.'));
+    } catch (err) {
+      res.redirect(backToUsers(res, (err as Error).message, { kind: 'error' }));
+    }
   });
 
   // Plantillas

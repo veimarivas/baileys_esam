@@ -4402,23 +4402,27 @@ html:has(.ab-page), body:has(.ab-page) { overflow-x: clip; }
 .adm-users thead th { white-space: normal; overflow-wrap: normal; }
 .adm-users td { overflow-wrap: anywhere; padding-left: 0.75rem; padding-right: 0.75rem; }
 .adm-users .ab-pill { white-space: normal; overflow-wrap: normal; }
-.adm-users th:nth-child(1) { width: 22%; }
+.adm-users th:nth-child(1) { width: 19%; }
 .adm-users th:nth-child(2) { width: 12%; }
-.adm-users th:nth-child(3) { width: 17%; }
-.adm-users th:nth-child(4) { width: 11%; }
-.adm-users th:nth-child(5) { width: 13%; }
-.adm-users th:nth-child(6) { width: 13%; }
-.adm-users th:nth-child(7) { width: 12%; }
+.adm-users th:nth-child(3) { width: 10%; }
+.adm-users th:nth-child(4) { width: 14%; }
+.adm-users th:nth-child(5) { width: 10%; }
+.adm-users th:nth-child(6) { width: 11%; }
+.adm-users th:nth-child(7) { width: 11%; }
+.adm-users th:nth-child(8) { width: 8%; }
+.adm-users th:nth-child(9) { width: 5%; }
 
 /* 1200–1399 px: se omite «Última actividad» y el resto respira. */
 @media (min-width: 1200px) and (max-width: 1399.98px) {
-  .adm-users th:nth-child(5), .adm-users td:nth-child(5) { display: none; }
-  .adm-users th:nth-child(1) { width: 26%; }
+  .adm-users th:nth-child(6), .adm-users td:nth-child(6) { display: none; }
+  .adm-users th:nth-child(1) { width: 23%; }
   .adm-users th:nth-child(2) { width: 13%; }
-  .adm-users th:nth-child(3) { width: 18%; }
-  .adm-users th:nth-child(4) { width: 13%; }
-  .adm-users th:nth-child(6) { width: 17%; }
-  .adm-users th:nth-child(7) { width: 13%; }
+  .adm-users th:nth-child(3) { width: 11%; }
+  .adm-users th:nth-child(4) { width: 16%; }
+  .adm-users th:nth-child(5) { width: 12%; }
+  .adm-users th:nth-child(7) { width: 14%; }
+  .adm-users th:nth-child(8) { width: 7%; }
+  .adm-users th:nth-child(9) { width: 4%; }
 }
 
 /* Menos de 1200 px: cada fila pasa a ser una tarjeta con todas las etiquetas. */
@@ -4466,6 +4470,71 @@ html:has(.ab-page), body:has(.ab-page) { overflow-x: clip; }
 }
 .adm-foot { display: flex; gap: 0.4rem; align-items: flex-start; margin: 0.9rem 0 0; font-size: 0.74rem; color: var(--esam-muted); }
 .adm-foot i { margin-top: 0.1rem; }
+
+/* Usuarios: sedes y alta de cuentas locales */
+.adm-tools { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.8rem; margin-bottom: 0.9rem; align-items: start; }
+.adm-tool {
+  border: 1px solid var(--esam-line); border-radius: var(--esam-radius); background: var(--esam-surface);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+.adm-tool > summary {
+  display: flex; align-items: center; gap: 0.65rem; padding: 0.8rem 1rem;
+  cursor: pointer; list-style: none; user-select: none;
+}
+.adm-tool > summary::-webkit-details-marker { display: none; }
+.adm-tool > summary::after {
+  content: ''; flex: 0 0 auto; width: 0.45rem; height: 0.45rem; margin-left: 0.35rem;
+  border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg); opacity: 0.5; transition: transform 0.18s ease;
+}
+.adm-tool[open] > summary::after { transform: rotate(-135deg); }
+.adm-tool > summary:hover { background: var(--esam-surface-2); border-radius: var(--esam-radius); }
+.adm-tool-ic {
+  flex: 0 0 auto; width: 2rem; height: 2rem; border-radius: 9px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--ab-brand-soft); color: var(--ab-brand); font-size: 1rem;
+}
+.adm-tool-txt { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
+.adm-tool-txt b { font-size: 0.86rem; color: var(--esam-ink); }
+.adm-tool-txt small { font-size: 0.71rem; color: var(--esam-muted); }
+.adm-tool-count {
+  flex: 0 0 auto; margin-left: auto; font-size: 0.7rem; font-weight: 700; color: var(--esam-ink-soft);
+  background: var(--esam-surface-3); border-radius: 999px; padding: 0.05rem 0.5rem;
+}
+.adm-tool-body { padding: 0 1rem 1rem; border-top: 1px solid var(--esam-line); padding-top: 0.85rem; }
+.adm-sede-list { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 0.75rem; }
+.adm-sede-row { display: flex; align-items: center; gap: 0.5rem; }
+.adm-sede-name { display: flex; align-items: center; gap: 0.35rem; flex: 1 1 auto; margin: 0; min-width: 0; }
+.adm-sede-name .form-control { max-width: 100%; }
+.adm-sede-count { flex: 0 0 auto; font-size: 0.7rem; color: var(--esam-muted); white-space: nowrap; }
+.adm-sede-row form:last-child { margin: 0; }
+.adm-inline-form { display: flex; gap: 0.5rem; align-items: center; }
+.adm-inline-form .form-control { flex: 1 1 auto; }
+.adm-empty-note { margin: 0 0 0.75rem; font-size: 0.76rem; color: var(--esam-muted); }
+.adm-form-actions { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; }
+.adm-form-actions .adm-foot { margin: 0; flex: 1 1 260px; }
+.adm-check-field { display: flex; align-items: flex-end; padding-bottom: 0.2rem; }
+.adm-check-field .form-check { margin: 0; font-size: 0.82rem; }
+.adm-sede-filter { flex: 0 0 auto; width: 10.5rem; font-size: 0.78rem; padding-top: 0.2rem; padding-bottom: 0.2rem; border-color: var(--esam-line); }
+.adm-edit-layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 1rem; align-items: start; }
+.adm-readonly { display: flex; flex-direction: column; gap: 0.3rem; min-height: 2.3rem; justify-content: center; }
+.adm-readonly small { font-size: 0.7rem; color: var(--esam-muted); }
+.adm-scope-list { margin: 0; padding-left: 1rem; display: flex; flex-direction: column; gap: 0.4rem; font-size: 0.76rem; color: var(--esam-ink-soft); }
+.adm-scope-list b { color: var(--esam-ink); }
+
+@media (max-width: 1199.98px) {
+  .adm-tools { grid-template-columns: 1fr; }
+  .adm-edit-layout { grid-template-columns: 1fr; }
+  .ab-aside { position: static; }
+}
+@media (max-width: 575.98px) {
+  .adm-tool > summary { padding: 0.7rem 0.8rem; }
+  .adm-tool-body { padding: 0.75rem 0.8rem 0.9rem; }
+  .adm-inline-form { flex-direction: column; align-items: stretch; }
+  .adm-sede-row { flex-wrap: wrap; }
+  .adm-sede-name { flex-basis: 100%; }
+  .adm-sede-filter { width: 100%; }
+}
 .adm-grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; }
 
 /* Plantillas */

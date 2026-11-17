@@ -10,7 +10,7 @@ import { all } from '../db/index.js';
  * las líneas, igual que las notas de la persona.
  */
 
-export type SendCategory = 'cobranza' | 'notas' | 'asistencia' | 'programa' | 'marketing' | 'otros';
+export type SendCategory = 'cobranza' | 'notas' | 'asistencia' | 'programa' | 'prospecto' | 'marketing' | 'otros';
 export type SendArea = 'contabilidad' | 'academico' | 'marketing' | 'otros';
 
 export interface PersonSend {
@@ -102,8 +102,12 @@ export function classifySend(meta: Record<string, any>): { category: SendCategor
     return { category: 'notas', area: 'academico', title: meta.modo === 'nivelacion' ? 'Notas de nivelación' : 'Notas del módulo', automatic };
   }
   if (tipo === 'asistencia') return { category: 'asistencia', area: 'academico', title: 'Aviso de inasistencia', automatic };
-  if (tipo === 'prospectos') return { category: 'marketing', area: 'marketing', title: 'Mensaje de marketing', automatic };
-  if (tipo === 'participantes' || tipo === 'grupo' || tipo === 'grupos' || tipo === 'academico' || meta.category === 'academico') {
+  if (tipo === 'prospectos' || tipo === 'prospecto') return { category: 'prospecto', area: 'marketing', title: 'Mensaje a prospecto', automatic };
+  if (tipo === 'grupo' || tipo === 'grupos') {
+    const area = AREA_OF[String(meta.area ?? '')] ?? 'academico';
+    return { category: 'programa', area, title: 'Mensaje al grupo', automatic };
+  }
+  if (tipo === 'participantes' || tipo === 'academico' || meta.category === 'academico') {
     const area = AREA_OF[String(meta.area ?? '')] ?? 'academico';
     return { category: 'programa', area, title: 'Mensaje del programa', automatic };
   }
@@ -121,27 +125,12 @@ function mediaInfo(r: Row): Pick<PersonSend, 'mediaKind' | 'mediaName' | 'mediaU
   return { mediaKind: kind, mediaName: String(r.media_path).split(/[\\/]/).pop() ?? null, mediaUrl: `/inbox/sends/media/${r.id}` };
 }
 
-/** Envíos por lote a un número (clave de teléfono con 591), del más nuevo al más viejo. */
-export function personSends(phoneKey: string | null, limit = 300): PersonSends {
+function buildSends(rows: Row[], key: string | null): PersonSends {
   const empty: PersonSends = {
-    key: phoneKey, items: [], areas: [],
-    byCategory: { cobranza: 0, notas: 0, asistencia: 0, programa: 0, marketing: 0, otros: 0 },
+    key, items: [], areas: [],
+    byCategory: { cobranza: 0, notas: 0, asistencia: 0, programa: 0, prospecto: 0, marketing: 0, otros: 0 },
   };
-  if (!phoneKey) return empty;
-  const rows = all<Row>(
-    `SELECT bi.id, bi.body, bi.content_type, bi.media_path, bi.media_mime, bi.status, bi.error, bi.created_at, bi.updated_at,
-            b.id AS batch_id, b.name AS batch_name, b.meta, s.owner_name, COALESCE(s.phone, s.expected_phone) AS line_phone,
-            (SELECT m.status FROM messages m WHERE m.session_id = b.session_id AND m.wa_message_id = bi.message_id LIMIT 1) AS ack
-       FROM batch_items bi
-       JOIN batches b ON b.id = bi.batch_id
-       LEFT JOIN sessions s ON s.id = b.session_id
-      WHERE bi.chat_id IN (?, ?)
-      ORDER BY COALESCE(bi.updated_at, bi.created_at) DESC, bi.id DESC
-      LIMIT ?`,
-    `${phoneKey}@c.us`,
-    `${phoneKey}@s.whatsapp.net`,
-    Math.min(Math.max(limit, 1), 1000),
-  );
+  if (!rows.length) return empty;
 
   // Quién pidió el envío: nombre que mandó cronogramas o el usuario de la cuenta.
   const users = new Map(
@@ -200,5 +189,45 @@ export function personSends(phoneKey: string | null, limit = 300): PersonSends {
 
   const byCategory = { ...empty.byCategory };
   for (const i of items) byCategory[i.category]++;
-  return { key: phoneKey, items, areas, byCategory };
+  return { key, items, areas, byCategory };
+}
+
+/** Envíos por lote a un número (clave de teléfono con 591), del más nuevo al más viejo. */
+export function personSends(phoneKey: string | null, limit = 300): PersonSends {
+  if (!phoneKey) return buildSends([], null);
+  const rows = all<Row>(
+    `SELECT bi.id, bi.body, bi.content_type, bi.media_path, bi.media_mime, bi.status, bi.error, bi.created_at, bi.updated_at,
+            b.id AS batch_id, b.name AS batch_name, b.meta, s.owner_name, COALESCE(s.phone, s.expected_phone) AS line_phone,
+            (SELECT m.status FROM messages m WHERE m.session_id = b.session_id AND m.wa_message_id = bi.message_id LIMIT 1) AS ack
+       FROM batch_items bi
+       JOIN batches b ON b.id = bi.batch_id
+       LEFT JOIN sessions s ON s.id = b.session_id
+      WHERE bi.chat_id IN (?, ?)
+      ORDER BY COALESCE(bi.updated_at, bi.created_at) DESC, bi.id DESC
+      LIMIT ?`,
+    `${phoneKey}@c.us`,
+    `${phoneKey}@s.whatsapp.net`,
+    Math.min(Math.max(limit, 1), 1000),
+  );
+  return buildSends(rows, phoneKey);
+}
+
+/** Historial de envíos masivos a un grupo de WhatsApp de una línea. */
+export function groupSends(sessionId: string, chatId: string, limit = 300): PersonSends {
+  if (!sessionId || !chatId) return buildSends([], chatId || null);
+  const rows = all<Row>(
+    `SELECT bi.id, bi.body, bi.content_type, bi.media_path, bi.media_mime, bi.status, bi.error, bi.created_at, bi.updated_at,
+            b.id AS batch_id, b.name AS batch_name, b.meta, s.owner_name, COALESCE(s.phone, s.expected_phone) AS line_phone,
+            (SELECT m.status FROM messages m WHERE m.session_id = b.session_id AND m.wa_message_id = bi.message_id LIMIT 1) AS ack
+       FROM batch_items bi
+       JOIN batches b ON b.id = bi.batch_id
+       LEFT JOIN sessions s ON s.id = b.session_id
+      WHERE b.session_id = ? AND bi.chat_id = ?
+      ORDER BY COALESCE(bi.updated_at, bi.created_at) DESC, bi.id DESC
+      LIMIT ?`,
+    sessionId,
+    chatId,
+    Math.min(Math.max(limit, 1), 1000),
+  );
+  return buildSends(rows, chatId);
 }

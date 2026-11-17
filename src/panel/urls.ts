@@ -251,6 +251,7 @@ export function reportsUserUrl(opts: ReportsUserUrlOptions): string {
 export interface AuditUrlOptions {
   cat?: AuditCatSlug | '';
   q?: string;
+  period?: string;
   from?: string;
   to?: string;
   auto?: boolean;
@@ -259,7 +260,14 @@ export interface AuditUrlOptions {
 
 export function auditUrl(opts: AuditUrlOptions = {}): string {
   const path = `/audit${opts.cat ? `/${opts.cat}` : ''}`;
-  return withQuery(path, { q: opts.q, from: opts.from, to: opts.to, auto: opts.auto, before: opts.before });
+  return withQuery(path, {
+    q: opts.q,
+    period: opts.period,
+    from: opts.from,
+    to: opts.to,
+    auto: opts.auto,
+    before: opts.before,
+  });
 }
 
 export interface TemplatesUrlOptions {

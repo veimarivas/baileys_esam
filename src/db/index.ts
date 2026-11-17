@@ -90,6 +90,9 @@ export function migrate(): void {
   addColumnIfMissing('messages', 'content_meta', 'TEXT');
   addColumnIfMissing('messages', 'pinned_at', 'TEXT');
   addColumnIfMissing('messages', 'pinned_by', 'INTEGER');
+  // Mensajes eliminados en WhatsApp: se conservan, solo se marcan para pintarlos distinto.
+  addColumnIfMissing('messages', 'revoked_at', 'TEXT');
+  addColumnIfMissing('messages', 'revoked_scope', 'TEXT');
   db.exec('CREATE INDEX IF NOT EXISTS idx_messages_pinned ON messages(session_id, chat_id, pinned_at)');
   // Nombre de quien reaccionó (pushName de WhatsApp). Sin esto, en grupos solo
   // se conocía el JID y la ficha podía no tener nombre: se mostraba el número.
@@ -132,6 +135,9 @@ export function migrate(): void {
   addColumnIfMissing('conversations', 'contact_id', 'INTEGER');
   addColumnIfMissing('conversations', 'closed_at', 'TEXT');
   addColumnIfMissing('contact_notes', 'due_at', 'TEXT');
+  // Imagen adjunta a una nota interna (captura pegada o archivo elegido).
+  addColumnIfMissing('contact_notes', 'image_path', 'TEXT');
+  addColumnIfMissing('contact_notes', 'image_mime', 'TEXT');
   // Seguimiento de notas: completada (quién y cuándo) y última edición.
   addColumnIfMissing('contact_notes', 'done_at', 'TEXT');
   addColumnIfMissing('contact_notes', 'done_by', 'INTEGER');
@@ -169,6 +175,14 @@ export function migrate(): void {
     ON contact_notes(user_id, agenda_source_note_id)
     WHERE agenda_source_note_id IS NOT NULL`);
   addColumnIfMissing('contact_notes', 'source_message_id', 'INTEGER');
+  // Cite elegido al mover la tarjeta en sub-agendas que lo exigen (pago a la universidad).
+  addColumnIfMissing('contact_notes', 'cite_folio_id', 'INTEGER');
+  addColumnIfMissing('contact_notes', 'cite_number', 'TEXT');
+  addColumnIfMissing('contact_notes', 'cite_concept', 'TEXT');
+  // Sub-agenda que exige elegir un cite habilitado al cambiar de columna.
+  addColumnIfMissing('agenda_boards', 'uses_cites', 'INTEGER NOT NULL DEFAULT 0');
+  // Columna concreta que exige cite al entrar (sub-agendas con pagos).
+  addColumnIfMissing('agenda_stages', 'requires_cite', 'INTEGER NOT NULL DEFAULT 0');
   db.exec('CREATE INDEX IF NOT EXISTS idx_contact_notes_assigned ON contact_notes(assigned_to, done_at)');
   // Hora del recordatorio (HH:MM, con `due_at`) y cuándo se avisó.
   addColumnIfMissing('contact_notes', 'due_time', 'TEXT');
@@ -291,6 +305,21 @@ function setupPersonPrograms(): void {
     session_id  TEXT,
     last_at     TEXT NOT NULL,
     PRIMARY KEY (phone_key, programa)
+  )`);
+  // Programa registrado a mano en el panel para contactos que no llegaron desde
+  // cronogramas. Uno por número; lo ven todas las líneas y usuarios.
+  db.exec(`CREATE TABLE IF NOT EXISTS person_manual_programs (
+    phone_key  TEXT PRIMARY KEY,
+    programa   TEXT NOT NULL,
+    updated_by INTEGER,
+    updated_at TEXT NOT NULL
+  )`);
+  // Carnet de identidad de la persona (opcional), por número.
+  db.exec(`CREATE TABLE IF NOT EXISTS person_ci (
+    phone_key  TEXT PRIMARY KEY,
+    ci         TEXT NOT NULL,
+    updated_by INTEGER,
+    updated_at TEXT NOT NULL
   )`);
   const done = (db.prepare("SELECT value FROM configs WHERE key = 'person_programs_v1'").get() as { value?: string } | undefined)?.value;
   if (done) return;

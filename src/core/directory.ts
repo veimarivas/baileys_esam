@@ -51,7 +51,11 @@ function likePattern(value: string): string {
 /** Personas y programas ya registrados (para el selector de programa). */
 export function directoryPrograms(): string[] {
   return all<{ programa: string }>(
-    `SELECT DISTINCT programa FROM person_programs
+    `SELECT DISTINCT programa FROM (
+       SELECT programa FROM person_programs
+       UNION ALL
+       SELECT programa FROM person_manual_programs
+     )
       WHERE NULLIF(TRIM(programa), '') IS NOT NULL
       ORDER BY programa COLLATE NOCASE`,
   ).map((r) => r.programa);
@@ -101,6 +105,9 @@ export function listDirectory(opts: {
       UNION ALL
       SELECT phone_key, full_name, NULL AS programa, updated_at AS last_at, 1 AS manual
         FROM person_names
+      UNION ALL
+      SELECT phone_key, NULL AS full_name, programa, updated_at AS last_at, 1 AS manual
+        FROM person_manual_programs
       ${contactsCte}
     ),
     grouped AS (
@@ -156,8 +163,11 @@ export function listDirectory(opts: {
     full_name: string | null;
     last_at: string;
   }>(
-    `SELECT phone_key, programa, full_name, last_at
-       FROM person_programs
+    `SELECT phone_key, programa, full_name, last_at FROM (
+       SELECT phone_key, programa, full_name, last_at FROM person_programs
+       UNION ALL
+       SELECT phone_key, programa, NULL AS full_name, updated_at AS last_at FROM person_manual_programs
+     )
       WHERE phone_key IN (${inList})
       ORDER BY last_at DESC, programa COLLATE NOCASE`,
     ...keys,

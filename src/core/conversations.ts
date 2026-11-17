@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { all, get, run } from '../db/index.js';
 import { nowIso } from '../util/async.js';
 import { sessionScopeFor, type UserRow } from '../auth/users.js';
-import { phoneFromChatId } from './phone.js';
+import { digits, phoneFromChatId } from './phone.js';
 import { lidForPhone, phoneForLid, resolveChatId } from './lid.js';
 import { noteCountsFor, type PersonNoteCounts } from './contacts.js';
 import { personTagsByKeys, phoneKeyOf, type PersonTags } from './person.js';
@@ -52,13 +52,27 @@ export interface ConversationDTO {
   team: TeamTag | null;
 }
 
+export interface MessageMention {
+  /** Dígitos tal como aparecen en el cuerpo (`196289048395913`). */
+  token: string;
+  name: string | null;
+  phone: string | null;
+  /** JID para pedir la foto de perfil (teléfono o LID). */
+  jid: string | null;
+}
+
 export interface MessageDTO {
   id: number;
   /** wamid de WhatsApp (para citar/responder). */
   wa_message_id: string | null;
   direction: string;
   content_type: string;
+  /** Cuerpo con las menciones ya resueltas a nombre/teléfono. */
   body: string | null;
+  /** Cuerpo original de WhatsApp, con `@<LID>`, para pintar las menciones. */
+  body_raw?: string | null;
+  /** Personas mencionadas en el cuerpo, con nombre, teléfono y JID. */
+  mentions?: MessageMention[];
   /** Datos de contactos/encuestas guardados como JSON en `content_meta`. */
   meta: Record<string, unknown> | null;
   /** Fijado interno del panel (no se sincroniza con WhatsApp). */
@@ -77,6 +91,10 @@ export interface MessageDTO {
   media_status: 'ok' | 'pending' | 'unfetched' | 'missing' | null;
   transcription: string | null;
   status: string;
+  /** WhatsApp eliminó/revocó el mensaje: se conserva y se pinta distinto. */
+  revoked_at: string | null;
+  /** 'revoke' = eliminado para todos; 'delete' = eliminado del teléfono. */
+  revoked_scope: string | null;
   occurred_at: string;
   sender_type: string | null;
   sender: { id: number; name: string | null } | null;
@@ -197,7 +215,7 @@ function mapConversation(
     chat_id: row.chat_id,
     status: row.status,
     unread_count: Number(row.unread_count ?? 0),
-    last_message_text: row.last_message_text,
+    last_message_text: formatMentions(row.last_message_text),
     last_message_at: row.last_message_at,
     last_direction: row.last_direction,
     programa: row.programa,
@@ -582,7 +600,7 @@ function replyRef(row: MessageJoinRow): NonNullable<MessageDTO['reply_to']> {
   return {
     id: row.reply_id,
     wa_message_id: row.reply_to_wa_id!,
-    body: row.reply_body ?? row.reply_to_body ?? null,
+    body: formatMentions(row.reply_body ?? row.reply_to_body ?? null),
     content_type: row.reply_type ?? 'text',
     from_me: fromUs,
     sender_name: fromUs ? row.reply_agent || 'Tú' : row.reply_contact,
@@ -603,13 +621,92 @@ function resolveContactMeta(meta: Record<string, unknown> | null): Record<string
   };
 }
 
+/** Datos visibles de una mención: nombre, teléfono real y JID para la foto. */
+const mentionInfoCache = new Map<string, MessageMention>();
+let teamByPhone: Map<string, string> | null = null;
+
+function teamMemberName(phoneKey: string): string {
+  if (!teamByPhone) {
+    teamByPhone = new Map();
+    for (const user of all<{ name: string | null; esam_numero: string | null }>(
+      'SELECT name, esam_numero FROM users WHERE esam_numero IS NOT NULL',
+    )) {
+      const key = phoneKeyOf(user.esam_numero);
+      if (key && user.name) teamByPhone.set(key, user.name);
+    }
+  }
+  return teamByPhone.get(phoneKey) ?? '';
+}
+
+function mentionInfo(token: string): MessageMention {
+  const cached = mentionInfoCache.get(token);
+  if (cached) return cached;
+  const pn = phoneForLid(`${token}@lid`);
+  // Los LID suelen tener 14+ dígitos; un número de teléfono, hasta 13.
+  const phone = pn ? digits(pn) : (/^\d{8,13}$/.test(token) ? token : null);
+  const jid = pn || (phone ? `${phone}@s.whatsapp.net` : `${token}@lid`);
+  const key = phoneKeyOf(phone || token);
+  let name = '';
+  if (key) {
+    name = String(
+      get<{ full_name: string | null }>('SELECT full_name FROM person_names WHERE phone_key = ?', key)?.full_name ?? '',
+    ).trim();
+    if (!name) name = teamMemberName(key);
+    if (!name) {
+      const contact = get<{ name: string | null }>(
+        `SELECT name FROM contacts
+          WHERE (phone_key = ? OR chat_id = ? OR chat_id = ?) AND name IS NOT NULL
+          ORDER BY updated_at DESC LIMIT 1`,
+        key,
+        `${phone || token}@c.us`,
+        `${phone || token}@s.whatsapp.net`,
+      );
+      name = String(contact?.name ?? '').trim();
+      // Algunos contactos guardan solo el número como nombre: no aporta nada.
+      if (name && name.replace(/\D+/g, '') === (phone || key)) name = '';
+    }
+  }
+  const info: MessageMention = { token, name: name || null, phone, jid };
+  mentionInfoCache.set(token, info);
+  return info;
+}
+
+/**
+ * WhatsApp manda las menciones de grupo como `@<LID>` (p. ej.
+ * `@196289048395913`). Se reemplazan por el nombre o el teléfono real.
+ */
+export function formatMentions(body: string | null): string | null {
+  if (!body || body.indexOf('@') === -1) return body;
+  return body.replace(/@(\d{8,20})/g, (_all, token: string) => {
+    const info = mentionInfo(token);
+    return '@' + (info.name || info.phone || token);
+  });
+}
+
+/** Personas mencionadas en un cuerpo, sin repetir. */
+export function collectMentions(body: string | null): MessageMention[] {
+  if (!body || body.indexOf('@') === -1) return [];
+  const seen = new Set<string>();
+  const out: MessageMention[] = [];
+  body.replace(/@(\d{8,20})/g, (_all, token: string) => {
+    if (!seen.has(token)) {
+      seen.add(token);
+      out.push(mentionInfo(token));
+    }
+    return '';
+  });
+  return out;
+}
+
 function mapMessage(row: MessageJoinRow, reactions: MessageDTO['reactions']): MessageDTO {
   return {
     id: row.id,
     wa_message_id: row.wa_message_id,
     direction: row.direction,
     content_type: row.content_type,
-    body: row.body,
+    body: formatMentions(row.body),
+    body_raw: row.body,
+    mentions: collectMentions(row.body),
     meta: resolveContactMeta(parseContentMeta(row.content_meta)),
     pinned_at: row.pinned_at ?? null,
     pinned_by_name: row.pinned_by_name ?? null,
@@ -620,6 +717,8 @@ function mapMessage(row: MessageJoinRow, reactions: MessageDTO['reactions']): Me
     media_status: mediaStatus(row),
     transcription: row.transcription,
     status: row.status,
+    revoked_at: row.revoked_at ?? null,
+    revoked_scope: row.revoked_scope ?? null,
     occurred_at: row.occurred_at,
     sender_type: row.sender_type ?? (row.direction === 'in' ? 'customer' : 'agent'),
     sender: row.sender_uid ? { id: row.sender_uid, name: row.sender_name } : null,
@@ -1015,7 +1114,7 @@ export function searchMessages(user: UserRow, q: string): SearchResult[] {
     if (!conversation) continue;
     out.push({
       conversation,
-      snippet: highlightSnippet(row.body ?? '', term),
+      snippet: highlightSnippet(formatMentions(row.body) ?? '', term),
       match_count: count,
       match_at: row.occurred_at,
     });

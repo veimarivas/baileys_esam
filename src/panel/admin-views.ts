@@ -4,10 +4,12 @@ import { all, get } from '../db/index.js';
 import { esc } from './layout.js';
 import { emptyState, fmtDate, initials } from './views.js';
 import { auditUrl, positiveInt, templatesUrl, type AuditCatSlug } from './urls.js';
+import { resolvePanelRange } from './period-filter.js';
 import { setFlash } from './flash.js';
 import { pageHtml, sendPage } from './page.js';
 import { esamAreas, esamEsAdmin, esamRoles, listUsers, type UserRow } from '../auth/users.js';
 import { lastUseByUser } from '../core/user-activity.js';
+import { lineVerdict, type VerdictLevel } from '../core/line-verdict.js';
 import { audit } from '../core/webhooks.js';
 import {
   createTemplate,
@@ -186,9 +188,19 @@ function ctxValue(key: string, value: unknown, maps: { sessions: Map<string, Ses
 function auditFilters(req: Request, catOverride?: string) {
   const rawCat = catOverride ?? q(req, 'cat');
   const cat = AUDIT_CATS.some((c) => c.id === rawCat) ? rawCat : '';
-  const from = /^\d{4}-\d{2}-\d{2}$/.test(q(req, 'from')) ? q(req, 'from') : '';
-  const to = /^\d{4}-\d{2}-\d{2}$/.test(q(req, 'to')) ? q(req, 'to') : '';
-  return { cat, text: q(req, 'q').slice(0, 100), from, to, auto: q(req, 'auto') === '1', before: Number(q(req, 'before')) || 0 };
+  const range = resolvePanelRange(q(req, 'period'), q(req, 'from'), q(req, 'to'));
+  return {
+    cat,
+    text: q(req, 'q').slice(0, 100),
+    period: range.period,
+    from: range.from,
+    to: range.to,
+    fromIso: range.fromIso,
+    toIso: range.toIso,
+    label: range.label,
+    auto: q(req, 'auto') === '1',
+    before: Number(q(req, 'before')) || 0,
+  };
 }
 
 type AuditFilters = ReturnType<typeof auditFilters>;
@@ -204,15 +216,13 @@ function auditWhere(f: AuditFilters, withCat = true): { sql: string; params: unk
     where.push('(action LIKE ? OR COALESCE(context, \'\') LIKE ?)');
     params.push(`%${f.text}%`, `%${f.text}%`);
   }
-  if (f.from) {
+  if (f.fromIso) {
     where.push('created_at >= ?');
-    params.push(new Date(`${f.from}T00:00:00`).toISOString());
+    params.push(f.fromIso);
   }
-  if (f.to) {
+  if (f.toIso) {
     where.push('created_at < ?');
-    const end = new Date(`${f.to}T00:00:00`);
-    end.setDate(end.getDate() + 1);
-    params.push(end.toISOString());
+    params.push(f.toIso);
   }
   return { sql: where.length ? `WHERE ${where.join(' AND ')}` : '', params };
 }
@@ -260,8 +270,24 @@ function renderAudit(f: AuditFilters, maps: { sessions: Map<string, SessionRow>;
     new Date(Date.now() - 7 * 86_400_000).toISOString(),
   )?.c ?? 0;
 
+  const linkTo = (opts: { cat?: string; period?: string; before?: number } = {}) => {
+    const period = opts.period ?? f.period;
+    return auditUrl({
+      cat: ((opts.cat ?? f.cat) || undefined) as AuditCatSlug | undefined,
+      q: f.text,
+      period,
+      from: period === 'custom' ? f.from : '',
+      to: period === 'custom' ? f.to : '',
+      auto: f.auto,
+      before: opts.before,
+    });
+  };
+
   const chip = (id: string, label: string, n: number, icon = '') =>
-    `<a class="ab-filter ${f.cat === id ? 'on' : ''}" href="${auditUrl({ cat: (id || undefined) as AuditCatSlug | undefined, q: f.text, from: f.from, to: f.to, auto: f.auto })}">${icon ? `<i class="${icon}"></i>` : ''}${esc(label)} <span>${n}</span></a>`;
+    `<a class="ab-filter ${f.cat === id ? 'on' : ''}" href="${linkTo({ cat: id })}">${icon ? `<i class="${icon}"></i>` : ''}${esc(label)} <span>${n}</span></a>`;
+
+  const periodTab = (key: string, label: string) =>
+    `<a class="adm-scope-tab${f.period === key ? ' on' : ''}" href="${linkTo({ period: key })}">${esc(label)}</a>`;
 
   // Agrupa repeticiones seguidas (misma acción y contexto) y separa por día.
   type Group = { row: AuditRow; count: number; firstAt: string };
@@ -278,7 +304,7 @@ function renderAudit(f: AuditFilters, maps: { sessions: Map<string, SessionRow>;
     .map((g) => {
       const r = g.row;
       const d = new Date(r.created_at);
-      const day = d.toLocaleDateString('es-BO', { weekday: 'long', day: 'numeric', month: 'long' });
+      const day = d.toLocaleDateString('es-BO', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
       const header = day !== lastDay ? `<li class="adm-day">${esc(day)}</li>` : '';
       lastDay = day;
       const cat = auditCat(r.action);
@@ -309,18 +335,31 @@ function renderAudit(f: AuditFilters, maps: { sessions: Map<string, SessionRow>;
 
   const list = page.length
     ? `<ol class="ab-log adm-log">${items}</ol>
-       ${hasMore ? `<div class="adm-more"><a class="btn btn-light btn-sm" href="${auditUrl({ cat: (f.cat || undefined) as AuditCatSlug | undefined, q: f.text, from: f.from, to: f.to, auto: f.auto, before: page[page.length - 1].id })}"><i class="ri-arrow-down-line me-1"></i>Ver más antiguos</a></div>` : ''}`
+       ${hasMore ? `<div class="adm-more"><a class="btn btn-light btn-sm" href="${linkTo({ before: page[page.length - 1].id })}"><i class="ri-arrow-down-line me-1"></i>Ver más antiguos</a></div>` : ''}`
     : emptyState('ri-history-line', 'Sin registros', 'No hay acciones con los filtros elegidos.');
 
   return `<div class="ab-page adm-page">
     <div class="ab-kpis adm-kpis-3">
-      ${kpi('ri-history-line', 'info', 'Acciones registradas', total, f.auto ? 'con reconexiones automáticas' : 'sin reconexiones automáticas')}
+      ${kpi('ri-history-line', 'info', 'Acciones registradas', total, f.period === 'all' ? 'todo el historial' : f.label)}
       ${kpi('ri-time-line', 'mute', 'Últimas 24 h', last24, 'acciones del equipo y del sistema')}
-      ${kpi('ri-alarm-warning-line', pauses7 ? 'warn' : 'ok', 'Frenos anti-baneo', pauses7, 'pausas y cuarentenas en 7 días', auditUrl({ cat: 'anti-baneo' }))}
+      ${kpi('ri-alarm-warning-line', pauses7 ? 'warn' : 'ok', 'Frenos anti-baneo', pauses7, 'pausas y cuarentenas en 7 días', auditUrl({ cat: 'anti-baneo', period: 'month' }))}
+    </div>
+    <div class="adm-scope">
+      <div class="adm-scope-main">
+        <span class="adm-scope-label"><i class="ri-calendar-line" aria-hidden="true"></i>${esc(f.label)}</span>
+        <nav class="adm-scope-tabs" aria-label="Período">
+          ${periodTab('month', 'Este mes')}
+          ${periodTab('prev', 'Mes anterior')}
+          ${periodTab('quarter', 'Últimos 3 meses')}
+          ${periodTab('year', 'Este año')}
+          ${periodTab('all', 'Todo el historial')}
+        </nav>
+      </div>
     </div>
     <div class="card ab-card"><div class="card-body">
       <form method="get" action="/audit" class="adm-toolbar">
         ${f.cat ? `<input type="hidden" name="cat" value="${esc(f.cat)}"/>` : ''}
+        <input type="hidden" name="period" value="custom"/>
         <label class="ab-search"><i class="ri-search-line"></i><input type="search" name="q" value="${esc(f.text)}" placeholder="Buscar acción, número, motivo…" aria-label="Buscar en la auditoría"/></label>
         <label class="adm-date"><span>Desde</span><input type="date" name="from" value="${esc(f.from)}" class="form-control form-control-sm"/></label>
         <label class="adm-date"><span>Hasta</span><input type="date" name="to" value="${esc(f.to)}" class="form-control form-control-sm"/></label>
@@ -346,6 +385,14 @@ const SESSION_STATUS: Record<string, { label: string; tone: string }> = {
   disconnected: { label: 'Desconectada', tone: 'danger' },
   blocked: { label: 'Bloqueada', tone: 'danger' },
   created: { label: 'Sin vincular', tone: 'mute' },
+};
+
+/** Semáforo de salud de la línea, enlazado al detalle de Anti-Baneo. */
+const USER_HEALTH: Record<VerdictLevel, { label: string; tone: string }> = {
+  green: { label: 'Sana', tone: 'ok' },
+  yellow: { label: 'Con cuidado', tone: 'warn' },
+  red: { label: 'En riesgo', tone: 'danger' },
+  off: { label: 'Sin conexión', tone: 'mute' },
 };
 
 const INACTIVE_DAYS = 30;
@@ -388,6 +435,16 @@ function renderUsers(req: Request, sessions: SessionRow[]): string {
     ).map((r) => [r.uid, r.c]),
   );
   const lastUse = lastUseByUser(users);
+  // Una sola evaluación de salud por línea, aunque varios usuarios compartan el número.
+  const verdictCache = new Map<string, ReturnType<typeof lineVerdict>>();
+  const verdictOf = (session: SessionRow) => {
+    let verdict = verdictCache.get(session.id);
+    if (!verdict) {
+      verdict = lineVerdict(session);
+      verdictCache.set(session.id, verdict);
+    }
+    return verdict;
+  };
   const lineOf = (u: UserRow) => {
     const num = digits(u.esam_numero);
     if (!num) return null;
@@ -464,13 +521,24 @@ function renderUsers(req: Request, sessions: SessionRow[]): string {
                 : '<span class="text-muted">—</span>';
             const line = lineOf(u);
             const st = line?.session ? SESSION_STATUS[line.session.status] ?? { label: line.session.status, tone: 'mute' } : null;
+            const verdict = line?.session ? verdictOf(line.session) : null;
+            const health = verdict ? USER_HEALTH[verdict.level] : null;
+            const healthHref = line?.session ? `/anti-ban/line/${encodeURIComponent(line.session.id)}` : '';
+            const healthReason = verdict?.reasons[0] || verdict?.title || '';
+            const healthPill = health && healthHref
+              ? `<a class="ab-pill ab-${health.tone} adm-health-pill" href="${healthHref}" title="${esc(healthReason)}"><span class="ab-dot"></span>${esc(health.label)}</a>`
+              : '';
+            const healthLine = health && healthHref
+              ? `<a class="adm-health-reason" href="${healthHref}" title="${esc(healthReason)}">${esc(healthReason.length > 90 ? `${healthReason.slice(0, 90)}…` : healthReason)}</a>`
+              : '';
             const lineCell =
               u.source === 'local' && !line
                 ? '<span class="text-muted">Cuenta de servicio</span>'
                 : !line
                   ? '<span class="ab-pill ab-mute">Sin número asignado</span>'
                   : `<div class="adm-line"><span class="ab-mono">+${esc(line.num)}</span>
-                     ${st ? `<span class="ab-pill ab-${st.tone}"><span class="ab-dot"></span>${esc(st.label)}</span>` : '<span class="ab-pill ab-warn">Línea no creada</span>'}</div>`;
+                     ${st ? `<span class="ab-pill ab-${st.tone}"><span class="ab-dot"></span>${esc(st.label)}</span>` : '<span class="ab-pill ab-warn">Línea no creada</span>'}
+                     ${healthPill}</div>${healthLine}`;
             const r = responses.get(u.id);
             const n = notes.get(u.id) ?? 0;
             const inactive = isInactive(u);

@@ -1,7 +1,7 @@
 import './helpers/temp-env.js';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { isOptoutRequest, looksLikeBlock, normalizeChatId } from '../src/core/optout.js';
+import { addOptout, isBlocked, isOptoutRequest, looksLikeBlock, normalizeChatId, removeOptout } from '../src/core/optout.js';
 
 /**
  * Bajas y bloqueos: tienen valor legal y alimentan el anti-baneo (una baja
@@ -13,13 +13,30 @@ describe('isOptoutRequest', () => {
     assert.equal(isOptoutRequest('BAJA'), true);
     assert.equal(isOptoutRequest('quiero darme de baja por favor'), true);
     assert.equal(isOptoutRequest('STOP'), true);
-    assert.equal(isOptoutRequest('cancelar'), true);
+    assert.equal(isOptoutRequest('solicito la baja del programa'), true);
+    assert.equal(isOptoutRequest('no quiero recibir más mensajes'), true);
+    assert.equal(isOptoutRequest('no me envíen más'), true);
+    assert.equal(isOptoutRequest('cancelar mi inscripción'), true);
+    assert.equal(isOptoutRequest('eliminar de la lista'), true);
     assert.equal(isOptoutRequest('no molestar'), true);
   });
 
   it('no confunde palabras que solo empiezan igual', () => {
     assert.equal(isOptoutRequest('bajame el precio'), false);
     assert.equal(isOptoutRequest('eso fue un bajón'), false);
+  });
+
+  it('no toma como baja palabras usadas para pagos, salud o notas', () => {
+    assert.equal(isOptoutRequest('cancelar'), false);
+    assert.equal(isOptoutRequest('¿cuánto debo cancelar?'), false);
+    assert.equal(isOptoutRequest('voy a cancelar y le envío el recibo'), false);
+    assert.equal(isOptoutRequest('tengo una baja médica'), false);
+    assert.equal(isOptoutRequest('el docente me puso baja nota'), false);
+    assert.equal(isOptoutRequest('diplomado en baja y alta tensión'), false);
+    assert.equal(isOptoutRequest('dar de baja la factura del IVA'), false);
+    assert.equal(isOptoutRequest('para no molestar'), false);
+    assert.equal(isOptoutRequest('la carga horaria es muy baja'), false);
+    assert.equal(isOptoutRequest('debía salir antes'), false);
   });
 
   it('con el texto vacío no hay baja', () => {
@@ -69,5 +86,21 @@ describe('normalizeChatId', () => {
   it('devuelve vacío si no hay dígitos', () => {
     assert.equal(normalizeChatId('abc'), '');
     assert.equal(normalizeChatId(''), '');
+  });
+});
+
+describe('grupos en la lista de no enviar', () => {
+  it('no agrega grupos y no los considera bloqueados', () => {
+    const group = '120363425618313194@g.us';
+    addOptout(group, 'Fallo de entrega', 'blocked', null);
+    assert.equal(isBlocked(group), false);
+  });
+
+  it('sigue agregando y quitando números individuales', () => {
+    const phone = '59170000001';
+    addOptout(phone, 'Prueba', 'manual', null);
+    assert.equal(isBlocked(phone), true);
+    removeOptout(phone);
+    assert.equal(isBlocked(phone), false);
   });
 });

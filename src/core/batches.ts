@@ -19,6 +19,7 @@ import { recomputeHealth } from './health.js';
 import { isQuarantined, quarantineAndRotate, rotateBatches } from './session-pool.js';
 import { alertBatchPaused } from './notifications.js';
 import { isBlocked, looksLikeBlock, markBlocked } from './optout.js';
+import { describeSendError } from './send-errors.js';
 import { mediaExists, readMedia } from './media.js';
 import { typeForMime } from './phone.js';
 import { audit } from './webhooks.js';
@@ -164,6 +165,38 @@ export class BatchRunner {
         continue;
       }
 
+      // Un grupo puede haber cambiado: si la línea ya no participa o el grupo
+      // solo permite enviar a administradores, WhatsApp rechaza el envío. Se
+      // detecta antes para no marcarlo como «enviado» ni gastar el turno.
+      const inspectGroup = this.sender.groupInfo?.bind(this.sender);
+      const checkGroup = this.sender.groupParticipants?.bind(this.sender);
+      if (item.chat_id.endsWith('@g.us') && (inspectGroup || checkGroup)) {
+        try {
+          if (inspectGroup) {
+            const info = await inspectGroup(sessionId, item.chat_id);
+            if (!info.canSend) {
+              const reason = info.reason || 'La línea no puede enviar a este grupo.';
+              logger.warn({ item: item.id, group: item.chat_id, reason }, 'El grupo rechazó el envío antes de intentarlo');
+              updateItem(item.id, 'failed', reason, null);
+              recount(batchId);
+              continue;
+            }
+          } else if (checkGroup) {
+            await checkGroup(sessionId, item.chat_id);
+          }
+        } catch (err) {
+          const message = (err as Error).message;
+          const info = describeSendError(message, item.chat_id);
+          if (info.kind === 'group-membership') {
+            logger.warn({ item: item.id, group: item.chat_id, err: message }, 'El grupo rechazó el envío: la línea no participa');
+            updateItem(item.id, 'failed', `${info.title}. ${info.detail}`, null);
+            recount(batchId);
+            continue;
+          }
+          // Otro error (red, timeout): se deja seguir el flujo normal de envío.
+        }
+      }
+
       // ── Protección del contacto: no repetir campañas ni insistir ──────────
       if (policy.active && policy.recontact_cooldown_hours > 0) {
         const hours = hoursSinceLastBatchSend(sessionId, item.chat_id);
@@ -278,13 +311,23 @@ export class BatchRunner {
         }
       } catch (err) {
         const message = (err as Error).message;
+        const info = describeSendError(message, item.chat_id);
         logger.warn({ item: item.id, err: message }, 'Fallo el envío del destinatario');
+        if (info.kind === 'group-membership') {
+          // La línea no está en el grupo: es un dato de configuración, no una
+          // señal de bloqueo. No se toca la confianza ni la salud de la línea.
+          updateItem(item.id, 'failed', `${info.title}. ${info.detail}`, null);
+          recount(batchId);
+          continue;
+        }
         if (looksLikeBlock(message)) {
           // Bloqueo/reporte: se marca el destino y se reinicia la confianza.
           markBlocked(item.chat_id, `Bloqueo detectado al enviar: ${message}`, sessionId);
           resetTrust(sessionId);
           updateItem(item.id, 'failed', `Bloqueado: ${message}`, null);
           recomputeHealth(sessionId, { lastError: message });
+        } else if (info.kind !== 'other') {
+          updateItem(item.id, 'failed', `${info.title}. ${info.detail}`, null);
         } else {
           updateItem(item.id, 'failed', message, null);
         }

@@ -98,6 +98,10 @@ export interface MessageRow {
   media_seconds: number | null;
   wa_message_id: string | null;
   status: string;
+  /** Fecha en que WhatsApp eliminó/revocó el mensaje (se conserva el contenido). */
+  revoked_at?: string | null;
+  /** 'revoke' = eliminado para todos; 'delete' = eliminado del teléfono. */
+  revoked_scope?: string | null;
   transcription: string | null;
   origin: string | null;
   reply_to_wa_id: string | null;
@@ -139,6 +143,9 @@ export interface ContactNoteRow {
   user_id: number | null;
   note_text: string | null;
   audio_path: string | null;
+  /** Imagen adjunta a la nota (ruta en disco) y su MIME. */
+  image_path: string | null;
+  image_mime: string | null;
   due_at: string | null;
   /** Seguimiento completado (null = pendiente). */
   done_at: string | null;
@@ -173,6 +180,10 @@ export interface ContactNoteRow {
   agenda_stage_id?: number | null;
   /** Nota de equipo de la que se copió esta nota personal, si aplica. */
   agenda_source_note_id?: number | null;
+  /** Cite elegido al mover la tarjeta en sub-agendas que lo exigen. */
+  cite_folio_id?: number | null;
+  cite_number?: string | null;
+  cite_concept?: string | null;
   /** Mensaje del chat desde el que se registró (si se guardó desde una burbuja). */
   source_message_id: number | null;
   updated_at: string | null;
@@ -221,6 +232,18 @@ export interface MediaPayload {
 }
 
 /** Envio de un solo mensaje (lo implementa SessionManager). */
+export interface GroupSendCheck {
+  id: string;
+  name: string | null;
+  announce: boolean;
+  restrict: boolean;
+  participantCount: number;
+  isParticipant: boolean;
+  isAdmin: boolean;
+  canSend: boolean;
+  reason: string | null;
+}
+
 export interface OutboundSender {
   sendText(sessionId: string, chatId: string, text: string): Promise<{ messageId?: string }>;
   sendMedia(    sessionId: string,
@@ -236,6 +259,10 @@ export interface OutboundSender {
   ): Promise<{ messageId?: string }>;
   /** ¿El número tiene WhatsApp? (verificación previa anti-baneo). Opcional. */
   checkNumber?(sessionId: string, number: string): Promise<{ exists: boolean; jid: string | null }>;
+  /** Miembros de un grupo; sirve para verificar que la línea todavía participa. Opcional. */
+  groupParticipants?(sessionId: string, chatId: string): Promise<Array<{ id: string }>>;
+  /** Estado real del grupo para esta línea: pertenencia, administrador y si puede enviar. */
+  groupInfo?(sessionId: string, chatId: string): Promise<GroupSendCheck>;
   /** Asocia metadatos (programa) a la conversación. Opcional. */
   tagConversation?(
     sessionId: string,

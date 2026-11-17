@@ -5,20 +5,22 @@ import { logger } from '../logger.js';
 import { all, get } from '../db/index.js';
 import { config } from '../config.js';
 import { panelBus } from './events.js';
-import { esamEsAdmin, esamPuede, esamSupervisaArea, sessionScopeFor, type UserRow } from '../auth/users.js';
+import { esamAreas, esamAreaLabel, esamAreaName, esamEsAdmin, esamPuede, esamSupervisaArea, listUsers, sessionScopeFor, type UserRow } from '../auth/users.js';
 import type { SessionManager } from '../baileys/manager.js';
 import * as agenda from '../core/agenda.js';
+import { listCites, citesSyncedAt, citeById } from '../core/cites.js';
 import * as conversations from '../core/conversations.js';
 import {
   addNote,
   deleteNote,
   emptyTrash,
+  contactHistory,
   getNote,
   getOrCreateContact,
   listAllNotes,
   listNoteHistory,
   listNotes,
-  listPersonalNotes,
+  listNotesByBoard,
   markAssignmentSeen,
   markContacted,
   markFromTemplate,
@@ -34,16 +36,20 @@ import {
   personChatsForNote,
   restoreNote,
   setNoteDone,
+  setNoteImage,
   setNotePinned,
   setNoteStage,
   snoozeNote,
   updateNote,
+  upsertContact,
+  type ContactPatch,
   type NoteStatus,
   type PipelineStage,
 } from '../core/contacts.js';
 import * as noteTags from '../core/note-tags.js';
-import { personTagsByKeys, phoneKeyOf, setPersonName } from '../core/person.js';
-import { personSends } from '../core/person-sends.js';
+import { getPersonCi, personTagsByKeys, phoneKeyOf, setPersonCi, setPersonName, setPersonProgram } from '../core/person.js';
+import { groupSends, personSends } from '../core/person-sends.js';
+import { prospectInfo } from '../core/prospects.js';
 import { setConversationState, type ConversationStatus, type StateChange } from '../core/conversation-state.js';
 import * as directory from '../core/directory.js';
 import { audit } from '../core/webhooks.js';
@@ -63,7 +69,7 @@ import * as noteTemplates from '../core/note-templates.js';
 import * as moduleFollowups from '../core/module-followups.js';
 import * as quickReplies from '../core/quick-replies.js';
 import { getSticker } from '../core/stickers.js';
-import { storeNoteAudio } from '../core/media.js';
+import { storeNoteAudio, storeNoteImage } from '../core/media.js';
 import { normalizePhone, typeForMime } from '../core/phone.js';
 import { transcribe } from '../core/transcriber.js';
 
@@ -81,7 +87,10 @@ export interface InboxContext {
   requireSection: (section: string) => RequestHandler;
   rateLimit: (max: number, windowMs: number) => RequestHandler;
   resolveChatParam: (sessionId: string, param: string) => { chatId: string; conv: Record<string, unknown> | undefined };
-  upload: { single(field: string): RequestHandler };
+  upload: {
+    single(field: string): RequestHandler;
+    fields(fields: Array<{ name: string; maxCount: number }>): RequestHandler;
+  };
 }
 
 function ah(fn: (req: AuthedRequest, res: Response) => Promise<unknown> | unknown) {
@@ -467,6 +476,75 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
     }),
   );
 
+  // Registrar una persona nueva desde su número de WhatsApp, aunque todavía no
+  // tenga conversación, historial ni grupo. Queda en el directorio y se puede
+  // abrir el chat después.
+  app.post(
+    '/inbox/contacts',
+    ...auth,
+    ah((req, res) => {
+      const sessionId = String(req.body?.session_id ?? '').trim();
+      const phone = phoneKeyOf(String(req.body?.phone ?? ''));
+      const name = req.body?.name !== undefined ? String(req.body.name).trim() : '';
+      const email = req.body?.email !== undefined ? String(req.body.email).trim() : '';
+      const company = req.body?.company !== undefined ? String(req.body.company).trim() : '';
+      const ci = req.body?.ci !== undefined ? String(req.body.ci).trim() : '';
+      const programa = req.body?.programa !== undefined ? String(req.body.programa).trim() : '';
+      if (!sessionId) return res.status(422).json({ error: 'Elegí la línea desde la que se registra el contacto.' });
+      const scope = sessionScopeFor(req.user!);
+      if (scope !== null && !esamEsAdmin(req.user!) && !scope.includes(sessionId)) {
+        return res.status(403).json({ error: 'No tenés acceso a esa línea.' });
+      }
+      if (!get('SELECT id FROM sessions WHERE id = ?', sessionId)) {
+        return res.status(422).json({ error: 'La línea seleccionada no existe.' });
+      }
+      if (!phone || phone.length < 8) {
+        return res.status(422).json({ error: 'Escribí un número de WhatsApp válido, con código de país.' });
+      }
+      if (name.length > 120) return res.status(422).json({ error: 'El nombre es demasiado largo (máx. 120 caracteres).' });
+      if (email.length > 160) return res.status(422).json({ error: 'El email es demasiado largo (máx. 160 caracteres).' });
+      if (company.length > 120) return res.status(422).json({ error: 'La empresa es demasiado larga (máx. 120 caracteres).' });
+      if (ci.length > 40) return res.status(422).json({ error: 'El carnet de identidad es demasiado largo (máx. 40 caracteres).' });
+      if (!name && !programa) {
+        return res.status(422).json({ error: 'Registrá al menos el nombre o el programa del contacto.' });
+      }
+      const chatId = `${phone}@c.us`;
+      const patch: ContactPatch = {};
+      if (name) patch.name = name;
+      if (email) patch.email = email;
+      if (company) patch.company = company;
+      const contact = upsertContact(sessionId, chatId, patch);
+      if (name) setPersonName(phone, name, req.user!.id);
+      if (programa) setPersonProgram(phone, programa, req.user!.id);
+      if (ci) setPersonCi(phone, ci, req.user!.id);
+      audit('contact.registered', { by: req.user!.id, phone, name: name || null });
+      res.status(201).json({
+        ok: true,
+        contact: {
+          id: contact.id,
+          session_id: sessionId,
+          chat_id: chatId,
+          name: contact.name,
+          phone: contact.phone,
+          email: contact.email,
+          company: contact.company,
+        },
+        person: { full_name: name || null, programas: programa ? [programa] : [], ci: ci || null },
+      });
+    }),
+  );
+
+  // Programas existentes para elegir en la ficha de la persona (evita
+  // duplicados por escribir el nombre a mano).
+  app.get(
+    '/inbox/programs',
+    ...auth,
+    ah((req, res) => {
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({ programas: directory.directoryPrograms() });
+    }),
+  );
+
   // Foto de perfil de un contacto (o de la misma persona en otra línea).
   app.get(
     '/inbox/avatar/:contactId',
@@ -774,6 +852,23 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       };
       const key = contact.phone_key ?? (resolved.chatId.endsWith('@g.us') ? null : resolved.chatId.endsWith('@lid') ? resolved.chatId : phoneKeyOf(resolved.chatId));
       const tags = key ? personTagsByKeys([key]).get(key) : undefined;
+      // Notas privadas de esta persona en Mi agenda (no se mezclan con las del
+      // equipo): permiten que la ficha ofrezca abrir directamente ese apartado.
+      const agendaCount = get<{ c: number }>(
+        `SELECT COUNT(*) AS c FROM contact_notes
+          WHERE contact_id = ? AND user_id = ? AND personal = 1 AND deleted_at IS NULL AND agenda_board_id IS NOT NULL`,
+        contact.id,
+        req.user!.id,
+      )?.c ?? 0;
+      const agendaFirst = agendaCount
+        ? get<{ id: number; agenda_board_id: number | null }>(
+            `SELECT id, agenda_board_id FROM contact_notes
+              WHERE contact_id = ? AND user_id = ? AND personal = 1 AND deleted_at IS NULL AND agenda_board_id IS NOT NULL
+              ORDER BY id DESC LIMIT 1`,
+            contact.id,
+            req.user!.id,
+          )
+        : null;
       res.json({
         programa: current?.programa ?? tags?.programas[0] ?? null,
         full_name: tags?.full_name ?? null,
@@ -781,8 +876,16 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
         name_by: tags?.name_by ?? null,
         can_name: !!key,
         programas: tags?.programas ?? [],
+        prospect: key ? prospectInfo(key) : null,
         team: teamTagFor(key),
         lines: others,
+        agenda: {
+          count: agendaCount,
+          note_id: agendaFirst?.id ?? null,
+          board_id: agendaFirst?.agenda_board_id ?? null,
+        },
+        ci: key ? getPersonCi(key) : null,
+        contact: { name: contact.name, phone: contact.phone, email: contact.email, company: contact.company },
         fill: { name: pick('name'), email: pick('email'), company: pick('company'), programa: pick('programa') },
       });
     }),
@@ -812,13 +915,45 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
   );
 
   app.get(
+    '/inbox/contacts/:id/history',
+    ...auth,
+    ah((req, res) => {
+      const id = Number(req.params.id);
+      if (!id) return res.status(404).json({ error: 'Contacto no encontrado.' });
+      const contact = get<{ id: number; session_id: string; phone_key: string | null }>(
+        'SELECT id, session_id, phone_key FROM contacts WHERE id = ?',
+        id,
+      );
+      if (!contact) return res.status(404).json({ error: 'Contacto no encontrado.' });
+      const scope = sessionScopeFor(req.user!);
+      if (scope !== null && !esamEsAdmin(req.user!)) {
+        let allowed = scope.includes(contact.session_id);
+        if (!allowed && contact.phone_key && scope.length) {
+          allowed = !!get(
+            `SELECT 1 FROM contacts WHERE phone_key = ? AND session_id IN (${scope.map(() => '?').join(',')}) LIMIT 1`,
+            contact.phone_key,
+            ...scope,
+          );
+        }
+        if (!allowed) return res.status(403).json({ error: 'No tenés acceso al historial de este contacto.' });
+      }
+      const data = contactHistory(contact.id, req.user!.id);
+      if (!data) return res.status(404).json({ error: 'Contacto no encontrado.' });
+      res.setHeader('Cache-Control', 'no-store');
+      res.json(data);
+    }),
+  );
+
+  app.get(
     '/inbox/:session/:chat/sends',
     ...auth,
     ah((req, res) => {
       const resolved = resolveAuthorized(req, res, String(req.params.session), String(req.params.chat));
       if (!resolved) return;
       const canBatches = esamPuede(req.user!, 'batches');
-      if (resolved.chatId.endsWith('@g.us')) return res.json({ ...personSends(null), can_batches: canBatches });
+      if (resolved.chatId.endsWith('@g.us')) {
+        return res.json({ ...groupSends(resolved.session.id, resolved.chatId), can_batches: canBatches });
+      }
       const contact = getOrCreateContact(resolved.session.id, resolved.chatId);
       const key = contact.phone_key ?? (resolved.chatId.endsWith('@lid') ? null : phoneKeyOf(resolved.chatId));
       res.json({ ...personSends(key), can_batches: canBatches });
@@ -832,20 +967,28 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
     '/inbox/sends/media/:id',
     ...auth,
     ah((req, res) => {
-      const item = get<{ chat_id: string; media_path: string | null; media_mime: string | null }>(
-        'SELECT chat_id, media_path, media_mime FROM batch_items WHERE id = ?',
+      const item = get<{ chat_id: string; session_id: string | null; media_path: string | null; media_mime: string | null }>(
+        `SELECT bi.chat_id, b.session_id, bi.media_path, bi.media_mime
+           FROM batch_items bi JOIN batches b ON b.id = bi.batch_id
+          WHERE bi.id = ?`,
         Number(req.params.id),
       );
       if (!item?.media_path) return res.status(404).send('Adjunto no encontrado.');
       const scope = sessionScopeFor(req.user!);
       if (scope !== null && !esamEsAdmin(req.user!)) {
-        const key = phoneKeyOf(item.chat_id);
-        const visible = scope.length > 0 && !!get<{ id: number }>(
-          `SELECT id FROM contacts WHERE session_id IN (${scope.map(() => '?').join(',')})
-             AND (chat_id = ? OR (phone_key IS NOT NULL AND phone_key = ?)) LIMIT 1`,
-          ...scope, item.chat_id, key,
-        );
-        if (!visible) return res.status(403).send('No tenés acceso a este adjunto.');
+        if (item.chat_id.endsWith('@g.us')) {
+          if (!item.session_id || !scope.includes(item.session_id)) {
+            return res.status(403).send('No tenés acceso a este adjunto.');
+          }
+        } else {
+          const key = phoneKeyOf(item.chat_id);
+          const visible = scope.length > 0 && !!get<{ id: number }>(
+            `SELECT id FROM contacts WHERE session_id IN (${scope.map(() => '?').join(',')})
+               AND (chat_id = ? OR (phone_key IS NOT NULL AND phone_key = ?)) LIMIT 1`,
+            ...scope, item.chat_id, key,
+          );
+          if (!visible) return res.status(403).send('No tenés acceso a este adjunto.');
+        }
       }
       const base = path.resolve(config.storageDir);
       const file = path.resolve(item.media_path);
@@ -881,6 +1024,59 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       }
       for (const c of chats) panelBus.publish('conversation', { sessionId: c.session_id, chatId: c.chat_id });
       res.json({ ok: true, person: personTagsByKeys([key]).get(key) ?? null });
+    }),
+  );
+
+  // Datos manuales de la persona (nombre completo y programa) para contactos
+  // que no llegaron con esos datos desde cronogramas. Se guardan por número:
+  // los ven todos los usuarios y todas las líneas.
+  app.put(
+    '/inbox/:session/:chat/profile',
+    ...auth,
+    ah((req, res) => {
+      const resolved = resolveAuthorized(req, res, String(req.params.session), String(req.params.chat));
+      if (!resolved) return;
+      const contact = getOrCreateContact(resolved.session.id, resolved.chatId);
+      const key = contact.phone_key ?? (resolved.chatId.endsWith('@g.us') ? null : resolved.chatId.endsWith('@lid') ? resolved.chatId : phoneKeyOf(resolved.chatId));
+      if (!key) return res.status(422).json({ error: 'Este chat no tiene un número al que asociar los datos.' });
+      const name = req.body?.name !== undefined ? String(req.body.name).trim() : undefined;
+      const programa = req.body?.programa !== undefined ? String(req.body.programa).trim() : undefined;
+      const ci = req.body?.ci !== undefined ? String(req.body.ci).trim() : undefined;
+      const email = req.body?.email !== undefined ? String(req.body.email).trim() : undefined;
+      const company = req.body?.company !== undefined ? String(req.body.company).trim() : undefined;
+      if (name !== undefined && name.length > 120) return res.status(422).json({ error: 'El nombre es demasiado largo (máx. 120 caracteres).' });
+      if (programa !== undefined && programa.length > 160) return res.status(422).json({ error: 'El programa es demasiado largo (máx. 160 caracteres).' });
+      if (ci !== undefined && ci.length > 40) return res.status(422).json({ error: 'El carnet de identidad es demasiado largo (máx. 40 caracteres).' });
+      if (email !== undefined && email.length > 160) return res.status(422).json({ error: 'El email es demasiado largo (máx. 160 caracteres).' });
+      if (company !== undefined && company.length > 120) return res.status(422).json({ error: 'La empresa es demasiado larga (máx. 120 caracteres).' });
+      if (name === undefined && programa === undefined && ci === undefined && email === undefined && company === undefined) {
+        return res.status(422).json({ error: 'Registrá al menos el nombre, el programa, el CI, el email o la empresa.' });
+      }
+      const patch: ContactPatch = {};
+      if (name !== undefined) patch.name = name || null;
+      if (email !== undefined) patch.email = email || null;
+      if (company !== undefined) patch.company = company || null;
+      const patchedContact = Object.keys(patch).length
+        ? upsertContact(resolved.session.id, resolved.chatId, patch)
+        : contact;
+      if (name !== undefined) setPersonName(key, name || null, req.user!.id);
+      if (programa !== undefined) setPersonProgram(key, programa || null, req.user!.id);
+      if (ci !== undefined) setPersonCi(key, ci || null, req.user!.id);
+      const chats = all<{ session_id: string; chat_id: string }>('SELECT session_id, chat_id FROM contacts WHERE phone_key = ?', key);
+      if (!chats.some((c) => c.session_id === resolved.session.id && c.chat_id === resolved.chatId)) {
+        chats.push({ session_id: resolved.session.id, chat_id: resolved.chatId });
+      }
+      for (const c of chats) panelBus.publish('conversation', { sessionId: c.session_id, chatId: c.chat_id });
+      res.json({
+        ok: true,
+        person: { ...(personTagsByKeys([key]).get(key) ?? {}), ci: getPersonCi(key) },
+        contact: {
+          name: patchedContact.name,
+          phone: patchedContact.phone,
+          email: patchedContact.email,
+          company: patchedContact.company,
+        },
+      });
     }),
   );
 
@@ -1153,26 +1349,68 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
   app.post(
     '/inbox/:session/:chat/notes',
     ...auth,
-    ctx.upload.single('audio'),
+    ctx.upload.fields([
+      { name: 'audio', maxCount: 1 },
+      { name: 'image', maxCount: 1 },
+    ]),
     ah((req, res) => {
       const resolved = resolveAuthorized(req, res, String(req.params.session), String(req.params.chat));
       if (!resolved) return;
       const contact = getOrCreateContact(resolved.session.id, resolved.chatId);
       const text = String(req.body?.text ?? '').trim();
-      const file = (req as AuthedRequest & { file?: { buffer: Buffer; originalname: string; mimetype: string } }).file;
-      if (!text && !file) return res.status(422).json({ error: 'La nota debe tener texto o audio.' });
+      const files = (req as AuthedRequest & { files?: Record<string, Array<{ buffer: Buffer; originalname: string; mimetype: string; size?: number }>> }).files;
+      const audioFile = files?.audio?.[0];
+      const imageFile = files?.image?.[0];
+      if (!text && !audioFile && !imageFile) {
+        return res.status(422).json({ error: 'La nota debe tener texto, audio o imagen.' });
+      }
 
       if (text.length > 4000) return res.status(422).json({ error: 'La nota es demasiado larga (máx. 4000 caracteres).' });
+      if (imageFile && !/^image\/(jpeg|jpg|png|webp|gif)$/i.test(imageFile.mimetype)) {
+        return res.status(422).json({ error: 'La imagen debe ser JPG, PNG, WEBP o GIF.' });
+      }
+      if (imageFile?.size && imageFile.size > 15 * 1024 * 1024) {
+        return res.status(422).json({ error: 'La imagen es demasiado grande (máx. 15 MB).' });
+      }
 
       const sourceId = Number(req.body?.source_message_id) || 0;
       let audioPath: string | null = null;
-      if (file) {
-        audioPath = storeNoteAudio(file.buffer, file.mimetype, file.originalname || 'nota-voz.ogg');
+      if (audioFile) {
+        audioPath = storeNoteAudio(audioFile.buffer, audioFile.mimetype, audioFile.originalname || 'nota-voz.ogg');
+      }
+      let imagePath: string | null = null;
+      let imageMime: string | null = null;
+      if (imageFile) {
+        imagePath = storeNoteImage(imageFile.buffer, imageFile.mimetype, imageFile.originalname || 'nota.jpg');
+        imageMime = imageFile.mimetype;
       }
       const assignedIds = parseAssigneeIds(
         req.body?.assigned_to_ids !== undefined ? req.body.assigned_to_ids : req.body?.assigned_to,
       );
       const personal = parseFlag(req.body?.personal);
+      let placement: { boardId: number; stageId: number } | null = null;
+      if (personal) {
+        try {
+          placement = agenda.resolvePlacement(
+            req.user!.id,
+            Number(req.body?.board_id) || null,
+            Number(req.body?.stage_id) || null,
+          );
+        } catch (err) {
+          return res.status(422).json({ error: (err as Error).message });
+        }
+      }
+      // Las columnas que exigen cite lo piden también al registrar la nota.
+      let cite: { id: number; number: string; concept: string | null } | null = null;
+      if (personal && placement && agenda.stageRequiresCite(placement.boardId, placement.stageId)) {
+        const citeId = Number(req.body?.cite_id) || null;
+        if (!citeId) return res.status(422).json({ error: 'Elegí el número de cite para esta columna.' });
+        const found = citeById(citeId);
+        if (!found || found.status !== 'habilitado') {
+          return res.status(422).json({ error: 'El cite elegido no está habilitado.' });
+        }
+        cite = { id: found.id, number: found.nombre, concept: found.concepto };
+      }
       const note = addNote(
         contact.id,
         req.user!.id,
@@ -1184,10 +1422,19 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
         {
           assigneeIds: personal ? [] : assignedIds,
           personal,
+          agendaBoardId: placement?.boardId ?? null,
+          agendaStageId: placement?.stageId ?? null,
+          cite,
           dueTime: parseTime(req.body?.due_time),
           sourceMessageId: sourceId && conversations.messageInChat(sourceId, resolved.session.id, resolved.chatId) ? sourceId : null,
+          imagePath,
+          imageMime,
         },
       );
+      // La columna elegida define el estado del proceso personal (p. ej. «Resuelto»).
+      if (personal && placement) {
+        agenda.moveNote(req.user!.id, note.id, placement.boardId, placement.stageId);
+      }
       const derived = !personal && (note.assignees ?? []).some((a) => a.id !== req.user!.id);
       publishNoteChange(note.id, derived ? 'assigned' : 'created', req.user!.id);
       announce(note.id, 'created', req.user!);
@@ -1322,6 +1569,20 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
     }),
   );
 
+  // Cites habilitados para elegir al mover tarjetas de sub-agendas que los exigen.
+  app.get(
+    '/agenda/cites',
+    ...auth,
+    ah((req, res) => {
+      res.setHeader('Cache-Control', 'no-store');
+      const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+      res.json({
+        cites: listCites({ enabledOnly: true, q: q || null }),
+        synced_at: citesSyncedAt(),
+      });
+    }),
+  );
+
   app.post(
     '/agenda/boards',
     ...auth,
@@ -1332,7 +1593,13 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
         ? rawStages.map((s: unknown) => String(s ?? ''))
         : String(rawStages ?? '').split(/\r?\n/);
       try {
-        const id = agenda.createBoard(req.user!.id, name, stages);
+        const id = agenda.createBoard(
+          req.user!.id,
+          name,
+          stages,
+          null,
+          parseFlag(req.body?.uses_cites),
+        );
         res.status(201).json({ id, boards: agenda.listBoards(req.user!.id) });
       } catch (err) {
         res.status(422).json({ error: (err as Error).message });
@@ -1349,12 +1616,26 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       const stages = Array.isArray(req.body?.stages)
         ? req.body.stages.map((s: unknown) => {
             if (typeof s === 'string') return { name: s };
-            const item = (s ?? {}) as { id?: number; name?: string; color?: string };
-            return { id: Number(item.id) || undefined, name: String(item.name ?? ''), color: item.color };
+            const item = (s ?? {}) as { id?: number; name?: string; color?: string; requires_cite?: unknown };
+            return {
+              id: Number(item.id) || undefined,
+              name: String(item.name ?? ''),
+              color: item.color,
+              requires_cite: item.requires_cite === undefined ? undefined : parseFlag(item.requires_cite),
+            };
           })
         : [];
       try {
-        agenda.updateBoard(req.user!.id, id, { name: String(req.body?.name ?? ''), stages });
+        const input: {
+          name: string;
+          stages: Array<{ id?: number; name: string; color?: string; requires_cite?: boolean }>;
+          usesCites?: boolean;
+        } = {
+          name: String(req.body?.name ?? ''),
+          stages,
+        };
+        if (req.body?.uses_cites !== undefined) input.usesCites = parseFlag(req.body.uses_cites);
+        agenda.updateBoard(req.user!.id, id, input);
         res.json({ ok: true, boards: agenda.listBoards(req.user!.id) });
       } catch (err) {
         res.status(422).json({ error: (err as Error).message });
@@ -1375,18 +1656,102 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
     }),
   );
 
+  // ── Permisos de sub-agendas: por usuario o por área ────────────────────────
+  app.get(
+    '/agenda/boards/:id/shares',
+    ...auth,
+    ah((req, res) => {
+      try {
+        const id = Number(req.params.id);
+        res.json({ shares: agenda.listBoardShares(req.user!.id, id) });
+      } catch (err) {
+        res.status(404).json({ error: (err as Error).message });
+      }
+    }),
+  );
+
+  app.post(
+    '/agenda/boards/:id/shares',
+    ...auth,
+    ah((req, res) => {
+      try {
+        const id = Number(req.params.id);
+        agenda.setBoardShare(req.user!.id, id, {
+          principal_type: String(req.body?.principal_type ?? ''),
+          principal_id: req.body?.principal_id,
+          permission: String(req.body?.permission ?? 'view'),
+        });
+        res.json({ ok: true, shares: agenda.listBoardShares(req.user!.id, id) });
+      } catch (err) {
+        res.status(422).json({ error: (err as Error).message });
+      }
+    }),
+  );
+
+  app.delete(
+    '/agenda/boards/:id/shares/:shareId',
+    ...auth,
+    ah((req, res) => {
+      try {
+        const id = Number(req.params.id);
+        agenda.removeBoardShare(req.user!.id, id, Number(req.params.shareId));
+        res.json({ ok: true, shares: agenda.listBoardShares(req.user!.id, id) });
+      } catch (err) {
+        res.status(422).json({ error: (err as Error).message });
+      }
+    }),
+  );
+
+  // Usuarios y áreas que el dueño puede elegir al compartir una sub-agenda.
+  app.get(
+    '/agenda/share-options',
+    ...auth,
+    ah((req, res) => {
+      const allUsers = listUsers();
+      const areas = new Map<string, string>();
+      for (const u of allUsers) {
+        for (const area of esamAreas(u)) areas.set(area, esamAreaName(area));
+      }
+      for (const area of ['admin', 'academico', 'contabilidad', 'marketing', 'consulta']) {
+        if (!areas.has(area)) areas.set(area, esamAreaName(area));
+      }
+      res.json({
+        users: allUsers
+          .filter((u) => u.id !== req.user!.id)
+          .map((u) => ({
+            id: u.id,
+            name: u.name || u.username || ('Usuario ' + u.id),
+            area: u.esam_area || null,
+            area_label: esamAreaLabel(u),
+          }))
+          .sort((a, b) => a.name.localeCompare(b.name, 'es')),
+        areas: Array.from(areas.entries())
+          .map(([key, label]) => ({ key, label }))
+          .sort((a, b) => a.label.localeCompare(b.label, 'es')),
+      });
+    }),
+  );
+
   app.get(
     '/agenda/notes',
     ...auth,
     ah((req, res) => {
       const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
-      const boardId = Number(req.query.board_id) || null;
-      agenda.ensureDefaultBoard(req.user!.id);
+      const boardId = Number(req.query.board_id) || agenda.defaultPlacement(req.user!.id).boardId;
+      const permission = boardId ? agenda.permissionFor(req.user!.id, boardId) : null;
+      if (!boardId || !permission) {
+        return res.status(404).json({ error: 'Sub-agenda no encontrada.' });
+      }
       res.setHeader('Cache-Control', 'no-store');
-      res.json({
-        notes: listPersonalNotes(req.user!.id, { q: q || null, boardId })
-          .map((n) => withPermissions(req.user!, n)),
-      });
+      try {
+        res.json({
+          notes: agenda.listBoardNotes(req.user!.id, boardId, { q: q || null })
+            .map((n) => withPermissions(req.user!, n)),
+          permission,
+        });
+      } catch (err) {
+        res.status(404).json({ error: (err as Error).message });
+      }
     }),
   );
 
@@ -1448,13 +1813,34 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
         boardId = row?.board_id ?? 0;
       }
       if (!noteId || !boardId) return res.status(422).json({ error: 'Elegí una columna válida.' });
+      const comment = String(req.body?.comment ?? req.body?.detail ?? '').trim().slice(0, 1000);
+      const citeId = Number(req.body?.cite_id) || null;
       try {
-        agenda.moveNote(user.id, noteId, boardId, stageId);
+        agenda.moveNote(user.id, noteId, boardId, stageId, comment, citeId);
       } catch (err) {
         return res.status(422).json({ error: (err as Error).message });
       }
       publishNoteChange(noteId, 'edited', user.id);
       res.json(withPermissions(user, noteDTO(noteId)!));
+    }),
+  );
+
+  // Agrega o cambia el cite de una tarjeta ya ubicada en una sub-agenda.
+  app.post(
+    '/agenda/notes/:id/cite',
+    ...auth,
+    ah((req, res) => {
+      const user = req.user!;
+      const noteId = Number(req.params.id);
+      const raw = req.body?.cite_id;
+      const citeId = raw === null || raw === '' || raw === 0 || raw === '0' ? null : Number(raw) || null;
+      try {
+        const updated = agenda.setNoteCite(user.id, noteId, citeId);
+        publishNoteChange(noteId, 'edited', user.id);
+        res.json(withPermissions(user, updated));
+      } catch (err) {
+        res.status(422).json({ error: (err as Error).message });
+      }
     }),
   );
 
@@ -1864,6 +2250,72 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       const ext = path.extname(note.audio_path).toLowerCase();
       const type = ({ '.m4a': 'audio/mp4', '.mp4': 'audio/mp4', '.aac': 'audio/aac', '.webm': 'audio/webm', '.mp3': 'audio/mpeg', '.wav': 'audio/wav' } as Record<string, string>)[ext] ?? 'audio/ogg';
       res.sendFile(path.resolve(note.audio_path), { headers: { 'Content-Type': type } });
+    }),
+  );
+
+  // Imagen adjunta a una nota interna. Se muestra en la ficha y en /notes.
+  app.get(
+    '/inbox/notes/:id/image',
+    ...auth,
+    ah((req, res) => {
+      const note = accessibleNote(req, res, { allowDeleted: true });
+      if (!note) return;
+      if (!note.image_path || !fs.existsSync(note.image_path)) return res.status(404).end();
+      const ext = path.extname(note.image_path).toLowerCase();
+      const inferred = ({ '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.gif': 'image/gif' } as Record<string, string>)[ext] ?? 'image/jpeg';
+      const type = note.image_mime && /^image\//i.test(note.image_mime) ? note.image_mime : inferred;
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.sendFile(path.resolve(note.image_path), { headers: { 'Content-Type': type } });
+    }),
+  );
+
+  // Agregar o reemplazar la imagen de una nota (autor o admin).
+  app.post(
+    '/inbox/notes/:id/image',
+    ...auth,
+    ctx.upload.single('image'),
+    ah((req, res) => {
+      const note = accessibleNote(req, res);
+      if (!note) return;
+      if (!canEditNote(req.user!, note)) {
+        return res.status(403).json({ error: 'Solo el autor de la nota puede editarla.' });
+      }
+      const file = (req as AuthedRequest & { file?: { buffer: Buffer; originalname: string; mimetype: string; size?: number } }).file;
+      if (!file) return res.status(422).json({ error: 'Falta la imagen.' });
+      if (!/^image\/(jpeg|jpg|png|webp|gif)$/i.test(file.mimetype)) {
+        return res.status(422).json({ error: 'La imagen debe ser JPG, PNG, WEBP o GIF.' });
+      }
+      if (file.size && file.size > 15 * 1024 * 1024) {
+        return res.status(422).json({ error: 'La imagen es demasiado grande (máx. 15 MB).' });
+      }
+      const imagePath = storeNoteImage(file.buffer, file.mimetype, file.originalname || 'nota.jpg');
+      try {
+        setNoteImage(note.id, req.user!.id, imagePath, file.mimetype);
+      } catch (err) {
+        return res.status(422).json({ error: (err as Error).message });
+      }
+      publishNoteChange(note.id, 'edited', req.user!.id);
+      res.json(withPermissions(req.user!, noteDTO(note.id)!));
+    }),
+  );
+
+  // Quitar la imagen de una nota (autor o admin).
+  app.delete(
+    '/inbox/notes/:id/image',
+    ...auth,
+    ah((req, res) => {
+      const note = accessibleNote(req, res);
+      if (!note) return;
+      if (!canEditNote(req.user!, note)) {
+        return res.status(403).json({ error: 'Solo el autor de la nota puede editarla.' });
+      }
+      try {
+        setNoteImage(note.id, req.user!.id, null, null);
+      } catch (err) {
+        return res.status(422).json({ error: (err as Error).message });
+      }
+      publishNoteChange(note.id, 'edited', req.user!.id);
+      res.json(withPermissions(req.user!, noteDTO(note.id)!));
     }),
   );
 

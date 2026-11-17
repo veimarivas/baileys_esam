@@ -87,6 +87,64 @@ export function setPersonName(key: string, fullName: string | null, userId: numb
   );
 }
 
+/** Carnet de identidad registrado para una persona (opcional), por número. */
+export function getPersonCi(key: string): string | null {
+  if (!key) return null;
+  return get<{ ci: string }>('SELECT ci FROM person_ci WHERE phone_key = ?', key)?.ci ?? null;
+}
+
+/** Registra (o borra, con `null`) el carnet de identidad de una persona. */
+export function setPersonCi(key: string, ci: string | null, userId: number | null): void {
+  const value = (ci ?? '').replace(/\s+/g, ' ').trim().slice(0, 40);
+  if (!value) {
+    run('DELETE FROM person_ci WHERE phone_key = ?', key);
+    return;
+  }
+  run(
+    `INSERT INTO person_ci (phone_key, ci, updated_by, updated_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(phone_key) DO UPDATE SET ci = excluded.ci, updated_by = excluded.updated_by,
+       updated_at = excluded.updated_at`,
+    key,
+    value,
+    userId,
+    nowIso(),
+  );
+}
+
+/**
+ * Registra (o borra, con `null`) el programa de una persona escrito a mano en
+ * el panel. Se guarda por número y lo ven todos los usuarios y líneas.
+ */
+export function setPersonProgram(key: string, programa: string | null, userId: number | null): void {
+  const value = (programa ?? '').replace(/\s+/g, ' ').trim().slice(0, 160);
+  if (!value) {
+    run('DELETE FROM person_manual_programs WHERE phone_key = ?', key);
+    return;
+  }
+  // Si ya existe un programa con el mismo nombre (sin distinguir mayúsculas,
+  // acentos ni espacios), se usa ese nombre para no duplicarlo.
+  const canonical = get<{ programa: string }>(
+    `SELECT programa FROM (
+       SELECT programa FROM person_manual_programs
+       UNION ALL
+       SELECT programa FROM person_programs
+     )
+      WHERE fold(TRIM(programa)) = fold(?)
+      ORDER BY LENGTH(programa) ASC
+      LIMIT 1`,
+    value,
+  )?.programa ?? value;
+  run(
+    `INSERT INTO person_manual_programs (phone_key, programa, updated_by, updated_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(phone_key) DO UPDATE SET programa = excluded.programa, updated_by = excluded.updated_by,
+       updated_at = excluded.updated_at`,
+    key,
+    canonical,
+    userId,
+    nowIso(),
+  );
+}
+
 export interface PersonTags {
   /** Nombre completo: el más reciente entre el de cronogramas y el registrado a mano. */
   full_name: string | null;
@@ -136,6 +194,16 @@ export function personTagsByKeys(keys: Array<string | null | undefined>): Map<st
       t.name_by = m.by_name;
     }
     map.set(m.phone_key, t);
+  }
+  // Programa registrado a mano: se muestra primero, sin duplicar uno de cronogramas.
+  const manualPrograms = all<{ phone_key: string; programa: string }>(
+    `SELECT phone_key, programa FROM person_manual_programs WHERE phone_key IN (${inList})`,
+    ...list,
+  );
+  for (const mp of manualPrograms) {
+    const t = map.get(mp.phone_key) ?? { full_name: null, name_source: null, name_by: null, programas: [] };
+    t.programas = [mp.programa, ...t.programas.filter((p) => p !== mp.programa)];
+    map.set(mp.phone_key, t);
   }
   return map;
 }

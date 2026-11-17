@@ -84,10 +84,10 @@ describe('sub-agendas y columnas pipeline', () => {
   });
 
   it('mover a la columna final marca el proceso como resuelto', () => {
-    moveNote(autor, nota.id, titulaciones, entregado.id);
+    moveNote(autor, nota.id, titulaciones, entregado.id, 'Se entregó el documento.');
     assert.equal(noteDTO(nota.id)?.agenda_stage_id, entregado.id);
     assert.ok(noteDTO(nota.id)?.done_at);
-    moveNote(autor, nota.id, titulaciones, revision.id);
+    moveNote(autor, nota.id, titulaciones, revision.id, 'Volvió a revisión por una observación.');
     assert.equal(noteDTO(nota.id)?.agenda_stage_id, revision.id);
     assert.equal(noteDTO(nota.id)?.done_at, null);
   });
@@ -115,11 +115,12 @@ describe('sub-agendas y columnas pipeline', () => {
     assert.equal(noteDTO(nota.id)?.agenda_stage_id, solicitaron.id);
   });
 
-  it('elimina una sub-agenda y mueve sus notas a otra', () => {
+  it('solo elimina sub-agendas vacías y conserva las notas', () => {
+    assert.throws(() => deleteBoard(autor, titulaciones), /no está vacía/);
+    moveNote(autor, nota.id, defaultBoard, otherBoard?.stages[0].id, 'Se reabre en la sub-agenda general.');
     deleteBoard(autor, titulaciones);
     const after = listBoards(autor);
     assert.equal(after.some((b) => b.id === titulaciones), false);
     assert.equal(noteDTO(nota.id)?.agenda_board_id, defaultBoard);
-    assert.equal(noteDTO(nota.id)?.agenda_stage_id, otherBoard?.stages[0].id);
   });
 });

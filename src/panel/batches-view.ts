@@ -1,5 +1,8 @@
 import { esc } from './layout.js';
-import { emptyState, statusBadge } from './views.js';
+import { statusBadge } from './views.js';
+import { withQuery } from './urls.js';
+import { panelRangeParams, type PanelRange } from './period-filter.js';
+import { describeSendError, type SendErrorKind } from '../core/send-errors.js';
 import { fmtMinutes } from '../core/followup.js';
 import {
   COBRANZA_TIPOS,
@@ -36,6 +39,29 @@ export interface BatchListRow {
   line_phone?: string | null;
   requester_name?: string | null;
 }
+
+export interface BatchScope {
+  range: PanelRange;
+  hasMore: boolean;
+  nextBefore: number | null;
+  summary: { batches: number; sent: number; failed: number };
+}
+
+export interface BatchFailureHint {
+  kind: SendErrorKind;
+  title: string;
+  count: number;
+}
+
+const FAIL_ICON: Record<SendErrorKind, string> = {
+  'group-membership': 'ri-group-line',
+  blocked: 'ri-forbidden-2-line',
+  'no-whatsapp': 'ri-phone-off-line',
+  media: 'ri-file-damage-line',
+  'rate-limit': 'ri-timer-line',
+  connection: 'ri-wifi-off-line',
+  other: 'ri-error-warning-line',
+};
 
 export function safeMeta(raw: string | null | undefined): Record<string, any> {
   try {
@@ -121,15 +147,16 @@ export function batchesPage(
   rows: BatchListRow[],
   today: { batches: number; sent: number; failed: number; active: number },
   eng: Map<number, EngagementSummary> = new Map(),
+  scope?: BatchScope,
+  failureHints: Map<number, BatchFailureHint> = new Map(),
 ): string {
-  if (rows.length === 0) {
-    return `<div class="card"><div class="card-body">${emptyState(
-      'ri-send-plane-line',
-      'Todavía no hay lotes',
-      'Los envíos masivos (desde cronogramas, CSV o el panel) aparecen acá con su progreso en vivo.',
-      '<a class="btn btn-primary btn-sm" href="/import"><i class="ri-upload-2-line me-1"></i>Importar CSV</a>',
-    )}</div></div>`;
-  }
+  const range = scope?.range ?? null;
+  const rangeLabel = range?.label ?? 'Todo el historial';
+  const summary = scope?.summary ?? {
+    batches: rows.length,
+    sent: rows.reduce((sum, b) => sum + b.sent, 0),
+    failed: rows.reduce((sum, b) => sum + b.failed, 0),
+  };
 
   const counts: Record<string, number> = { todos: rows.length, activos: 0, programados: 0, terminados: 0, fallos: 0, cancelados: 0 };
   for (const b of rows) {
@@ -166,6 +193,10 @@ export function batchesPage(
     const sched = b.scheduled_at && !String(b.scheduled_at).startsWith('9999') && (b.status === 'scheduled' || b.status === 'awaiting_confirmation')
       ? `<div class="bt-sched"><i class="ri-calendar-schedule-line"></i> Para ${esc(new Date(b.scheduled_at).toLocaleString('es-BO', { dateStyle: 'short', timeStyle: 'short' }))}</div>`
       : '';
+    const failHint = failureHints.get(b.id);
+    const failLine = failHint
+      ? `<div class="bt-fail-hint is-${failHint.kind}"><i class="${FAIL_ICON[failHint.kind]}" aria-hidden="true"></i>${esc(failHint.title)}${failHint.count > 1 ? ` · ${failHint.count}` : ''}</div>`
+      : '';
     const live = ['running', 'scheduled', 'paused', 'awaiting_confirmation'].includes(b.status) ? '1' : '0';
     return `<div class="bt-row" data-batch="${b.id}" data-live="${live}" data-group="${filterGroup(b)}" data-failed="${b.failed > 0 ? 1 : 0}" data-line="${esc(b.session_id)}" data-search="${esc(search)}">
       <div class="bt-time"><b>${esc(fmtTime(b.created_at))}</b><span>#${b.id}</span></div>
@@ -176,7 +207,7 @@ export function batchesPage(
           ${tipo ? `<span class="bt-tag is-type">${esc(tipo)}</span>` : ''}
           <span class="bt-tag is-origin">${esc(origen)}</span>
         </div>
-        ${paused}${sched}
+        ${paused}${sched}${failLine}
       </div>
       <div class="bt-who">
         <div class="bt-line" title="Línea que envía"><i class="ri-whatsapp-line"></i><span class="ff-monospace">${esc(b.line_phone ?? '—')}</span></div>
@@ -207,12 +238,37 @@ export function batchesPage(
     })
     .join('');
 
+  const periodTab = (key: string, label: string) =>
+    `<a class="bt-scope-tab${range?.period === key ? ' on' : ''}" href="${withQuery('/batches', { period: key })}">${esc(label)}</a>`;
+
+  const nextLink = scope?.hasMore && scope.nextBefore
+    ? `<a class="bt-more" href="${withQuery('/batches', { ...(range ? panelRangeParams(range) : {}), before: scope.nextBefore })}"><i class="ri-arrow-down-line me-1"></i>Ver lotes más antiguos</a>`
+    : '';
+
   return `<div class="batches-page" id="batches-page">
     <div class="bt-kpis">
-      ${kpi('ri-stack-line', 'brand', 'Lotes de hoy', today.batches)}
-      ${kpi('ri-send-plane-2-line', 'ok', 'Mensajes enviados hoy', today.sent)}
-      ${kpi('ri-loader-4-line', 'warn', 'En curso o en pausa', today.active)}
-      ${kpi('ri-error-warning-line', 'danger', 'Fallidos hoy', today.failed)}
+      ${kpi('ri-stack-line', 'brand', 'Lotes del período', summary.batches, `Hoy: ${today.batches}`)}
+      ${kpi('ri-send-plane-2-line', 'ok', 'Mensajes enviados', summary.sent, `Hoy: ${today.sent}`)}
+      ${kpi('ri-loader-4-line', 'warn', 'En curso o en pausa', today.active, 'Ahora')}
+      ${kpi('ri-error-warning-line', 'danger', 'Fallidos', summary.failed, `Hoy: ${today.failed}`)}
+    </div>
+    <div class="bt-scope">
+      <div class="bt-scope-main">
+        <span class="bt-scope-label"><i class="ri-calendar-line" aria-hidden="true"></i>${esc(rangeLabel)}</span>
+        <nav class="bt-scope-tabs" aria-label="Período">
+          ${periodTab('month', 'Este mes')}
+          ${periodTab('prev', 'Mes anterior')}
+          ${periodTab('quarter', 'Últimos 3 meses')}
+          ${periodTab('year', 'Este año')}
+          ${periodTab('all', 'Todo el historial')}
+        </nav>
+      </div>
+      <form method="get" action="/batches" class="bt-scope-form">
+        <input type="hidden" name="period" value="custom" />
+        <label><span>Desde</span><input type="date" name="from" value="${esc(range?.from ?? '')}" aria-label="Desde" /></label>
+        <label><span>Hasta</span><input type="date" name="to" value="${esc(range?.to ?? '')}" aria-label="Hasta" /></label>
+        <button class="btn btn-light btn-sm" type="submit"><i class="ri-filter-3-line me-1"></i>Ver rango</button>
+      </form>
     </div>
     <div class="bt-toolbar">
       <div class="bt-chips" role="tablist" aria-label="Estado">
@@ -235,8 +291,12 @@ export function batchesPage(
     </div>
     <div class="bt-head" aria-hidden="true"><span>Hora</span><span>Lote</span><span>Línea · solicitante</span><span>Progreso</span><span>Estado</span><span></span></div>
     <div id="bt-list">${groups}</div>
-    <div class="bt-empty" id="bt-empty" hidden><i class="ri-filter-off-line"></i> No hay lotes con estos filtros.</div>
-    <p class="bt-foot">Se muestran los últimos ${rows.length} lotes. El progreso de los que están en curso se actualiza solo.</p>
+    <div class="bt-empty" id="bt-empty"${rows.length ? ' hidden' : ''}>
+      <i class="ri-send-plane-line" aria-hidden="true"></i>
+      <b>No hay lotes en ${esc(rangeLabel)}</b>
+      <span>Probá con otro período${range?.period === 'all' ? '' : ' o mirá todo el historial'}.</span>
+    </div>
+    <p class="bt-foot">Mostrando <b>${rows.length}</b> lote${rows.length === 1 ? '' : 's'} de ${esc(rangeLabel)}.${nextLink ? ` ${nextLink}` : ''} El progreso de los que están en curso se actualiza solo.</p>
   </div>
   <script>
   (function () {
@@ -337,6 +397,7 @@ function engagementCard(sum: EngagementSummary, cobranza: boolean): string {
     </div>`;
   const unread = sum.tracked - sum.read;
   const untracked = sum.sent - sum.tracked;
+  const noAck = Math.max(0, sum.sent - sum.delivered);
   const kinds = cobranza
     ? (Object.keys(sum.kinds) as ReplyKind[])
         .filter((k) => sum.kinds[k] > 0)
@@ -349,7 +410,7 @@ function engagementCard(sum: EngagementSummary, cobranza: boolean): string {
     <div class="bd-eng-grid">
       <div class="bd-funnel">
         ${bar('Enviados', sum.sent, 100, 'brand', null)}
-        ${bar('Entregados', sum.delivered, sum.deliveredRate, 'ok', null)}
+        ${bar('Con acuse o respuesta', sum.delivered, sum.deliveredRate, 'ok', null)}
         ${bar('Leídos', sum.read, sum.readRate, 'info', 'read')}
         ${bar('Respondieron', sum.replied, sum.replyRate, 'warn', 'replied')}
       </div>
@@ -362,7 +423,9 @@ function engagementCard(sum: EngagementSummary, cobranza: boolean): string {
             : ''}
         ${untracked > 0
           ? `<p class="bd-eng-note"><i class="ri-information-line"></i> ${untracked} envío${untracked === 1 ? '' : 's'} sin acuse registrado: no ${untracked === 1 ? 'entra' : 'entran'} en el porcentaje de entregados y leídos.</p>`
-          : ''}
+          : noAck > 0
+            ? `<p class="bd-eng-note"><i class="ri-error-warning-line"></i> ${noAck} mensaje${noAck === 1 ? '' : 's'} sin acuse de entrega. El lote puede figurar como completado porque el sistema terminó de enviar; eso no significa que WhatsApp los haya entregado.</p>`
+            : ''}
       </div>
     </div>
     ${kinds ? `<div class="bd-kinds"><h6>Qué respondieron</h6><ul>${kinds}</ul>
@@ -430,6 +493,23 @@ export function batchDetailPage(
   for (const it of items) for (const t of engTokens(eng.get(it.id))) counts[t] = (counts[t] ?? 0) + 1;
   const summary = summarizeEngagement(eng.values());
   const cobranza = COBRANZA_TIPOS.has(String(meta.tipo ?? ''));
+  const deliveryGap = Math.max(0, summary.sent - summary.delivered);
+  let ackDelivered = 0;
+  for (const e of eng.values()) if (e.ack === 'delivered' || e.ack === 'read') ackDelivered++;
+  const replyOnly = Math.max(0, summary.delivered - ackDelivered);
+  const ackRate = summary.sent ? Math.round((ackDelivered / summary.sent) * 100) : 0;
+  const lowDelivery = b.status === 'done' && summary.sent >= 5 && summary.deliveredRate !== null && summary.deliveredRate < 75;
+  const deliveryAlert = lowDelivery
+    ? `<div class="alert alert-warning d-flex gap-2 align-items-start" role="status">
+        <i class="ri-error-warning-line fs-5"></i>
+        <div><b>El lote terminó de procesarse, pero no todos los mensajes tienen acuse de entrega.</b>
+          De ${summary.sent} mensajes enviados, ${summary.delivered} tienen acuse o respuesta (${summary.deliveredRate}%):
+          ${ackDelivered} con acuse de entrega${replyOnly ? ` y ${replyOnly} respondieron sin acuse` : ''}. Los ${deliveryGap} restantes no tienen acuse ni respuesta.
+          El estado «Completado» solo indica que el sistema terminó de enviar; no significa que WhatsApp haya confirmado la entrega.
+          Anti-Baneo cuenta solo el acuse de entrega de WhatsApp (${ackDelivered} de ${summary.sent} = ${ackRate}%), por eso muestra un porcentaje menor.
+          <a href="/anti-ban/line/${encodeURIComponent(b.session_id)}" class="alert-link">Ver el detalle de la línea en Anti-Baneo →</a></div>
+      </div>`
+    : '';
 
   // Mensaje: único para todos o personalizado.
   const bodies = new Map<string, number>();
@@ -480,22 +560,49 @@ export function batchDetailPage(
       </dl>
     </div>`;
 
-  // Motivos de fallo agrupados.
-  const errors = new Map<string, number>();
+  // Diagnóstico de fallos: agrupa por causa entendible y propone qué hacer.
+  const failGroups = new Map<SendErrorKind, { info: ReturnType<typeof describeSendError>; count: number; targets: BatchItemRow[]; raws: Set<string> }>();
   for (const it of items) {
     if (it.status !== 'failed') continue;
-    const key = it.error || 'Sin detalle';
-    errors.set(key, (errors.get(key) ?? 0) + 1);
+    const info = describeSendError(it.error, it.chat_id);
+    const group = failGroups.get(info.kind) ?? { info, count: 0, targets: [], raws: new Set<string>() };
+    group.count++;
+    group.targets.push(it);
+    group.raws.add(it.error ?? '');
+    failGroups.set(info.kind, group);
   }
-  const fallos = errors.size
-    ? `<div class="bd-card bd-errors">
-        <div class="bd-card-h"><span class="ri-error-warning-line" aria-hidden="true"></span><h6>Motivos de fallo</h6></div>
-        <ul>${[...errors.entries()].sort((x, y) => y[1] - x[1]).map(([e, n]) => `<li><b>${n}</b><span>${esc(e)}</span></li>`).join('')}</ul>
+  const fallos = failGroups.size
+    ? `<div class="bd-card bd-diagnosis">
+        <div class="bd-card-h"><span class="ri-stethoscope-line" aria-hidden="true"></span><h6>Diagnóstico de los fallos</h6>
+          <span class="bd-pill">${b.failed} de ${b.total}</span></div>
+        <div class="bd-diag-list">
+          ${[...failGroups.values()].sort((x, y) => y.count - x.count).map((g) => {
+            const showTargets = g.targets.slice(0, 5).map((it) => {
+              const name = it.contact_name ?? String(it.chat_id).replace(/@.*$/, '');
+              return g.info.kind === 'group-membership'
+                ? `<span>${esc(name)}</span>`
+                : `<a href="/conversations/${encodeURIComponent(it.chat_id)}">${esc(name)}</a>`;
+            }).join(' · ');
+            const more = g.targets.length > 5 ? ` · +${g.targets.length - 5}` : '';
+            const raws = [...g.raws].filter(Boolean).map((x) => esc(x)).join(' · ');
+            return `<article class="bd-diag is-${g.info.kind}">
+              <span class="bd-diag-ic" aria-hidden="true"><i class="${FAIL_ICON[g.info.kind]}"></i></span>
+              <div class="bd-diag-body">
+                <div class="bd-diag-head"><b>${esc(g.info.title)}</b><span class="bd-diag-count">${g.count}</span></div>
+                <p>${esc(g.info.detail)}</p>
+                <div class="bd-diag-action"><i class="ri-lightbulb-line" aria-hidden="true"></i><span><b>Qué hacer:</b> ${esc(g.info.action)}</span></div>
+                <div class="bd-diag-targets"><span>Afectados:</span> ${showTargets}${more}</div>
+                ${raws ? `<details class="bd-diag-raw"><summary>Detalle técnico</summary><code>${raws}</code></details>` : ''}
+              </div>
+            </article>`;
+          }).join('')}
+        </div>
       </div>`
     : '';
 
-  const kpi = (label: string, field: string, value: number, tone: string) =>
-    `<div class="bd-kpi is-${tone}"><div class="bd-kpi-v" data-f="${field}">${value}</div><div class="bd-kpi-l">${esc(label)}</div></div>`;
+  const kpi = (label: string, field: string, value: number, tone: string, icon: string) =>
+    `<div class="bd-kpi is-${tone}"><span class="bd-kpi-ic ${icon}" aria-hidden="true"></span>
+       <div><div class="bd-kpi-v" data-f="${field}">${value}</div><div class="bd-kpi-l">${esc(label)}</div></div></div>`;
 
   const itemRow = (it: BatchItemRow, n: number) => {
     const phone = String(it.chat_id ?? '').replace(/@.*$/, '');
@@ -505,6 +612,7 @@ export function batchDetailPage(
     const when = it.status === 'sent' && it.updated_at ? fmtTime(it.updated_at) : '—';
     const e = eng.get(it.id);
     const r = e?.reply ?? null;
+    const errInfo = it.error ? describeSendError(it.error, it.chat_id) : null;
     const search = `${it.contact_name ?? ''} ${phone} ${body} ${it.error ?? ''} ${r?.body ?? ''}`.toLowerCase();
     const ack = e?.ack && ACK_VIEW[e.ack] ? ACK_VIEW[r && e.ack !== 'read' ? 'read' : e.ack] : null;
     const replyText = r ? (r.body?.trim() ? r.body.trim() : r.contentType === 'text' ? '(sin texto)' : `(${MEDIA_LABEL[r.contentType] ?? 'adjunto'})`) : '';
@@ -525,7 +633,10 @@ export function batchDetailPage(
       <td class="text-nowrap">${esc(when)}</td>
       <td class="bd-read">${lectura || '<span class="text-muted">—</span>'}</td>
       <td class="bd-msg">${msg}</td>
-      <td class="bd-err">${it.error ? esc(it.error) : ''}${it.external_ref ? `<div class="bd-ref" title="Referencia de origen">${esc(it.external_ref)}</div>` : ''}</td>
+      <td class="bd-err">${errInfo
+        ? `<span class="bd-err-title" title="${esc(errInfo.detail)} ${esc(errInfo.action)}">${esc(errInfo.title)}</span>
+           <details class="bd-err-raw"><summary>Ver error técnico</summary><code>${esc(it.error ?? '')}</code></details>`
+        : ''}${it.external_ref ? `<div class="bd-ref" title="Referencia de origen">${esc(it.external_ref)}</div>` : ''}</td>
     </tr>`;
   };
 
@@ -540,29 +651,48 @@ export function batchDetailPage(
     <div class="bd-head">
       <a class="bd-back" href="/batches" title="Volver a Lotes" aria-label="Volver a Lotes"><i class="ri-arrow-left-line"></i></a>
       <div class="bd-title">
-        <h4>#${b.id} · ${esc(b.name ?? 'Lote')}</h4>
+        <div class="bd-eyebrow">Lote #${b.id} · ${esc(origen)}${tipo ? ` · ${esc(tipo)}` : ''}</div>
+        <h4>${esc(b.name ?? 'Lote')}</h4>
         <div class="bt-tags">
           ${meta.programa ? `<span class="bt-tag"><i class="ri-graduation-cap-line"></i>${esc(String(meta.programa))}</span>` : ''}
-          ${tipo ? `<span class="bt-tag is-type">${esc(tipo)}</span>` : ''}
+          ${meta.area ? `<span class="bt-tag is-origin"><i class="ri-community-line"></i>${esc(String(meta.area))}</span>` : ''}
           <span class="bt-tag is-origin">${esc(origen)}</span>
         </div>
       </div>
-      <div class="bd-status">${statusBadge(b.status)}</div>
+      <div class="bd-head-side">
+        ${statusBadge(b.status)}
+        <span class="bd-head-pct" title="El lote terminó de procesarse; no significa que WhatsApp haya confirmado la entrega."><b>${pct}%</b><small>procesado</small></span>
+      </div>
     </div>
+
+    <div class="bd-summary" aria-label="Resumen del lote">
+      <span><i class="ri-user-star-line" aria-hidden="true"></i> Pedido por <b>${pide ? esc(String(pide)) : '—'}</b></span>
+      <span><i class="ri-whatsapp-line" aria-hidden="true"></i> <span class="ff-monospace">${esc(b.line_phone ?? '—')}</span> · ${esc(b.line_owner ?? b.line_name ?? '—')}</span>
+      <span><i class="ri-calendar-line" aria-hidden="true"></i> ${fecha(b.created_at)}</span>
+      ${duracion !== '—' ? `<span><i class="ri-time-line" aria-hidden="true"></i> ${duracion}</span>` : ''}
+    </div>
+
+    ${deliveryAlert}
 
     ${b.status === 'paused' && meta.anti_ban_pause
       ? `<div class="alert alert-warning d-flex gap-2 align-items-start" role="status"><i class="ri-shield-star-line fs-5"></i><div><b>Pausado por el anti-baneo.</b> ${esc(meta.anti_ban_pause)}</div></div>`
       : ''}
 
     <div class="bd-kpis">
-      ${kpi('Total', 'total', b.total, 'brand')}
-      ${kpi('Enviados', 'sent', b.sent, 'ok')}
-      ${kpi('Fallidos', 'failed', b.failed, 'danger')}
-      ${kpi('Omitidos', 'skipped', b.skipped, 'warn')}
-      ${kpi('Pendientes', 'pending', pending, 'mute')}
+      ${kpi('Total', 'total', b.total, 'brand', 'ri-stack-line')}
+      ${kpi('Enviados', 'sent', b.sent, 'ok', 'ri-send-plane-2-line')}
+      ${kpi('Fallidos', 'failed', b.failed, 'danger', 'ri-error-warning-line')}
+      ${kpi('Omitidos', 'skipped', b.skipped, 'warn', 'ri-skip-forward-line')}
+      ${kpi('Pendientes', 'pending', pending, 'mute', 'ri-time-line')}
       <div class="bd-progress">
-        <div class="bd-progress-top"><span>Progreso</span><b>${pct}%</b></div>
+        <div class="bd-progress-top"><span>Progreso del lote</span><b>${pct}%</b></div>
         <div class="progress"><div class="progress-bar ${b.failed ? 'bg-warning' : 'bg-success'}" style="width:${pct}%"></div></div>
+        <div class="bd-progress-legend">
+          <span class="is-ok"><i class="ri-check-line" aria-hidden="true"></i>${b.sent} enviados</span>
+          ${b.failed ? `<span class="is-danger"><i class="ri-close-line" aria-hidden="true"></i>${b.failed} fallidos</span>` : ''}
+          ${b.skipped ? `<span class="is-warn"><i class="ri-skip-forward-line" aria-hidden="true"></i>${b.skipped} omitidos</span>` : ''}
+          ${pending ? `<span class="is-mute"><i class="ri-time-line" aria-hidden="true"></i>${pending} pendientes</span>` : ''}
+        </div>
       </div>
     </div>
 

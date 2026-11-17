@@ -74,6 +74,11 @@ export function storeNoteAudio(contents: Buffer, mime: string | null, filename?:
   return file;
 }
 
+/** Guarda una imagen adjunta a una nota interna (misma carpeta permanente). */
+export function storeNoteImage(contents: Buffer, mime: string | null, filename?: string | null): string {
+  return storeNoteAudio(contents, mime, filename);
+}
+
 /** Carpeta de las fotos de perfil: la retención de media no la toca. */
 export const AVATARS_MEDIA_DIR = 'avatars';
 

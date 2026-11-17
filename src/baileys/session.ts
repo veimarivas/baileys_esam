@@ -9,6 +9,7 @@ import {
   DisconnectReason,
   downloadMediaMessage,
   Browsers,
+  WAMessageStubType,
   proto,
   type WASocket,
   type WAMessage,
@@ -21,6 +22,7 @@ import { delay, randInt } from '../util/async.js';
 import { buildContactVCard, phoneFromJid } from '../core/phone.js';
 import { rememberLid, resolveChatId, phoneForLid } from '../core/lid.js';
 import { phoneKeyOf } from '../core/person.js';
+import type { GroupSendCheck } from '../types.js';
 import {
   contactMeta,
   contactsArrayMeta,
@@ -410,6 +412,8 @@ export class WaSession extends EventEmitter {
   private watchTimer: NodeJS.Timeout | null = null;
   /** Instantes de los últimos bloqueos del mutex (para decidir reconectar). */
   private stalls: number[] = [];
+  /** Última verificación de grupo por JID (evita pedir metadatos en cada envío). */
+  private groupInfoCache = new Map<string, { at: number; value: GroupSendCheck }>();
   /** Último evento recibido de WhatsApp (diagnóstico de salud). */
   lastInboundAt: number | null = null;
   private authPath: string;
@@ -503,6 +507,7 @@ export class WaSession extends EventEmitter {
     sock.ev.on('connection.update', (update: any) => void this.onConnection(update, sock));
     sock.ev.on('messages.upsert', (payload: any) => void this.onUpsert(payload));
     sock.ev.on('messages.update', (updates: any) => void this.onUpdate(updates));
+    sock.ev.on('messages.delete', (payload: any) => this.onDeleted(payload));
     sock.ev.on('messaging-history.set', (payload: any) => void this.onHistorySet(payload));
     // Baileys 7: el par LID↔número llega por `lid-mapping.update` ({ lid, pn }).
     sock.ev.on('lid-mapping.update', (payload: any) => this.onPhoneNumberShare({ lid: payload?.lid, jid: payload?.pn }));
@@ -1038,6 +1043,20 @@ export class WaSession extends EventEmitter {
 
   private onUpdate(updates: any): void {
     for (const u of updates ?? []) {
+      // WhatsApp avisa que alguien eliminó un mensaje para todos: el mensaje
+      // original se conserva en el panel, pero se marca como revocado.
+      if (u?.update?.messageStubType === WAMessageStubType.REVOKE) {
+        const key = u.update.key ?? u.key;
+        const revokedId = key?.id;
+        if (revokedId) {
+          this.emit('revoked', {
+            messageId: String(revokedId),
+            chatId: resolveChatId(key?.remoteJid ?? ''),
+            scope: 'revoke',
+          });
+        }
+        continue;
+      }
       const id = u?.key?.id;
       const status = u?.update?.status;
       if (!id || status === undefined || status === null) continue;
@@ -1051,6 +1070,20 @@ export class WaSession extends EventEmitter {
         continue;
       }
       this.emit('ack', { messageId: id, status: mapped });
+    }
+  }
+
+  /** Borrado «para mí» desde el teléfono u otro dispositivo vinculado. */
+  private onDeleted(payload: any): void {
+    if (payload?.all) return;
+    for (const key of payload?.keys ?? []) {
+      const id = key?.id;
+      if (!id) continue;
+      this.emit('revoked', {
+        messageId: String(id),
+        chatId: resolveChatId(key?.remoteJid ?? ''),
+        scope: 'delete',
+      });
     }
   }
 
@@ -1300,6 +1333,82 @@ export class WaSession extends EventEmitter {
         phone: phone || null,
       };
     });
+  }
+
+  /**
+   * Estado del grupo para esta línea: si participa, si es administradora y si
+   * el grupo permite enviar. Evita intentar un envío que WhatsApp va a rechazar
+   * (grupo solo-admin) o que quedaría sin acuse.
+   */
+  async groupInfo(jid: string): Promise<GroupSendCheck> {
+    if (!this.sock) throw new Error('La sesión no está arrancada.');
+    const target = toBaileysJid(jid);
+    const cached = this.groupInfoCache.get(target);
+    if (cached && Date.now() - cached.at < 5 * 60_000) return cached.value;
+    let meta: any;
+    try {
+      meta = await this.sock.groupMetadata(target);
+    } catch {
+      const value: GroupSendCheck = {
+        id: target,
+        name: null,
+        announce: false,
+        restrict: false,
+        participantCount: 0,
+        isParticipant: false,
+        isAdmin: false,
+        canSend: false,
+        reason: 'La línea no participa en el grupo o el grupo ya no existe.',
+      };
+      this.groupInfoCache.set(target, { at: Date.now(), value });
+      return value;
+    }
+    const participants = ((meta?.participants ?? []) as any[]);
+    const selfJid = String(this.sock?.user?.id ?? '');
+    const bare = (v: string | null | undefined) => String(v ?? '').split('@')[0].split(':')[0];
+    const selfBare = bare(selfJid);
+    const selfPhone = phoneKeyOf(this.phone) || phoneKeyOf(phoneFromJid(selfJid));
+    let mine: any = null;
+    for (const p of participants) {
+      const { pnJid, lid } = this.participantPair(p);
+      const ids = [bare(p?.id), bare(pnJid), bare(lid)];
+      if (selfBare && ids.includes(selfBare)) {
+        mine = p;
+        break;
+      }
+      const keys = [
+        phoneKeyOf(phoneFromJid(pnJid)),
+        phoneKeyOf(phoneFromJid(lid)),
+        lid ? phoneKeyOf(phoneFromJid(phoneForLid(lid))) : null,
+        phoneKeyOf(p?.phoneNumber ?? p?.phone ?? p?.pn),
+      ];
+      if (selfPhone && keys.includes(selfPhone)) {
+        mine = p;
+        break;
+      }
+    }
+    const isParticipant = !!mine;
+    const isAdmin = !!mine && (mine.admin === 'admin' || mine.admin === 'superadmin');
+    const announce = !!meta?.announce;
+    const canSend = isParticipant && (!announce || isAdmin);
+    const reason = !isParticipant
+      ? 'La línea no está en el grupo.'
+      : announce && !isAdmin
+        ? 'El grupo solo permite enviar a administradores y esta línea no es administradora.'
+        : null;
+    const value: GroupSendCheck = {
+      id: String(meta?.id ?? target),
+      name: meta?.subject ?? null,
+      announce,
+      restrict: !!meta?.restrict,
+      participantCount: participants.length,
+      isParticipant,
+      isAdmin,
+      canSend,
+      reason,
+    };
+    this.groupInfoCache.set(target, { at: Date.now(), value });
+    return value;
   }
 
   /**

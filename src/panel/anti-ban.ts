@@ -30,7 +30,7 @@ import {
 } from '../core/anti-ban-monitor.js';
 import type { BatchRunner } from '../core/batches.js';
 import type { SessionRow } from '../types.js';
-import { lineVerdict, quarantineInfo, recentFailures, type LineVerdict } from '../core/line-verdict.js';
+import { lineVerdict, quarantineInfo, recentFailures, suspiciousBatch, type LineVerdict } from '../core/line-verdict.js';
 import { lineVerdictCard } from './lines-view.js';
 
 /**
@@ -54,6 +54,39 @@ const RISK_INFO: Record<RiskProfile, { title: string; text: string; icon: string
   medium: { title: 'Balanceado', text: 'Números con historial y buena entrega.', icon: 'ri-scales-3-line' },
   high: { title: 'Agresivo', text: 'Solo números maduros y listas que responden.', icon: 'ri-flashlight-line' },
   mass: { title: 'Masivo institucional', text: 'Envíos de cronogramas: 6–7 s por mensaje, con pausas y freno automático.', icon: 'ri-megaphone-line' },
+};
+
+/**
+ * Política de recuperación para una línea con entrega baja o límite temporal:
+ * menos volumen, más espacio entre mensajes y pausas más frecuentes. No toca
+ * las palabras de baja ni el interruptor general.
+ */
+const RECOVERY_POLICY = {
+  risk_profile: 'low' as RiskProfile,
+  daily_limit: 150,
+  hourly_limit: 30,
+  delay_min_seconds: 20,
+  delay_max_seconds: 40,
+  window_start: '08:00',
+  window_end: '18:00',
+  window_days: [1, 2, 3, 4, 5, 6],
+  warmup_enabled: false,
+  pauses_enabled: true,
+  pause_every: 20,
+  pause_min_minutes: 5,
+  pause_max_minutes: 10,
+  health_delivery_threshold: 0.9,
+  active: true,
+  typing_simulation: true,
+  min_gap_seconds: 5,
+  burst_per_minute: 5,
+  verify_numbers: true,
+  new_contacts_daily_limit: 40,
+  max_consecutive_failures: 3,
+  auto_pause_low_delivery: true,
+  recontact_cooldown_hours: 48,
+  max_unanswered: 2,
+  block_rate_threshold: 0.02,
 };
 
 type Tab = AntiBanTabSlug;
@@ -300,9 +333,13 @@ function sessionCard(sess: SessionRow, health: HealthRow | undefined, custom: bo
       <form method="post" action="/anti-ban/rotate/${id}">
         <button class="btn btn-sm btn-light" type="submit" title="Mover sus lotes pendientes a otra línea sana"><i class="ri-arrow-left-right-line me-1"></i>Rotar lotes</button>
       </form>
-      <form method="post" action="/anti-ban/session/${id}/reset" data-confirm="¿Reiniciar el calentamiento? La línea vuelve al día 1 con topes reducidos.">
-        <button class="btn btn-sm btn-light" type="submit"><i class="ri-restart-line me-1"></i>Reiniciar warm-up</button>
-      </form>
+      ${
+        policy.warmup_enabled
+          ? `<form method="post" action="/anti-ban/session/${id}/reset" data-confirm="¿Reiniciar el calentamiento? La línea vuelve al día 1 con topes reducidos.">
+               <button class="btn btn-sm btn-light" type="submit"><i class="ri-restart-line me-1"></i>Reiniciar calentamiento</button>
+             </form>`
+          : ''
+      }
       ${
         quarantine
           ? `<form method="post" action="/anti-ban/quarantine/${id}" class="ms-auto"><input type="hidden" name="action" value="release"/><input type="hidden" name="next" value="${showDetail ? 'monitoreo' : 'line'}"/>
@@ -862,9 +899,17 @@ export function registerAntiBanRoutes(
     requireSection: (section: string) => RequestHandler;
     sessions: () => SessionRow[];
     runner: BatchRunner;
+    manager: {
+      reconnect: (id: string) => Promise<void>;
+      repairEncryption: (id: string) => Promise<number>;
+    };
   },
 ): void {
   const guard: RequestHandler[] = [ctx.requireUser, ctx.requireSection('policies')];
+  const wrap = (fn: (req: Request, res: Response) => Promise<unknown>): RequestHandler =>
+    (req, res, next) => {
+      fn(req, res).catch(next);
+    };
   const back = (res: Response, tab: Tab, msg: string, kind: 'ok' | 'error' = 'ok') => {
     setFlash(res, kind, msg);
     return antiBanUrl({ tab });
@@ -989,6 +1034,9 @@ export function registerAntiBanRoutes(
     )?.c ?? 0;
     // Últimos fallos de envío: explican el «N fallos consecutivos» de la cuarentena.
     const fails = recentFailures(id, 10);
+    const suspicious = suspiciousBatch(id);
+    const lowDelivery = verdict.stats.deliveryRate !== null && verdict.stats.deliveryRate < 0.9;
+    const showRecovery = verdict.level === 'red' || verdict.level === 'off' || lowDelivery || !!suspicious;
     const KIND: Record<string, [string, string, string]> = {
       connection: ['ri-wifi-off-line', 'mute', 'Desconexión de la línea'],
       number: ['ri-user-unfollow-line', 'warn', 'Número sin WhatsApp o mal escrito'],
@@ -1021,6 +1069,45 @@ export function registerAntiBanRoutes(
               : ''}
             <button class="btn ${q.canRelease ? 'btn-success' : 'btn-soft-secondary'}" type="submit"><i class="ri-lock-unlock-line me-1"></i>${pausedCount > 0 ? 'Liberar y continuar' : 'Liberar de la cuarentena'}</button>
           </form>
+        </div></div>`
+      : '';
+    const suspiciousCard = suspicious
+      ? `<div class="card ab-card ab-suspicious"><div class="card-body">
+          <div class="ab-card-title"><h5><i class="ri-alert-line"></i> Posible límite temporal de WhatsApp</h5>
+            <span>Lote <a href="/batches/${suspicious.batchId}">#${suspicious.batchId}</a> · ${esc(fmtDate(suspicious.firstAt))}</span></div>
+          <p class="ab-suspicious-text">${suspicious.unacked} de ${suspicious.total} mensajes${suspicious.batchName ? ` de «${esc(suspicious.batchName)}»` : ' de este lote'} siguen sin acuse de entrega y ${suspicious.sameMedia} usan el mismo archivo. Esto suele pasar cuando se envía el mismo contenido a muchas personas en pocos minutos: WhatsApp deja de confirmar la entrega por un tiempo, aunque la línea siga conectada.</p>
+          <ul class="ab-tips">
+            <li><b>No reenvíes ese mismo archivo.</b> Esperá 24–48 h y revisá la entrega antes de volver a enviar.</li>
+            <li>Para el próximo envío, variá el texto, usá un PDF o un enlace y mandá en grupos pequeños.</li>
+            <li>${suspicious.ageHours >= 20
+              ? 'Estos mensajes están por salir de la ventana de 24 h: el semáforo debería mejorar solo.'
+              : 'La ventana de 24 h limpiará estos mensajes cuando se cumplan; no hace falta reiniciar el servicio.'}</li>
+          </ul>
+        </div></div>`
+      : '';
+    const recoveryCard = showRecovery
+      ? `<div class="card ab-card ab-recovery-card"><div class="card-body">
+          <div class="ab-card-title"><h5><i class="ri-lifebuoy-line"></i> Plan de recuperación</h5>
+            <span>${health.quarantine ? 'La línea está en pausa; preparala para cuando la liberes.' : 'Acciones para esta línea. No hace falta reiniciar el servicio ni el número.'}</span></div>
+          <div class="ab-recovery-actions">
+            ${!health.quarantine
+              ? `<form method="post" action="/anti-ban/quarantine/${esc(id)}" data-confirm="La línea deja de enviar masivos hasta que la liberes. Dejala en pausa 24–48 h. ¿Continuar?">
+                   <input type="hidden" name="action" value="apply"/>
+                   <input type="hidden" name="next" value="line"/>
+                   <button class="btn btn-danger btn-sm" type="submit"><i class="ri-pause-circle-line me-1"></i>Pausar envíos 24 h</button>
+                 </form>`
+              : ''}
+            <form method="post" action="/anti-ban/session/${esc(id)}/recovery" data-confirm="Se aplica una política de recuperación: 150 mensajes/día, 30 por hora y 20–40 s entre mensajes. ¿Continuar?">
+              <button class="btn btn-soft-primary btn-sm" type="submit"><i class="ri-shield-star-line me-1"></i>Aplicar política de recuperación</button>
+            </form>
+            <form method="post" action="/anti-ban/line/${esc(id)}/reconnect" data-confirm="Reconectar cierra y reabre la conexión sin desvincular. Usalo solo si la línea está desconectada o no se actualizan los mensajes. ¿Continuar?">
+              <button class="btn btn-light btn-sm" type="submit"><i class="ri-refresh-line me-1"></i>Reconectar</button>
+            </form>
+            <form method="post" action="/anti-ban/line/${esc(id)}/repair" data-confirm="Se regeneran las claves de cifrado por contacto, sin desvincular. Usalo si los contactos ven «Esperando el mensaje». ¿Continuar?">
+              <button class="btn btn-light btn-sm" type="submit"><i class="ri-tools-line me-1"></i>Reparar cifrado</button>
+            </form>
+          </div>
+          <p class="ab-help">La pausa no se libera sola: cuando la entrega vuelva a estar por encima del umbral, usá «Liberar» en esta página o en Monitoreo. Reconectar y reparar cifrado no suben la entrega por sí solos; son para fallos de conexión o de cifrado.</p>
         </div></div>`
       : '';
     const events = antiBanEvents(200)
@@ -1058,8 +1145,9 @@ export function registerAntiBanRoutes(
         <a class="btn btn-soft-primary btn-sm ms-auto" href="/anti-ban/session/${esc(id)}"><i class="ri-equalizer-line me-1"></i>Política de la línea</a>
       </div>
       ${lineVerdictCard(verdict)}
+      ${suspiciousCard}
       <div class="ab-policy-layout">
-        <div class="ab-line-col">${quarantineCard}${failsCard}${tips}${history}</div>
+        <div class="ab-line-col">${recoveryCard}${quarantineCard}${failsCard}${tips}${history}</div>
         <aside class="ab-aside">${sessionCard(sess, health, hasOwnPolicy(id), { detail: false })}</aside>
       </div>
     </div>`;
@@ -1067,6 +1155,76 @@ export function registerAntiBanRoutes(
       subtitle: 'Por qué la línea tiene este color, cómo solucionarlo y qué hizo el anti-baneo.',
       activeHref: '/anti-ban',
     });
+  });
+
+  // Acciones de conexión desde el detalle: reconectar o reparar cifrado.
+  app.post(
+    '/anti-ban/line/:id/reconnect',
+    ...guard,
+    wrap(async (req: Request, res: Response) => {
+      const id = validSessionId(req.params.id);
+      if (!id) {
+        notFound(res);
+        return;
+      }
+      try {
+        await ctx.manager.reconnect(id);
+        audit('session.reconnect', {
+          session_id: id,
+          from: 'anti_ban',
+          by: (req as Request & { user?: { id: number } }).user?.id ?? null,
+        });
+        setFlash(res, 'ok', 'Reconexión solicitada. La línea vuelve a conectar en unos segundos.');
+      } catch (err) {
+        setFlash(res, 'error', `No se pudo reconectar: ${(err as Error).message}`);
+      }
+      res.redirect(`/anti-ban/line/${encodeURIComponent(id)}`);
+    }),
+  );
+
+  app.post(
+    '/anti-ban/line/:id/repair',
+    ...guard,
+    wrap(async (req: Request, res: Response) => {
+      const id = validSessionId(req.params.id);
+      if (!id) {
+        notFound(res);
+        return;
+      }
+      try {
+        const removed = await ctx.manager.repairEncryption(id);
+        setFlash(
+          res,
+          'ok',
+          removed
+            ? `Cifrado reparado (${removed} clave(s) regeneradas). La línea se reconecta sola.`
+            : 'Cifrado reparado. La línea se reconecta sola; si el problema sigue, usá «Empezar de cero» en Conexión.',
+        );
+      } catch (err) {
+        setFlash(res, 'error', `No se pudo reparar el cifrado: ${(err as Error).message}`);
+      }
+      res.redirect(`/anti-ban/line/${encodeURIComponent(id)}`);
+    }),
+  );
+
+  // Política de recuperación para una línea con entrega baja o límite temporal.
+  app.post('/anti-ban/session/:id/recovery', ...guard, (req: Request, res: Response) => {
+    const id = validSessionId(req.params.id);
+    if (!id) {
+      notFound(res);
+      return;
+    }
+    const base = getPolicy(id);
+    upsertPolicy(id, { ...RECOVERY_POLICY, optout_keywords: base.optout_keywords });
+    recalcular(id);
+    audit('anti_ban.policy_updated', {
+      scope: 'session',
+      session_id: id,
+      preset: 'recovery',
+      by: (req as Request & { user?: { id: number } }).user?.id ?? null,
+    });
+    setFlash(res, 'ok', 'Política de recuperación aplicada: 150 mensajes/día, 30 por hora y 20–40 s entre mensajes. Dejá la línea en pausa 24–48 h.');
+    res.redirect(`/anti-ban/line/${encodeURIComponent(id)}`);
   });
 
   app.get('/anti-ban/session/:id', ...guard, (req: Request, res: Response) => {
@@ -1131,6 +1289,10 @@ export function registerAntiBanRoutes(
 
   app.post('/anti-ban/session/:id/reset', ...guard, (req: Request, res: Response) => {
     const id = String(req.params.id);
+    if (!getPolicy(id).warmup_enabled) {
+      res.redirect(back(res, 'monitoreo', 'El calentamiento está desactivado en esta línea.', 'error'));
+      return;
+    }
     resetTrust(id);
     recalcular(id);
     audit('anti_ban.trust_reset', { session_id: id });

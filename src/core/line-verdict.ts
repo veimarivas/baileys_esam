@@ -101,6 +101,80 @@ export function recentFailures(sessionId: string, limit = 10): RecentFailure[] {
   }));
 }
 
+export interface SuspiciousBatch {
+  batchId: number;
+  batchName: string | null;
+  total: number;
+  unacked: number;
+  /** Cuántos envíos del lote usan el mismo archivo. */
+  sameMedia: number;
+  contentType: string;
+  firstAt: string;
+  lastAt: string;
+  /** Horas desde el último envío del lote. */
+  ageHours: number;
+}
+
+/**
+ * Detecta un lote reciente con muchos mensajes sin acuse y el mismo archivo
+ * repetido. Es la señal típica de un límite temporal de WhatsApp por ráfaga:
+ * la línea sigue conectada y el teléfono funciona, pero WhatsApp deja de
+ * confirmar la entrega masiva por un tiempo.
+ */
+export function suspiciousBatch(sessionId: string): SuspiciousBatch | null {
+  const since = new Date(Date.now() - 86_400_000).toISOString();
+  const settled = new Date(Date.now() - SETTLE_MINUTES * 60_000).toISOString();
+  const candidate = get<{
+    batch_id: number;
+    batch_name: string | null;
+    total: number;
+    unacked: number;
+    first_at: string;
+    last_at: string;
+  }>(
+    `SELECT bi.batch_id, b.name AS batch_name, COUNT(*) AS total,
+            SUM(CASE WHEN m.status = 'sent' THEN 1 ELSE 0 END) AS unacked,
+            MIN(bi.updated_at) AS first_at, MAX(bi.updated_at) AS last_at
+       FROM batch_items bi
+       JOIN batches b ON b.id = bi.batch_id
+       LEFT JOIN messages m ON m.wa_message_id = bi.message_id AND m.session_id = b.session_id
+      WHERE b.session_id = ? AND bi.created_at >= ?
+        AND bi.status = 'sent' AND bi.updated_at <= ?
+        AND bi.content_type IN ('image', 'video', 'document')
+      GROUP BY bi.batch_id
+     HAVING total >= 8 AND unacked >= 5 AND unacked * 1.0 / total >= 0.6
+      ORDER BY unacked DESC, last_at DESC
+      LIMIT 1`,
+    sessionId,
+    since,
+    settled,
+  );
+  if (!candidate) return null;
+  const items = all<{ media_path: string | null; content_type: string }>(
+    `SELECT media_path, content_type FROM batch_items WHERE batch_id = ? AND status = 'sent'`,
+    candidate.batch_id,
+  );
+  const mediaCounts = new Map<string, number>();
+  for (const item of items) {
+    const key = item.media_path || `type:${item.content_type}`;
+    mediaCounts.set(key, (mediaCounts.get(key) ?? 0) + 1);
+  }
+  const sameMedia = Math.max(0, ...mediaCounts.values());
+  if (sameMedia < 5) return null;
+  const lastAt = candidate.last_at;
+  return {
+    batchId: Number(candidate.batch_id),
+    batchName: candidate.batch_name,
+    total: Number(candidate.total),
+    unacked: Number(candidate.unacked),
+    sameMedia,
+    contentType: items[0]?.content_type || 'archivo',
+    firstAt: candidate.first_at,
+    lastAt,
+    ageHours: Math.max(0, (Date.now() - Date.parse(lastAt)) / 3_600_000),
+  };
+}
+
 export interface QuarantineInfo {
   reason: string;
   since: string | null;

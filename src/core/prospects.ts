@@ -77,6 +77,39 @@ export function prospectNoteId(ref: string): number | null {
   return get<{ id: number }>('SELECT id FROM contact_notes WHERE prospect_ref = ? ORDER BY id DESC LIMIT 1', ref)?.id ?? null;
 }
 
+export interface ProspectInfo {
+  ref: string;
+  estado: string;
+  estado_label: string;
+  programa: string | null;
+}
+
+/** Prospecto activo de una persona (por número), si tiene seguimiento en Marketing. */
+export function prospectInfo(phoneKey: string | null): ProspectInfo | null {
+  if (!phoneKey) return null;
+  const row = get<{ prospect_ref: string; prospect_meta: string | null }>(
+    `SELECT n.prospect_ref, n.prospect_meta
+       FROM contact_notes n JOIN contacts ct ON ct.id = n.contact_id
+      WHERE ct.phone_key = ? AND n.prospect_ref IS NOT NULL AND n.deleted_at IS NULL
+      ORDER BY n.id DESC LIMIT 1`,
+    phoneKey,
+  );
+  if (!row?.prospect_ref) return null;
+  let meta: Partial<ProspectMeta> = {};
+  try {
+    meta = row.prospect_meta ? (JSON.parse(row.prospect_meta) as ProspectMeta) : {};
+  } catch {
+    meta = {};
+  }
+  const estado = String(meta.estado || 'nuevo');
+  return {
+    ref: row.prospect_ref,
+    estado,
+    estado_label: String(meta.estado_label || PROSPECT_STATES[estado] || 'Prospecto'),
+    programa: meta.programa ? String(meta.programa) : null,
+  };
+}
+
 /**
  * Crea o actualiza el seguimiento del prospecto. Devuelve la nota y si se creó.
  * Lanza ProspectError si el asesor no tiene usuario o línea en Seguimiento ESAM.

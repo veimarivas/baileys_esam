@@ -22,6 +22,9 @@ FROM node:24-alpine AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
 
+# Zona horaria: sin tzdata, musl/SQLite no puede resolver TZ y la base queda en UTC.
+RUN apk add --no-cache tzdata
+
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 

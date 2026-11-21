@@ -310,6 +310,12 @@ export function upsertUser(input: UpsertUser): UserRow {
   const username = (input.username ?? '').trim();
   const email = input.email || (input.sourceUid ? `cronogramas-${input.sourceUid}@esam.local` : null);
 
+  // El número identifica a un único usuario: si ya pertenece a otra cuenta no
+  // se reasigna (evita que dos usuarios compartan la misma línea de WhatsApp).
+  const numeroEntrante = input.numero ? normalizePhone(input.numero) : input.numero === null ? null : undefined;
+  const numeroEnUso = numeroEntrante ? userWithNumber(numeroEntrante, user?.id) : undefined;
+  const numeroFinal = numeroEnUso ? undefined : numeroEntrante;
+
   if (!user) {
     const created = run(
       `INSERT INTO users (name, username, email, password, source, source_uid, esam_autorizado, esam_area, esam_numero, esam_roles, created_at, updated_at)
@@ -322,7 +328,7 @@ export function upsertUser(input: UpsertUser): UserRow {
       input.sourceUid ?? null,
       input.autorizado ? 1 : 0,
       input.area ?? null,
-      input.numero ?? null,
+      numeroFinal ?? null,
       JSON.stringify(input.roles ?? []),
       nowIso(),
       nowIso(),
@@ -344,7 +350,7 @@ export function upsertUser(input: UpsertUser): UserRow {
     input.sourceUid ?? null,
     input.autorizado !== undefined ? (input.autorizado ? 1 : 0) : user.esam_autorizado,
     input.area ?? user.esam_area,
-    input.numero ?? user.esam_numero,
+    numeroFinal === undefined ? user.esam_numero : numeroFinal,
     JSON.stringify(input.roles ?? esamRoles(user)),
     nowIso(),
     user.id,
@@ -396,6 +402,102 @@ interface SessionLite {
   sede_id?: number | null;
 }
 
+type SessionInvalidator = (sessionId: string) => void;
+let invalidateSession: SessionInvalidator | null = null;
+
+/**
+ * El proceso principal registra aquí cómo desconectar una línea en caliente.
+ * Se usa cuando el número autorizado cambia y la línea está vinculada con otro.
+ */
+export function setSessionInvalidator(fn: SessionInvalidator | null): void {
+  invalidateSession = fn;
+}
+
+function requestSessionInvalidation(ids: string[]): void {
+  for (const id of ids) {
+    try {
+      invalidateSession?.(id);
+    } catch {
+      // La reconciliación en base ya quedó hecha; si falla el socket se corrige al reconectar.
+    }
+  }
+}
+
+function digitsOf(value: string | null | undefined): string {
+  return (value ?? '').replace(/\D+/g, '');
+}
+
+/** Usuario que ya tiene registrado ese número (para impedir duplicados). */
+function userWithNumber(numero: string, exceptId?: number): UserRow | undefined {
+  const wanted = digitsOf(numero);
+  if (!wanted) return undefined;
+  const rows = all<{ id: number; name: string; esam_numero: string | null }>('SELECT id, name, esam_numero FROM users');
+  const hit = rows.find((r) => r.id !== exceptId && digitsOf(r.esam_numero) === wanted);
+  return hit ? findById(hit.id) : undefined;
+}
+
+/**
+ * Propaga el número del usuario a sus líneas. Si una línea quedó vinculada con
+ * otro número, se bloquea y se desvincula: el número registrado es la identidad
+ * del usuario y no puede operar con uno distinto.
+ */
+export function reconcileUserNumber(user: UserRow, previousNumber?: string | null): string[] {
+  const ownerUid = user.source_uid ?? String(user.id);
+  const numero = digitsOf(user.esam_numero);
+  const anterior = digitsOf(previousNumber);
+  const now = nowIso();
+  const sessions = all<SessionLite>('SELECT id, name, expected_phone, phone, owner_uid FROM sessions');
+  const affected: string[] = [];
+  for (const s of sessions) {
+    const owns = s.owner_uid === ownerUid;
+    const matchesPrevious = !!anterior && digitsOf(s.expected_phone) === anterior;
+    if (!owns && !matchesPrevious) continue;
+
+    if (!numero) {
+      // Sin número autorizado no hay línea válida para este usuario.
+      run(
+        `UPDATE sessions
+           SET expected_phone = NULL, phone = NULL, phone_verified_at = NULL,
+               status = 'blocked',
+               blocked_reason = 'El usuario no tiene número de WhatsApp autorizado',
+               owner_uid = ?, updated_at = ?
+         WHERE id = ?`,
+        ownerUid,
+        now,
+        s.id,
+      );
+      affected.push(s.id);
+      continue;
+    }
+
+    const vinculado = digitsOf(s.phone);
+    const mismatch = !!vinculado && vinculado !== numero;
+    run(
+      `UPDATE sessions
+         SET owner_uid = ?, owner_name = ?, owner_email = ?, expected_phone = ?,
+             status = CASE WHEN ? = 1 THEN 'blocked' ELSE status END,
+             blocked_reason = CASE WHEN ? = 1 THEN 'El número vinculado no es el autorizado por ESAM' ELSE blocked_reason END,
+             phone = CASE WHEN ? = 1 THEN NULL ELSE phone END,
+             phone_verified_at = CASE WHEN ? = 1 THEN NULL ELSE phone_verified_at END,
+             updated_at = ?
+       WHERE id = ?`,
+      ownerUid,
+      user.name,
+      user.email,
+      numero,
+      mismatch ? 1 : 0,
+      mismatch ? 1 : 0,
+      mismatch ? 1 : 0,
+      mismatch ? 1 : 0,
+      now,
+      s.id,
+    );
+    if (mismatch) affected.push(s.id);
+  }
+  requestSessionInvalidation(affected);
+  return affected;
+}
+
 /**
  * Asegura que exista una sesión de WhatsApp vinculada al número del usuario y
  * la marca como suya (`owner_uid` + `expected_phone`).
@@ -408,7 +510,7 @@ interface SessionLite {
  * Devuelve el id de la sesión o `null` si el usuario no tiene número.
  */
 export function ensureUserSession(user: UserRow): string | null {
-  const numero = (user.esam_numero ?? '').replace(/\D+/g, '');
+  const numero = digitsOf(user.esam_numero);
   const ownerUid = user.source_uid ?? String(user.id);
   const now = nowIso();
 
@@ -429,16 +531,24 @@ export function ensureUserSession(user: UserRow): string | null {
 
   const sessions = all<SessionLite>('SELECT id, name, expected_phone, phone, owner_uid FROM sessions');
   const match = sessions.find((s) => {
-    const exp = (s.expected_phone ?? '').replace(/\D+/g, '');
-    const ph = (s.phone ?? '').replace(/\D+/g, '');
-    return exp === numero || ph === numero || s.owner_uid === ownerUid;
-  });
+    const exp = digitsOf(s.expected_phone);
+    const ph = digitsOf(s.phone);
+    return exp === numero || ph === numero;
+  }) ?? sessions.find((s) => s.owner_uid === ownerUid);
 
   if (match) {
+    // El número registrado manda: si la línea tenía otro número vinculado, se
+    // bloquea y se pide volver a vincular (el número es la identidad del usuario).
+    const vinculado = digitsOf(match.phone);
+    const mismatch = !!vinculado && vinculado !== numero;
     run(
       `UPDATE sessions
          SET owner_uid = ?, owner_name = ?, owner_email = ?,
-             expected_phone = COALESCE(NULLIF(expected_phone, ''), ?),
+             expected_phone = ?,
+             status = CASE WHEN ? = 1 THEN 'blocked' ELSE status END,
+             blocked_reason = CASE WHEN ? = 1 THEN 'El número vinculado no es el autorizado por ESAM' ELSE blocked_reason END,
+             phone = CASE WHEN ? = 1 THEN NULL ELSE phone END,
+             phone_verified_at = CASE WHEN ? = 1 THEN NULL ELSE phone_verified_at END,
              sede_id = COALESCE(?, sede_id),
              area = ?,
              updated_at = ?
@@ -447,11 +557,16 @@ export function ensureUserSession(user: UserRow): string | null {
       user.name,
       user.email,
       numero,
+      mismatch ? 1 : 0,
+      mismatch ? 1 : 0,
+      mismatch ? 1 : 0,
+      mismatch ? 1 : 0,
       user.sede_id,
       user.esam_area,
       now,
       match.id,
     );
+    if (mismatch) requestSessionInvalidation([match.id]);
     return match.id;
   }
 
@@ -459,19 +574,31 @@ export function ensureUserSession(user: UserRow): string | null {
   const id = `user-${ownerUid}`;
   const existingById = get<SessionLite>('SELECT id, name, expected_phone, phone, owner_uid FROM sessions WHERE id = ?', id);
   if (existingById) {
+    const vinculado = digitsOf(existingById.phone);
+    const mismatch = !!vinculado && vinculado !== numero;
     run(
       `UPDATE sessions SET owner_uid = ?, owner_name = ?, owner_email = ?,
-         expected_phone = ?, sede_id = COALESCE(?, sede_id), area = ?,
+         expected_phone = ?,
+         status = CASE WHEN ? = 1 THEN 'blocked' ELSE status END,
+         blocked_reason = CASE WHEN ? = 1 THEN 'El número vinculado no es el autorizado por ESAM' ELSE blocked_reason END,
+         phone = CASE WHEN ? = 1 THEN NULL ELSE phone END,
+         phone_verified_at = CASE WHEN ? = 1 THEN NULL ELSE phone_verified_at END,
+         sede_id = COALESCE(?, sede_id), area = ?,
          updated_at = ? WHERE id = ?`,
       ownerUid,
       user.name,
       user.email,
       numero,
+      mismatch ? 1 : 0,
+      mismatch ? 1 : 0,
+      mismatch ? 1 : 0,
+      mismatch ? 1 : 0,
       user.sede_id,
       user.esam_area,
       now,
       id,
     );
+    if (mismatch) requestSessionInvalidation([id]);
     return id;
   }
   run(
@@ -551,6 +678,8 @@ export function createLocalUser(input: LocalUserInput): UserRow {
   if (!numero || numero.length < 8 || numero.length > 15) throw new Error('El número de WhatsApp no es válido.');
   if (findByLogin(username)) throw new Error('Ese usuario ya existe.');
   if (email && findByEmail(email)) throw new Error('Ese correo ya está registrado.');
+  const repetido = userWithNumber(numero);
+  if (repetido) throw new Error(`Ese número de WhatsApp ya está registrado para ${repetido.name}.`);
   const now = nowIso();
   const created = run(
     `INSERT INTO users (name, username, email, password, source, esam_autorizado, esam_area, esam_numero,
@@ -606,6 +735,10 @@ export function updateManagedUser(id: number, patch: ManagedUserPatch): UserRow 
   }
   const numero = patch.numero !== undefined ? (patch.numero ? normalizePhone(patch.numero) : null) : current.esam_numero;
   if (numero && (numero.length < 8 || numero.length > 15)) throw new Error('El número de WhatsApp no es válido.');
+  if (numero) {
+    const repetido = userWithNumber(numero, id);
+    if (repetido) throw new Error(`Ese número de WhatsApp ya está registrado para ${repetido.name}.`);
+  }
   if (patch.password && patch.password.length < 6) throw new Error('La contraseña debe tener al menos 6 caracteres.');
   const roles = patch.preserveRoles ? esamRoles(current) : (patch.roles ?? esamRoles(current));
   const area = patch.preserveRoles ? current.esam_area : areaForLocalRoles(roles);
@@ -627,6 +760,12 @@ export function updateManagedUser(id: number, patch: ManagedUserPatch): UserRow 
   );
   const user = findById(id)!;
   syncUserSessions(user);
+  // Si el número cambió, la línea del usuario debe apuntar al nuevo y cualquier
+  // número distinto ya vinculado se rechaza (el número es su identidad).
+  if (digitsOf(current.esam_numero) !== digitsOf(user.esam_numero)) {
+    reconcileUserNumber(user, current.esam_numero);
+  }
+  ensureUserSession(user);
   return user;
 }
 

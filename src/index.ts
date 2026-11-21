@@ -3,7 +3,7 @@ import { startReplyFollowupWorker } from './core/reply-followup.js';
 import { startPushWorker } from './core/push.js';
 import { startConversationStateWorker } from './core/conversation-state.js';
 import { startDailyDigestWorker } from './core/daily-digest.js';
-import { listUsers } from './auth/users.js';
+import { listUsers, setSessionInvalidator } from './auth/users.js';
 import { config } from './config.js';
 import { logger } from './logger.js';
 import { migrate } from './db/index.js';
@@ -34,6 +34,14 @@ async function main(): Promise<void> {
 
   const manager = new SessionManager();
   const runner = new BatchRunner(manager);
+
+  // Si el número autorizado del usuario cambia, la línea vinculada con otro
+  // número se desvincula en caliente (no espera al próximo reinicio).
+  setSessionInvalidator((sessionId) => {
+    void manager
+      .logout(sessionId)
+      .catch((err) => logger.warn({ err: (err as Error).message, sessionId }, 'No se pudo desvincular la línea con número no autorizado'));
+  });
 
   // Auto-respuestas: al recibir un texto, se busca una regla y se responde.
   manager.onIncomingText((sessionId, chatId, text) => {

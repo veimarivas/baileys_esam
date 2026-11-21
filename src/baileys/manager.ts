@@ -696,12 +696,14 @@ export class SessionManager implements OutboundSender {
     const row = this.snapshot(sessionId);
     const normalized = normalizePhone(phone);
 
-    // Número autorizado: el de la sesión, el global, o el del usuario dueño
-    // (cronogramas). Si ninguno está definido, se permite (modo bootstrap).
+    // Número autorizado: manda el número registrado del usuario dueño; si no,
+    // el de la sesión o el global. Sin ninguno, se permite (modo bootstrap).
     let expected = row.expected_phone ?? getConfig('expected_phone');
-    if (!expected && row.owner_uid) {
+    if (row.owner_uid) {
+      // Los usuarios locales guardan `owner_uid = id`; los de cronogramas, su source_uid.
       const owner = get<{ esam_numero: string | null }>(
-        'SELECT esam_numero FROM users WHERE source_uid = ?',
+        'SELECT esam_numero FROM users WHERE source_uid = ? OR CAST(id AS TEXT) = ? LIMIT 1',
+        row.owner_uid,
         row.owner_uid,
       );
       if (owner?.esam_numero) expected = normalizePhone(owner.esam_numero);
@@ -709,6 +711,7 @@ export class SessionManager implements OutboundSender {
 
     if (expected && normalizePhone(expected) !== normalized) {
       logger.warn({ sessionId, expected, phone }, 'Número vinculado no autorizado: se desvincula');
+      audit('session.number_blocked', { session_id: sessionId, expected, phone: normalized });
       const session = this.sessions.get(sessionId);
       await session?.logout();
       this.sessions.delete(sessionId);

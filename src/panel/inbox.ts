@@ -135,6 +135,14 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
       res.status(404).json({ error: 'Sesión de WhatsApp no encontrada.' });
       return null;
     }
+    // El número registrado es la identidad del usuario: si la línea quedó
+    // vinculada con otro, no se opera (ni lectura ni envío) hasta corregirla.
+    const esperado = (session.expected_phone ?? '').replace(/\D+/g, '');
+    const vinculado = (session.phone ?? '').replace(/\D+/g, '');
+    if (esperado && vinculado && esperado !== vinculado) {
+      res.status(409).json({ error: 'Esta línea está vinculada a un número distinto del autorizado. Vinculá tu número en Conexión.' });
+      return null;
+    }
     const { chatId, conv } = ctx.resolveChatParam(sessionId, chatParam);
     if (conv && !conversations.canAccessConversation(user, conv as never)) {
       res.status(403).json({ error: 'No tenés acceso a esta conversación.' });

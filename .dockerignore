@@ -1,0 +1,19 @@
+# No enviar documentación ni archivos locales al contexto/imagen.
+**/*.md
+.git
+.github
+.agents
+.claude
+.vscode
+.idea
+node_modules
+dist
+data
+storage
+test
+.env
+.env.*
+*.log
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm

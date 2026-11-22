@@ -5,6 +5,7 @@ import { get } from '../db/index.js';
 import { logger } from '../logger.js';
 import { SessionManager } from '../baileys/manager.js';
 import { registerWebhook } from '../core/webhooks.js';
+import { addOptout, isBlocked, listOptouts, normalizeChatId } from '../core/optout.js';
 import { typeForMime } from '../core/phone.js';
 import { systemHealth } from '../core/system-health.js';
 
@@ -13,6 +14,31 @@ function ah(fn: (req: Request, res: Response) => Promise<unknown>) {
   return (req: Request, res: Response, next: NextFunction) => {
     fn(req, res).catch(next);
   };
+}
+
+/**
+ * La segunda barrera del opt-out, para los envíos MASIVOS que llegan por API.
+ *
+ * Hasta acá solo el motor de lotes de este gateway (`core/batches.ts`) miraba
+ * la lista de «no enviar». Los envíos que entran por estas rutas —que es lo que
+ * usa el CRM— salían igual a quien había pedido la baja. Si el CRM se olvidaba
+ * de filtrar, no había nada detrás.
+ *
+ * **Solo con `bulk: true`**, y a propósito: el gateway no puede distinguir un
+ * masivo de una respuesta 1:1, y bloquear las respuestas sería un error. Una
+ * persona que pidió la baja y después escribe «hola, quiero info del programa»
+ * tiene que poder recibir una respuesta: lo que no quiere es publicidad. El que
+ * manda decide qué es un masivo; el gateway lo hace cumplir.
+ *
+ * Responde 409 y no 4xx genérico para que el llamador pueda distinguir «no se
+ * mandó porque pidió la baja» de un error de verdad.
+ */
+function bloqueadoParaMasivo(req: Request, res: Response, chatId: string): boolean {
+  if (req.body?.bulk === true && isBlocked(chatId)) {
+    res.status(409).json({ message: 'El destinatario pidió no recibir mensajes.', blocked: true });
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -145,6 +171,52 @@ export function createGatewayApp(manager: SessionManager) {
     }),
   );
 
+  // ── Opt-out (lista de «no enviar») ─────────────────────────────────────────
+  //
+  // Para que un CRM conectado pueda mantener su lista sincronizada con esta en
+  // los dos sentidos. La lista es GLOBAL —no por línea—: quien pidió la baja la
+  // pidió a la institución, no a un número. El `:sessionId` de la ruta se
+  // guarda como dato de origen y mantiene la forma de las demás rutas.
+
+  app.get(
+    '/api/sessions/:sessionId/optouts',
+    ah(async (req, res) => {
+      // `since` es un ISO: los `created_at` se guardan con el mismo formato,
+      // así que la comparación de texto ordena bien. Sin `since`, la lista
+      // completa (es la primera sincronización).
+      const since = typeof req.query.since === 'string' ? req.query.since : '';
+      const rows = listOptouts().filter((r) => !since || r.created_at > since);
+      res.json(
+        rows.map((r) => ({
+          chatId: r.chat_id,
+          phone: r.phone,
+          reason: r.reason,
+          source: r.source,
+          sessionId: r.session_id,
+          createdAt: r.created_at,
+        })),
+      );
+    }),
+  );
+
+  app.post(
+    '/api/sessions/:sessionId/optouts',
+    ah(async (req, res) => {
+      const normalized = normalizeChatId(String(req.body?.chatId ?? ''));
+      if (!normalized) {
+        res.status(422).json({ message: 'chatId inválido.' });
+        return;
+      }
+      addOptout(
+        normalized,
+        String(req.body?.reason ?? 'Solicitó la baja (desde el CRM)'),
+        String(req.body?.source ?? 'crm'),
+        String(req.params.sessionId),
+      );
+      res.status(201).json({ chatId: normalized });
+    }),
+  );
+
   // ── Contactos y grupos ─────────────────────────────────────────────────────
 
   app.get(
@@ -184,6 +256,7 @@ export function createGatewayApp(manager: SessionManager) {
     ah(async (req, res) => {
       const chatId = String(req.body?.chatId ?? '');
       const text = String(req.body?.text ?? '');
+      if (bloqueadoParaMasivo(req, res, chatId)) return;
       const result = await manager.sendText(String(req.params.sessionId), chatId, text);
       res.json(result);
     }),
@@ -202,6 +275,7 @@ export function createGatewayApp(manager: SessionManager) {
       `/api/sessions/:sessionId/messages/${route}`,
       ah(async (req, res) => {
         const chatId = String(req.body?.chatId ?? '');
+        if (bloqueadoParaMasivo(req, res, chatId)) return;
         const mimetype = String(req.body?.mimetype ?? 'application/octet-stream');
         const contents = Buffer.from(String(req.body?.base64 ?? ''), 'base64');
         if (contents.length === 0) {

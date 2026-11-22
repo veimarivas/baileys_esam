@@ -867,6 +867,62 @@ export class SessionManager implements OutboundSender {
     };
   }
 
+  /**
+   * Avisa a los webhooks de un mensaje ENTRANTE.
+   *
+   * Se usa desde el mensaje en vivo y desde el historial/offline: el CRM tiene
+   * que ver la conversacion aunque el telefono haya estado desconectado.
+   */
+  private dispatchInbound(sessionId: string, msg: InboundMessage, convName: string | null): void {
+    const media = msg.mediaBuffer && msg.mediaMime && msg.mediaBuffer.length <= INLINE_MEDIA_LIMIT
+      ? { mimetype: msg.mediaMime, filename: msg.filename, data: msg.mediaBuffer.toString('base64') }
+      : undefined;
+
+    void dispatchEvent(sessionId, 'message.received', {
+      kind: msg.isGroup ? 'group' : 'individual',
+      from: msg.chatId,
+      isGroup: msg.isGroup,
+      contact: { pushName: msg.isGroup ? null : (msg.pushName ?? convName), name: msg.isGroup ? null : (msg.pushName ?? convName) },
+      group: msg.isGroup ? { id: msg.chatId, name: convName } : null,
+      participant: msg.isGroup ? { id: msg.senderJid ?? null, name: msg.pushName ?? null } : null,
+      type: msg.type,
+      body: msg.body,
+      id: msg.id,
+      timestamp: msg.timestamp,
+      hasMedia: !!media,
+      media,
+    }).catch((err) => logger.warn({ err: (err as Error).message }, 'No se pudo despachar el webhook de mensaje'));
+  }
+
+  /**
+   * Avisa a los webhooks de un mensaje que salio desde el TELEFONO (u otro
+   * dispositivo vinculado). Sin esto el CRM solo ve la mitad de la conversacion.
+   */
+  private dispatchFromPhone(sessionId: string, msg: InboundMessage, convName: string | null): void {
+    if (msg.isGroup) return;
+
+    void dispatchEvent(sessionId, 'message.sent', {
+      kind: 'individual',
+      from: msg.chatId,
+      isGroup: false,
+      contact: { pushName: msg.pushName ?? convName, name: msg.pushName ?? convName },
+      type: msg.type,
+      body: msg.body,
+      id: msg.id,
+      timestamp: msg.timestamp,
+      fromMe: true,
+      sender: 'phone',
+    }).catch((err) => logger.warn({ err: (err as Error).message }, 'No se pudo despachar el webhook de saliente'));
+  }
+
+  /** ¿El mensaje es lo bastante reciente para reenviarlo desde el historial? */
+  private isRecentForWebhook(msg: InboundMessage): boolean {
+    const minutes = Number(process.env.HISTORY_WEBHOOK_WINDOW_MINUTES ?? 30);
+    if (!Number.isFinite(minutes) || minutes <= 0) return false;
+    const ts = Number(msg.timestamp) * 1000;
+    return Number.isFinite(ts) && Date.now() - ts <= minutes * 60_000;
+  }
+
   private async onMessage(sessionId: string, msg: InboundMessage): Promise<void> {
     const row = this.byId(sessionId);
     if (!row) return;
@@ -934,6 +990,7 @@ export class SessionManager implements OutboundSender {
         content_type: msg.type,
         occurred_at: new Date(msg.timestamp * 1000).toISOString(),
       });
+      this.dispatchFromPhone(sessionId, msg, convName);
       return;
     }
 
@@ -985,20 +1042,7 @@ export class SessionManager implements OutboundSender {
 
     // Sin `await`: un receptor lento o caído no debe frenar la recepción (los
     // fallos quedan en la cola de reintentos de webhooks).
-    void dispatchEvent(sessionId, 'message.received', {
-      kind: msg.isGroup ? 'group' : 'individual',
-      from: msg.chatId,
-      isGroup: msg.isGroup,
-      contact: { pushName: msg.isGroup ? null : msg.pushName, name: msg.isGroup ? null : msg.pushName },
-      group: msg.isGroup ? { id: msg.chatId, name: convName } : null,
-      participant: msg.isGroup ? { id: msg.senderJid ?? null, name: msg.pushName ?? null } : null,
-      type: msg.type,
-      body: msg.body,
-      id: msg.id,
-      timestamp: msg.timestamp,
-      hasMedia: !!media,
-      media,
-    }).catch((err) => logger.warn({ err: (err as Error).message }, 'No se pudo despachar el webhook de mensaje'));
+    this.dispatchInbound(sessionId, msg, convName);
   }
 
   /**
@@ -1433,6 +1477,16 @@ export class SessionManager implements OutboundSender {
     // Historial (no un mensaje en vivo): el panel refresca el hilo, pero no debe
     // sonar ni avisar como si acabara de llegar.
     panelBus.publish('message', { sessionId, chatId: msg.chatId, direction: msg.fromMe ? 'out' : 'in', history: true, content_type: msg.type, occurred_at: new Date(msg.timestamp * 1000).toISOString() });
+
+    // Historial reciente: el CRM tambien tiene que enterarse. La ventana evita
+    // reenviar anos de mensajes en la primera sincronizacion.
+    if (!msg.isGroup && this.isRecentForWebhook(msg)) {
+      if (msg.fromMe) {
+        this.dispatchFromPhone(sessionId, msg, convName);
+      } else {
+        this.dispatchInbound(sessionId, msg, convName);
+      }
+    }
   }
 
   /**

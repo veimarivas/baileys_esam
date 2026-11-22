@@ -14,67 +14,108 @@ Este archivo es esa referencia. **No se aplica solo**: hay que editar el
 > (5.5 GB) y **las sesiones de las 7 líneas** (206 MB). Si se borran las
 > sesiones, hay que volver a escanear los 7 códigos QR.
 
-## 1. Límite de memoria (pendiente de aplicar)
+## 1. Límite de memoria — ✅ APLICADO el 22/11/2026
 
-Hoy el contenedor corre **sin `mem_limit`**. Consumo real medido el 21/11/2026:
-**198 MB**.
+Antes: **sin `mem_limit`**, es decir el contenedor podía tomar los 3.3 GB del
+host. Consumo real medido: 162 MB.
 
-En un servidor de 3.3 GB con 1.1 GB de swap ya en uso, un contenedor sin límite
-no es "uno que puede crecer": es el que se lleva a los demás cuando crece. Y
-este es justamente el que no conviene que caiga, porque es el único que ya está
-en producción.
+En un servidor con 1.1 GB de swap ya en uso, un contenedor sin límite no es "uno
+que puede crecer": es el que se lleva a los demás cuando crece. Y este es el
+único que ya está en producción.
+
+Quedó en el **override** del deploy
+(`/opt/sis/seguimiento_baileys_deploy/docker-compose.override.yml`), que es el
+archivo que describe este despliegue; el `docker-compose.yml` base no se tocó.
+Se guardó una copia previa como `docker-compose.override.yml.bak-AAAAMMDD-HHMM`.
 
 ```yaml
 services:
-  seguimiento:
-    # ... lo que ya está ...
+  seguimiento-test:
     mem_limit: 384m
-    logging:
-      driver: json-file
-      options: { max-size: '10m', max-file: '3' }
 ```
 
-384m y no 256m: deja casi el doble del consumo medido de margen para un pico de
-sincronización de historial, y sigue siendo la mitad de lo que hoy podría tomar
-sin que nada lo frene.
+Se aplicó recreando el contenedor:
 
-**Cómo verificar que no quedó corto**, los primeros días:
+```bash
+cd /opt/sis/seguimiento_baileys
+docker compose -f docker-compose.yml   -f /opt/sis/seguimiento_baileys_deploy/docker-compose.override.yml up -d
+```
+
+**Resultado medido:** `healthy` en 51 s, `HostConfig.Memory=402653184` (384 MiB),
+red `esam-crm` intacta, `OOMKilled=false`, `RestartCount=0`, 0 líneas de error en
+el arranque, y **las sesiones volvieron solas** (`sessions.ready` igual antes y
+después: las credenciales viven en el volumen, no en el contenedor). Consumo con
+el límite puesto: **108.8 MiB / 384 MiB = 28 %**.
+
+Vigilar los primeros días:
 
 ```bash
 docker stats --no-stream seguimiento-test
-# Si MEM % pasa del 85 % de forma sostenida, subir a 512m — no bajarlo de 384m.
-```
+# MEM % sostenido arriba del 85 % -> subir a 512m. No bajar de 384m.
 
-Si el proceso muere por OOM, Docker lo reinicia (`restart: unless-stopped`) y
-queda registrado:
-
-```bash
 docker inspect seguimiento-test --format '{{.State.OOMKilled}} {{.RestartCount}}'
+# 'true' alguna vez = el limite quedo corto y hay que subirlo.
 ```
 
-## 2. Copia del respaldo fuera del servidor (pendiente de aplicar)
+## 2. Copia del respaldo fuera del servidor (falta configurar el destino)
 
 Los respaldos diarios quedan en `data/backups`, **dentro del mismo volumen que
-respaldan**. `scripts/backup-offsite.cjs` manda la última copia a otro lado.
+respaldan**. `scripts/backup-offsite.sh` manda la última copia a otro host.
 
-Corre en el **host**, no en el contenedor: necesita la clave SSH del destino, y
-una clave que puede escribir en el respaldo no tiene por qué estar dentro de un
-proceso expuesto a internet.
+**Es un script de shell, no de Node, y eso no es una preferencia:** este
+servidor **no tiene Node instalado** (todo se compila dentro de Docker) y los
+respaldos están en un volumen de Docker, que solo lee root — y este usuario está
+en el grupo `docker` pero **no tiene sudo**. El único camino que existe acá es:
+
+```
+docker run --rm -v volumen:/data:ro <imagen> tar ...  |  ssh destino 'cat > ...'
+```
+
+El contenedor efímero lee el volumen y escribe un tar a su salida estándar; el
+`ssh` **del host** lo manda al destino. La clave del destino nunca entra a un
+contenedor, y menos al que mira internet.
+
+Un tar y no rsync de archivos sueltos porque cada respaldo trae **~51.000
+archivos de credenciales**: 51.000 transferencias chicas tardan muchísimo más
+que un stream.
 
 ```bash
-# en el host, una vez configurado OFFSITE_DEST en el .env del deploy
 cd /opt/sis/seguimiento_baileys_deploy
-npm run backup:offsite -- --dry-run   # muestra qué haría, sin tocar nada
-npm run backup:offsite
+./backup-offsite.sh --dry-run    # muestra los comandos exactos, no mueve nada
+OFFSITE_DEST=usuario@host:/ruta ./backup-offsite.sh
 ```
 
-Cron sugerido (04:00, después del respaldo interno de las 03:00):
+Sin `OFFSITE_DEST` informa y sale con 0: un cron que no tiene nada que hacer no
+es un error.
+
+**Cron sugerido — ojo con la hora:** el host va en **UTC** y el contenedor en
+**America/La_Paz**. El respaldo interno corre a las 03:00 La Paz, que son las
+**07:00 UTC**. Así que el cron del host va a las 08:00 UTC (04:00 La Paz), una
+hora después:
 
 ```
-0 4 * * * cd /opt/sis/seguimiento_baileys_deploy && npm run backup:offsite >> /var/log/backup-offsite.log 2>&1
+0 8 * * * /opt/sis/seguimiento_baileys_deploy/backup-offsite.sh >> /var/log/backup-offsite.log 2>&1
 ```
 
-Las variables están documentadas en `.env.example`.
+Variables en `.env.example`. Falta decidir **a dónde** se copia (D3 del plan).
+
+### Lo que se verificó el 22/11/2026
+
+El respaldo del día anterior pesaba **416 KB** para una base de **456 MB**, lo
+que parecía un respaldo roto. No lo era: esas copias son **de antes de la
+migración de datos de ayer**, cuando el volumen estaba casi vacío.
+
+Corriendo uno a mano para comprobarlo:
+
+```bash
+docker exec seguimiento-test node dist/cli/backup.js
+# base 426.7 MB, 51.440 archivos de credenciales, 21 s
+```
+
+El mecanismo funciona. **Pero ahora cada copia pesa ~636 MB**, y con
+`BACKUP_KEEP=7` el volumen va a crecer ~4.5 GB solo en respaldos. Con 61 GB
+libres no es urgente, y conviene decidirlo junto con la retención de media:
+bajar `BACKUP_KEEP` a 3 deja ~1.9 GB y sigue cubriendo tres días.
 
 ## 3. Retención de media (decisión pendiente)
 

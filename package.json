@@ -13,7 +13,6 @@
     "serve": "node scripts/run-forever.cjs",
     "restart": "node scripts/restart.cjs",
     "backup": "tsx src/cli/backup.ts",
-    "backup:offsite": "node scripts/backup-offsite.cjs",
     "check:assets": "node scripts/check-assets.cjs",
     "logs:rotate": "node scripts/rotate-logs.cjs",
     "test": "node --import tsx --test \"test/*.test.ts\"",

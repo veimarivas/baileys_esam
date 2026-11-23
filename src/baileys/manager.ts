@@ -79,6 +79,28 @@ function isStorableType(type: string | null | undefined): boolean {
  * Administra las sesiones (una instancia `WaSession` por fila de `sessions`),
  * persiste mensajes/conversaciones y despacha los webhooks.
  */
+/**
+ * Lo que el CRM necesita para dibujar el mensaje como en el panel y que antes
+ * no viajaba en el webhook: los datos de la tarjeta (contacto, encuesta,
+ * ubicación) y a qué mensaje responde. Campos NUEVOS y opcionales: un receptor
+ * que no los conoce los ignora.
+ */
+function webhookExtras(msg: InboundMessage): { meta: Record<string, unknown> | null; quoted: { id: string; body: string | null } | null } {
+  let meta: Record<string, unknown> | null = null;
+  if (msg.meta) {
+    try {
+      const parsed = JSON.parse(msg.meta);
+      meta = parsed && typeof parsed === 'object' ? parsed : null;
+    } catch {
+      meta = null;
+    }
+  }
+  return {
+    meta,
+    quoted: msg.quotedWaId ? { id: msg.quotedWaId, body: msg.quotedBody ? msg.quotedBody.slice(0, 300) : null } : null,
+  };
+}
+
 export class SessionManager implements OutboundSender {
   private sessions = new Map<string, WaSession>();
 
@@ -891,6 +913,7 @@ export class SessionManager implements OutboundSender {
       timestamp: msg.timestamp,
       hasMedia: !!media,
       media,
+      ...webhookExtras(msg),
     }).catch((err) => logger.warn({ err: (err as Error).message }, 'No se pudo despachar el webhook de mensaje'));
   }
 
@@ -912,6 +935,7 @@ export class SessionManager implements OutboundSender {
       timestamp: msg.timestamp,
       fromMe: true,
       sender: 'phone',
+      ...webhookExtras(msg),
     }).catch((err) => logger.warn({ err: (err as Error).message }, 'No se pudo despachar el webhook de saliente'));
   }
 
@@ -1604,6 +1628,19 @@ export class SessionManager implements OutboundSender {
     const targetWaId = msg.reaction?.targetWaId;
     const emoji = msg.reaction?.emoji ?? '';
     if (!targetWaId) return;
+    // Al CRM, solo las de chats individuales (un grupo no es un lead). Va antes
+    // de buscar el mensaje acá: el CRM lo correlaciona con SU copia aunque este
+    // gateway no lo tenga guardado (p. ej. historial anterior a la vinculación).
+    // `emoji` vacío = reacción quitada.
+    if (!msg.isGroup) {
+      void dispatchEvent(sessionId, 'message.reaction', {
+        messageId: targetWaId,
+        chatId: msg.chatId,
+        emoji,
+        fromMe: msg.fromMe,
+        actorName: msg.fromMe ? null : msg.pushName ?? null,
+      }).catch((err) => logger.warn({ err: (err as Error).message }, 'No se pudo despachar el webhook de reacción'));
+    }
     const target = get<{ id: number }>(
       'SELECT id FROM messages WHERE session_id = ? AND wa_message_id = ? LIMIT 1',
       sessionId,

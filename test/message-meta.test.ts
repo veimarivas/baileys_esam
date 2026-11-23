@@ -4,6 +4,8 @@ import {
   contactMeta,
   contactPreview,
   contactsArrayMeta,
+  locationMeta,
+  locationPreview,
   parseVCard,
   pollMeta,
 } from '../src/core/message-meta.js';
@@ -89,5 +91,27 @@ describe('pollMeta', () => {
   it('mantiene 0 para encuestas de varias respuestas', () => {
     const meta = pollMeta('Elegí los temas', [{ optionName: 'A' }, { optionName: 'B' }], 0);
     assert.equal(meta.selectable_count, 0);
+  });
+});
+
+/**
+ * La ubicación llegaba al CRM sin nada: ni coordenadas ni nombre. Ahora viaja
+ * en `meta` y el CRM puede dibujar la tarjeta con el enlace al mapa.
+ */
+describe('locationMeta', () => {
+  it('guarda coordenadas, nombre y dirección', () => {
+    const meta = locationMeta({ degreesLatitude: -17.78, degreesLongitude: -63.18, name: 'ESAM', address: 'Av. Busch' });
+    assert.deepEqual(meta, { kind: 'location', lat: -17.78, lng: -63.18, name: 'ESAM', address: 'Av. Busch' });
+    assert.equal(locationPreview(meta), 'ESAM');
+  });
+
+  it('marca la ubicación en vivo', () => {
+    assert.equal(locationMeta({ degreesLatitude: 1, degreesLongitude: 2 }, true)?.live, true);
+  });
+
+  it('sin coordenadas válidas no inventa un punto (0,0 es el golfo de Guinea)', () => {
+    assert.equal(locationMeta({ degreesLatitude: 0, degreesLongitude: 0 }), null);
+    assert.equal(locationMeta(null), null);
+    assert.equal(locationPreview(null), null);
   });
 });

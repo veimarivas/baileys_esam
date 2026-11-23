@@ -35,7 +35,17 @@ export interface PollMessageMeta {
   selectable_count: number;
 }
 
-export type MessageMeta = ContactMessageMeta | PollMessageMeta;
+/** Ubicación compartida (fija o en vivo). Antes se perdía: llegaba sin cuerpo. */
+export interface LocationMessageMeta {
+  kind: 'location';
+  lat: number;
+  lng: number;
+  name: string | null;
+  address: string | null;
+  live?: boolean;
+}
+
+export type MessageMeta = ContactMessageMeta | PollMessageMeta | LocationMessageMeta;
 
 /** Desescapa los valores de un vCard (saltos, comas y punto y coma). */
 function vcardText(value: string): string {
@@ -132,6 +142,30 @@ export function pollMeta(
       .slice(0, 12),
     selectable_count: Number.isFinite(rawCount) ? rawCount : 1,
   };
+}
+
+/** Metadatos de un `locationMessage` / `liveLocationMessage`, o null sin coordenadas. */
+export function locationMeta(
+  loc: { degreesLatitude?: number | null; degreesLongitude?: number | null; name?: string | null; address?: string | null } | null | undefined,
+  live = false,
+): LocationMessageMeta | null {
+  const lat = Number(loc?.degreesLatitude);
+  const lng = Number(loc?.degreesLongitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || (lat === 0 && lng === 0)) return null;
+  return {
+    kind: 'location',
+    lat,
+    lng,
+    name: String(loc?.name ?? '').trim() || null,
+    address: String(loc?.address ?? '').trim() || null,
+    ...(live ? { live: true } : {}),
+  };
+}
+
+/** Texto de la ubicación para la vista previa: su nombre, su dirección o «Ubicación». */
+export function locationPreview(meta: LocationMessageMeta | null): string | null {
+  if (!meta) return null;
+  return meta.name || meta.address || null;
 }
 
 /** Texto corto para la vista previa de la conversación. */

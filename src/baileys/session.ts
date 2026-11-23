@@ -27,6 +27,8 @@ import {
   contactMeta,
   contactsArrayMeta,
   contactPreview,
+  locationMeta,
+  locationPreview,
   metaJson,
   pollMeta,
 } from '../core/message-meta.js';
@@ -345,7 +347,12 @@ function describe(message: any): {
     };
   }
   if (m.stickerMessage) return { type: 'sticker', body: null, mime: m.stickerMessage.mimetype ?? 'image/webp', filename: null, seconds: null };
-  if (m.locationMessage) return { type: 'location', body: null, mime: null, filename: null, seconds: null };
+  // Ubicación: las coordenadas van en `meta` (antes se perdían: el webhook la
+  // mandaba sin cuerpo y el CRM solo sabía que «hubo una ubicación»).
+  if (m.locationMessage || m.liveLocationMessage) {
+    const meta = locationMeta(m.locationMessage ?? m.liveLocationMessage, !m.locationMessage);
+    return { type: 'location', body: locationPreview(meta), mime: null, filename: null, seconds: null, meta: metaJson(meta) };
+  }
   if (m.contactMessage) {
     const meta = contactMeta(m.contactMessage.displayName, m.contactMessage.vcard);
     return {

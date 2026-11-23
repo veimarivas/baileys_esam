@@ -199,6 +199,7 @@ export function migrate(): void {
   // Sedes y cargos de usuarios locales (creados desde el panel).
   addColumnIfMissing('users', 'sede_id', 'INTEGER');
   addColumnIfMissing('sessions', 'sede_id', 'INTEGER');
+  addColumnIfMissing('web_sessions', 'last_seen_at', 'TEXT');
   db.exec('CREATE INDEX IF NOT EXISTS idx_users_sede ON users(sede_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_sede ON sessions(sede_id)');
   // Heredar sede/área de la línea desde su dueño (para datos ya existentes).

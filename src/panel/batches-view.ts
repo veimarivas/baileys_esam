@@ -198,7 +198,14 @@ export function batchesPage(
       ? `<div class="bt-fail-hint is-${failHint.kind}"><i class="${FAIL_ICON[failHint.kind]}" aria-hidden="true"></i>${esc(failHint.title)}${failHint.count > 1 ? ` · ${failHint.count}` : ''}</div>`
       : '';
     const live = ['running', 'scheduled', 'paused', 'awaiting_confirmation'].includes(b.status) ? '1' : '0';
-    return `<div class="bt-row" data-batch="${b.id}" data-live="${live}" data-group="${filterGroup(b)}" data-failed="${b.failed > 0 ? 1 : 0}" data-line="${esc(b.session_id)}" data-search="${esc(search)}">
+    const tone = b.status === 'done'
+      ? 'is-done'
+      : ['running', 'scheduled', 'paused', 'awaiting_confirmation'].includes(b.status)
+        ? 'is-live'
+        : b.failed > 0
+          ? 'is-failed'
+          : 'is-other';
+    return `<div class="bt-row ${tone}" data-batch="${b.id}" data-live="${live}" data-group="${filterGroup(b)}" data-failed="${b.failed > 0 ? 1 : 0}" data-line="${esc(b.session_id)}" data-search="${esc(search)}">
       <div class="bt-time"><b>${esc(fmtTime(b.created_at))}</b><span>#${b.id}</span></div>
       <div class="bt-main">
         <a class="bt-name" href="/batches/${b.id}" title="${esc(b.name ?? 'Lote')}">${esc(b.name ?? 'Lote')}</a>
@@ -500,15 +507,23 @@ export function batchDetailPage(
   const ackRate = summary.sent ? Math.round((ackDelivered / summary.sent) * 100) : 0;
   const lowDelivery = b.status === 'done' && summary.sent >= 5 && summary.deliveredRate !== null && summary.deliveredRate < 75;
   const deliveryAlert = lowDelivery
-    ? `<div class="alert alert-warning d-flex gap-2 align-items-start" role="status">
-        <i class="ri-error-warning-line fs-5"></i>
-        <div><b>El lote terminó de procesarse, pero no todos los mensajes tienen acuse de entrega.</b>
-          De ${summary.sent} mensajes enviados, ${summary.delivered} tienen acuse o respuesta (${summary.deliveredRate}%):
-          ${ackDelivered} con acuse de entrega${replyOnly ? ` y ${replyOnly} respondieron sin acuse` : ''}. Los ${deliveryGap} restantes no tienen acuse ni respuesta.
-          El estado «Completado» solo indica que el sistema terminó de enviar; no significa que WhatsApp haya confirmado la entrega.
-          Anti-Baneo cuenta solo el acuse de entrega de WhatsApp (${ackDelivered} de ${summary.sent} = ${ackRate}%), por eso muestra un porcentaje menor.
-          <a href="/anti-ban/line/${encodeURIComponent(b.session_id)}" class="alert-link">Ver el detalle de la línea en Anti-Baneo →</a></div>
-      </div>`
+    ? `<details class="bd-callout is-warn">
+        <summary>
+          <span class="bd-callout-ic"><i class="ri-error-warning-line" aria-hidden="true"></i></span>
+          <span class="bd-callout-t">
+            <b>Entregabilidad: ${summary.delivered} de ${summary.sent} con acuse o respuesta</b>
+            <small>${summary.deliveredRate}% · ${deliveryGap} sin acuse. «Completado» no confirma la entrega.</small>
+          </span>
+          <i class="ri-arrow-down-s-line bd-callout-chev" aria-hidden="true"></i>
+        </summary>
+        <div class="bd-callout-body">
+          <p>De ${summary.sent} mensajes enviados, ${summary.delivered} tienen acuse o respuesta (${summary.deliveredRate}%):
+            ${ackDelivered} con acuse de entrega${replyOnly ? ` y ${replyOnly} respondieron sin acuse` : ''}. Los ${deliveryGap} restantes no tienen acuse ni respuesta.
+            El estado «Completado» solo indica que el sistema terminó de enviar; no significa que WhatsApp haya confirmado la entrega.</p>
+          <p>Anti-Baneo cuenta solo el acuse de entrega de WhatsApp (${ackDelivered} de ${summary.sent} = ${ackRate}%), por eso muestra un porcentaje menor.
+            <a href="/anti-ban/line/${encodeURIComponent(b.session_id)}">Ver el detalle de la línea en Anti-Baneo →</a></p>
+        </div>
+      </details>`
     : '';
 
   // Mensaje: único para todos o personalizado.
@@ -647,6 +662,22 @@ export function batchDetailPage(
       .map(([k, l, i]) => `<button type="button" class="bt-chip is-eng" data-st="${k}"><span class="${i}" aria-hidden="true"></span>${esc(l)}<b>${counts[k]}</b></button>`)
       .join('');
 
+  const itemsCard = `    <div class="bd-card bd-items">
+      <div class="bd-card-h"><span class="ri-group-line" aria-hidden="true"></span><h6>Destinatarios</h6>
+        <span class="bd-pill">${items.length}${extra.truncated ? ' (primeros)' : ''}</span></div>
+      <div class="bd-items-bar">
+        <div class="bt-chips">${chips}</div>
+        <label class="bt-search"><i class="ri-search-line" aria-hidden="true"></i><input type="search" id="bd-q" placeholder="Buscar nombre, número, mensaje o error…" aria-label="Buscar destinatarios" autocomplete="off" /></label>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0 bd-table">
+          <thead class="table-light"><tr><th>#</th><th>Destinatario</th><th>Estado</th><th>Hora</th><th>Lectura · respuesta</th><th>Mensaje</th><th>Detalle</th></tr></thead>
+          <tbody>${items.map((it, i) => itemRow(it, i + 1)).join('')}</tbody>
+        </table>
+      </div>
+      <div class="bt-empty" id="bd-empty" hidden><i class="ri-filter-off-line"></i> Ningún destinatario con estos filtros.</div>
+    </div>`;
+
   return `<div class="batch-detail" id="batch-detail" data-batch="${b.id}">
     <div class="bd-head">
       <a class="bd-back" href="/batches" title="Volver a Lotes" aria-label="Volver a Lotes"><i class="ri-arrow-left-line"></i></a>
@@ -708,29 +739,14 @@ export function batchDetailPage(
     </div>
 
     ${extra.error ? `<div class="alert alert-danger d-flex gap-2"><i class="ri-error-warning-line"></i><div>${esc(extra.error)}</div></div>` : ''}
-    ${engagementCard(summary, cobranza)}
-    ${followUpCard(b.id, { unread: counts.unread ?? 0, unreplied: Math.max(0, summary.sent - summary.replied), failed: b.failed }, items.find((i) => i.body)?.body ?? '')}
+    ${itemsCard}
 
     <div class="bd-grid">
-      ${ficha}
-      <div class="bd-col">${mensaje}${fallos}</div>
+      <div class="bd-col">${mensaje}${fallos}${followUpCard(b.id, { unread: counts.unread ?? 0, unreplied: Math.max(0, summary.sent - summary.replied), failed: b.failed }, items.find((i) => i.body)?.body ?? '')}</div>
+      <div class="bd-col">${ficha}${engagementCard(summary, cobranza)}</div>
     </div>
 
-    <div class="bd-card bd-items">
-      <div class="bd-card-h"><span class="ri-group-line" aria-hidden="true"></span><h6>Destinatarios</h6>
-        <span class="bd-pill">${items.length}${extra.truncated ? ' (primeros)' : ''}</span></div>
-      <div class="bd-items-bar">
-        <div class="bt-chips">${chips}</div>
-        <label class="bt-search"><i class="ri-search-line" aria-hidden="true"></i><input type="search" id="bd-q" placeholder="Buscar nombre, número, mensaje o error…" aria-label="Buscar destinatarios" autocomplete="off" /></label>
-      </div>
-      <div class="table-responsive">
-        <table class="table table-hover align-middle mb-0 bd-table">
-          <thead class="table-light"><tr><th>#</th><th>Destinatario</th><th>Estado</th><th>Hora</th><th>Lectura · respuesta</th><th>Mensaje</th><th>Detalle</th></tr></thead>
-          <tbody>${items.map((it, i) => itemRow(it, i + 1)).join('')}</tbody>
-        </table>
-      </div>
-      <div class="bt-empty" id="bd-empty" hidden><i class="ri-filter-off-line"></i> Ningún destinatario con estos filtros.</div>
-    </div>
+
   </div>
   <script>
   (function () {

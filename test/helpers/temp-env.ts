@@ -29,6 +29,9 @@ process.env.DEBUG_DUMP_MESSAGES = 'false';
 process.env.AUTO_VACUUM = 'false';
 // Las migraciones dejan avisos informativos en consola; en pruebas estorban.
 process.env.LOG_LEVEL = 'silent';
+// Política de sesiones del panel: 12 h absolutas y 8 h de inactividad.
+process.env.SESSION_TTL_HOURS = '12';
+process.env.SESSION_IDLE_MINUTES = '480';
 
 // Base temporal con el esquema completo. `migrate()` no corre al importar el
 // módulo (en producción lo llama `src/index.ts`), así que se aplica acá.

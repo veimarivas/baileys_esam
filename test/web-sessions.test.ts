@@ -2,7 +2,7 @@ import './helpers/temp-env.js';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { sessionStore } from '../src/auth/sessions.js';
-import { run } from '../src/db/index.js';
+import { get, run } from '../src/db/index.js';
 import { nowIso } from '../src/util/async.js';
 
 /**
@@ -56,6 +56,39 @@ describe('sesiones del panel', () => {
 
     run('UPDATE web_sessions SET expires_at = ? WHERE id = ?', new Date(Date.now() - 60_000).toISOString(), id);
     assert.equal(sessionStore.userId(cookie), null);
+  });
+
+  it('rechaza una sesión con más de 12 h desde su creación (aunque la cookie siga)', () => {
+    const userId = createUser();
+    const { cookie } = sessionStore.create(userId);
+    const id = cookie.split('.')[0];
+    const old = new Date(Date.now() - 13 * 3600_000).toISOString();
+
+    run('UPDATE web_sessions SET created_at = ?, last_seen_at = ? WHERE id = ?', old, nowIso(), id);
+    assert.equal(sessionStore.userId(cookie), null);
+  });
+
+  it('rechaza una sesión inactiva más de 8 h', () => {
+    const userId = createUser();
+    const { cookie } = sessionStore.create(userId);
+    const id = cookie.split('.')[0];
+    const idle = new Date(Date.now() - 9 * 3600_000).toISOString();
+
+    run('UPDATE web_sessions SET last_seen_at = ? WHERE id = ?', idle, id);
+    assert.equal(sessionStore.userId(cookie), null);
+  });
+
+  it('mantiene la sesión activa y actualiza la última actividad', () => {
+    const userId = createUser();
+    const { cookie } = sessionStore.create(userId);
+    const id = cookie.split('.')[0];
+    const recent = new Date(Date.now() - 2 * 3600_000).toISOString();
+
+    run('UPDATE web_sessions SET last_seen_at = ? WHERE id = ?', recent, id);
+    assert.equal(sessionStore.userId(cookie), userId);
+
+    const row = get<{ last_seen_at: string }>('SELECT last_seen_at FROM web_sessions WHERE id = ?', id);
+    assert.ok(row && Date.parse(row.last_seen_at) > Date.now() - 60_000);
   });
 
   it('deja de aceptar la cookie al cerrar sesión', () => {

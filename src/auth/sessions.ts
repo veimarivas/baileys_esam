@@ -9,6 +9,7 @@ export interface WebSession {
   user_id: number;
   created_at: string;
   expires_at: string;
+  last_seen_at: string | null;
 }
 
 /**
@@ -20,16 +21,28 @@ export class SessionStore {
     return crypto.createHmac('sha256', config.secretKey).update(value).digest('base64url');
   }
 
+  /** Borra sesiones vencidas o inactivas (limpieza oportunista). */
+  private cleanup(now: number): void {
+    run('DELETE FROM web_sessions WHERE expires_at < ?', new Date(now).toISOString());
+    if (config.sessionIdleMinutes > 0) {
+      const cutoff = new Date(now - config.sessionIdleMinutes * 60_000).toISOString();
+      run('DELETE FROM web_sessions WHERE COALESCE(last_seen_at, created_at) < ?', cutoff);
+    }
+  }
+
   /** Crea una sesión web y devuelve el valor de la cookie. */
   create(userId: number): { cookie: string; expiresAt: Date } {
     const id = crypto.randomUUID();
-    const expiresAt = new Date(Date.now() + config.sessionTtlHours * 3600_000);
+    const now = Date.now();
+    const expiresAt = new Date(now + config.sessionTtlHours * 3600_000);
+    this.cleanup(now);
     run(
-      'INSERT INTO web_sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)',
+      'INSERT INTO web_sessions (id, user_id, created_at, expires_at, last_seen_at) VALUES (?, ?, ?, ?, ?)',
       id,
       userId,
       nowIso(),
       expiresAt.toISOString(),
+      nowIso(),
     );
     return { cookie: `${id}.${this.sign(id)}`, expiresAt };
   }
@@ -51,7 +64,30 @@ export class SessionStore {
     if (expected.length !== given.length || !crypto.timingSafeEqual(expected, given)) return null;
     const row = get<WebSession>('SELECT * FROM web_sessions WHERE id = ?', id);
     if (!row) return null;
-    if (new Date(row.expires_at).getTime() < Date.now()) return null;
+
+    const now = Date.now();
+    const created = Date.parse(row.created_at);
+    const ttlMs = config.sessionTtlHours * 3600_000;
+    const idleMs = config.sessionIdleMinutes * 60_000;
+    // Vencimiento absoluto: aunque una fila vieja tenga expires_at lejano, no
+    // puede durar más que SESSION_TTL_HOURS desde que se creó.
+    const expired =
+      (Number.isFinite(Date.parse(row.expires_at)) && Date.parse(row.expires_at) < now) ||
+      (Number.isFinite(created) && now > created + ttlMs);
+    // Inactividad: al volver al día siguiente la sesión ya no sirve.
+    const lastSeen = row.last_seen_at && Number.isFinite(Date.parse(row.last_seen_at))
+      ? Date.parse(row.last_seen_at)
+      : created;
+    const idle = idleMs > 0 && Number.isFinite(lastSeen) && now - lastSeen > idleMs;
+
+    if (expired || idle) {
+      run('DELETE FROM web_sessions WHERE id = ?', id);
+      return null;
+    }
+    // Se actualiza como máximo una vez por minuto para no escribir en cada request.
+    if (!Number.isFinite(lastSeen) || now - lastSeen > 60_000) {
+      run('UPDATE web_sessions SET last_seen_at = ? WHERE id = ?', new Date(now).toISOString(), id);
+    }
     return { id, row };
   }
 
@@ -72,6 +108,7 @@ export function sessionCookieHeader(cookie: string, expiresAt: Date, secure = fa
     'HttpOnly',
     'SameSite=Lax',
     `Expires=${expiresAt.toUTCString()}`,
+    `Max-Age=${Math.max(0, Math.floor((expiresAt.getTime() - Date.now()) / 1000))}`,
   ];
   if (secure) attrs.push('Secure');
   return attrs.join('; ');

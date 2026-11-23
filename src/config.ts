@@ -91,7 +91,10 @@ export const config = {
 
   /** Nombre de la cookie de sesion del panel. */
   sessionCookie: process.env.SESSION_COOKIE ?? 'baileys_esam_session',
-  sessionTtlHours: int(process.env.SESSION_TTL_HOURS, 24 * 14),
+  /** Vida absoluta de la sesión del panel (por seguridad, no más de un día). */
+  sessionTtlHours: int(process.env.SESSION_TTL_HOURS, 12),
+  /** Inactividad máxima antes de cerrar la sesión (0 = sin límite de inactividad). */
+  sessionIdleMinutes: int(process.env.SESSION_IDLE_MINUTES, 8 * 60),
   secretKey: process.env.APP_KEY ?? 'baileys_esam_dev_key',
 
   pacing: {

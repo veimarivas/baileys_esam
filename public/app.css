@@ -9114,12 +9114,12 @@ html[data-bs-theme="dark"] .bubble-revoked { background: rgba(240, 132, 132, 0.1
    Marca ESAM (logo del login) en sidebar y cabecera
    ============================================================================= */
 .esam-brand { display: inline-flex; align-items: center; gap: 9px; text-decoration: none; line-height: 1; }
-.esam-mark { height: 30px; width: auto; flex: 0 0 auto; }
+.esam-mark { height: 30px; width: 36px; flex: 0 0 36px; }
 .esam-brand-text { display: flex; flex-direction: column; gap: 1px; line-height: 1; }
 .esam-brand-text b { font-family: 'Inter', system-ui, sans-serif; font-size: 15px; font-weight: 800; letter-spacing: .4px; color: #fff; }
 .esam-brand-text small { font-family: 'Inter', system-ui, sans-serif; font-size: 8px; font-weight: 700; letter-spacing: 2.1px; color: #F6C445; }
 .app-menu .navbar-brand-box .logo-lg.esam-brand { display: flex; align-items: center; }
-.app-menu .navbar-brand-box .logo-sm .esam-mark { height: 27px; }
+.app-menu .navbar-brand-box .logo-sm .esam-mark { height: 27px; width: 32px; flex: 0 0 32px; }
 #page-topbar .esam-brand-text b { color: #0A2A4A; }
 #page-topbar .esam-brand-text small { color: #0E7C8C; }
 [data-sidebar-size="sm"] .app-menu .navbar-brand-box .logo-lg.esam-brand { display: none !important; }

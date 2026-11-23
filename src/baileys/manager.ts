@@ -1586,7 +1586,15 @@ export class SessionManager implements OutboundSender {
       // automáticamente; los bloqueos reales se detectan por el error de envío.
       recomputeHealth(sessionId, { lastError: 'Fallo de entrega reportado por WhatsApp' });
     }
-    await dispatchEvent(sessionId, 'message.ack', { messageId: ack.messageId, status: ack.status });
+    // `chatId` (aditivo, H4 del ESAM HUB): con él, el CRM sabe QUÉ chat cambió
+    // aunque el mensaje no lo haya mandado él (respuestas desde el panel o el
+    // teléfono, que solo se enteran por el acuse).
+    const chat = get<{ chat_id: string }>(
+      'SELECT chat_id FROM messages WHERE session_id = ? AND wa_message_id = ? LIMIT 1',
+      sessionId,
+      ack.messageId,
+    );
+    await dispatchEvent(sessionId, 'message.ack', { messageId: ack.messageId, status: ack.status, chatId: chat?.chat_id ?? null });
   }
 
   private async onRevoked(

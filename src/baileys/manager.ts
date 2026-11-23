@@ -1059,11 +1059,6 @@ export class SessionManager implements OutboundSender {
       unread: true,
     });
 
-    // Payload para webhooks (mismo contrato que OpenWA).
-    const media = msg.mediaBuffer && msg.mediaMime && msg.mediaBuffer.length <= INLINE_MEDIA_LIMIT
-      ? { mimetype: msg.mediaMime, filename: msg.filename, data: msg.mediaBuffer.toString('base64') }
-      : undefined;
-
     // Sin `await`: un receptor lento o caído no debe frenar la recepción (los
     // fallos quedan en la cola de reintentos de webhooks).
     this.dispatchInbound(sessionId, msg, convName);

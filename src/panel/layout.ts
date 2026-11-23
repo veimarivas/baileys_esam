@@ -5,6 +5,7 @@ import { esamAreaLabel, esamEsAdmin, esamPuede } from '../auth/users.js';
 import { emptyNotificationCounts, unreadCounts, type NotificationCategory, type NotificationCounts } from '../core/notifications.js';
 import { runtimeInfo } from '../core/runtime.js';
 import { lastBackup } from '../core/backup.js';
+import { esamLogoSymbol } from './login-view.js';
 
 /** Versión de assets (mtime de app.css/app.js) para evitar caché del navegador. */
 const ASSET_VERSION = (() => {
@@ -226,14 +227,15 @@ export function renderLayout(
       data-sidebar-image="none" data-preloader="disable" data-bs-theme="light" data-theme="default">
 <head>${head(title)}</head>
 <body>
+${esamLogoSymbol()}
 <div id="layout-wrapper">
   <header id="page-topbar">
     <div class="layout-width">
       <div class="navbar-header">
         <div class="d-flex">
           <div class="navbar-brand-box horizontal-logo">
-            <a href="/" class="logo logo-dark"><span class="logo-lg"><b>Seguimiento ESAM</b></span></a>
-            <a href="/" class="logo logo-light"><span class="logo-lg"><b>Seguimiento ESAM</b></span></a>
+            <a href="/" class="logo logo-dark esam-brand"><svg class="esam-mark"><use href="#esam-mark"/></svg><span class="esam-brand-text"><b>ESAM</b><small>SEGUIMIENTO</small></span></a>
+            <a href="/" class="logo logo-light esam-brand"><svg class="esam-mark"><use href="#esam-mark"/></svg><span class="esam-brand-text"><b>ESAM</b><small>SEGUIMIENTO</small></span></a>
           </div>
           <button type="button" class="btn btn-sm px-3 fs-16 header-item vertical-menu-btn topnav-hamburger material-shadow-none" id="topnav-hamburger-icon" aria-label="Abrir o cerrar el menú">
             <span class="hamburger-icon"><span></span><span></span><span></span></span>
@@ -273,8 +275,8 @@ export function renderLayout(
 
   <div class="app-menu navbar-menu">
     <div class="navbar-brand-box">
-      <a href="/" class="logo logo-dark"><span class="logo-sm"><i class="ri-whatsapp-line fs-22 text-success"></i></span><span class="logo-lg"><b>Seguimiento ESAM</b></span></a>
-      <a href="/" class="logo logo-light"><span class="logo-sm"><i class="ri-whatsapp-line fs-22 text-success"></i></span><span class="logo-lg"><b>Seguimiento ESAM</b></span></a>
+      <a href="/" class="logo logo-dark"><span class="logo-sm"><svg class="esam-mark"><use href="#esam-mark"/></svg></span><span class="logo-lg esam-brand"><svg class="esam-mark"><use href="#esam-mark"/></svg><span class="esam-brand-text"><b>ESAM</b><small>SEGUIMIENTO</small></span></span></a>
+      <a href="/" class="logo logo-light"><span class="logo-sm"><svg class="esam-mark"><use href="#esam-mark"/></svg></span><span class="logo-lg esam-brand"><svg class="esam-mark"><use href="#esam-mark"/></svg><span class="esam-brand-text"><b>ESAM</b><small>SEGUIMIENTO</small></span></span></a>
       <button type="button" class="btn btn-sm p-0 fs-20 header-item float-end btn-vertical-sm-hover" id="vertical-hover" aria-label="Contraer o expandir el menú lateral"><i class="ri-record-circle-line"></i></button>
     </div>
     <div id="scrollbar">
@@ -336,65 +338,8 @@ ${scripts()}
 </html>`;
 }
 
-/** Pantalla de login: panel de marca + formulario. */
-export function renderLogin(error?: string): string {
-  return `<!doctype html>
-<html lang="es" data-bs-theme="light">
-<head>${head('Ingresar')}</head>
-<body>
-<main class="auth-page">
-  <section class="auth-brand">
-    <div class="auth-logo"><i class="ri-whatsapp-line"></i><span>Seguimiento ESAM</span></div>
-    <h1>Mensajería institucional, en un solo lugar</h1>
-    <p>Envíos por lotes, plantillas, auto-respuestas y monitoreo en tiempo real para la mensajería institucional.</p>
-    <ul class="auth-points">
-      <li><i class="ri-shield-check-line"></i> Ritmo anti-baneo con ventanas de envío</li>
-      <li><i class="ri-flashlight-line"></i> Liviano y estable</li>
-      <li><i class="ri-line-chart-line"></i> Reportes, auditoría y control de opt-out</li>
-    </ul>
-    <svg class="auth-pattern" viewBox="0 0 300 300" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <g stroke="rgba(120,190,220,.35)" stroke-width="1">
-        <line x1="40" y1="240" x2="130" y2="150" />
-        <line x1="130" y1="150" x2="230" y2="190" />
-        <line x1="130" y1="150" x2="180" y2="60" />
-        <line x1="230" y1="190" x2="280" y2="110" />
-      </g>
-      <g fill="#e6dd5e">
-        <circle cx="40" cy="240" r="4" />
-        <circle cx="130" cy="150" r="6" fill="#2e90b5" />
-        <circle cx="180" cy="60" r="4" />
-        <circle cx="230" cy="190" r="4" />
-        <circle cx="280" cy="110" r="3" />
-      </g>
-    </svg>
-  </section>
-  <section class="auth-form">
-    <div class="auth-card">
-      <div class="auth-mobile-logo"><i class="ri-whatsapp-line"></i><span>Seguimiento ESAM</span></div>
-      <h2>Ingresá a tu panel</h2>
-      <p class="auth-lead">Accedé con tu cuenta institucional para continuar.</p>
-      ${error ? `<div class="alert alert-danger mb-3"><i class="ri-error-warning-line align-middle me-1"></i>${esc(error)}</div>` : ''}
-      <form method="post" action="/login">
-        <div class="mb-3">
-          <label class="form-label" for="login">Usuario o correo</label>
-          <input type="text" class="form-control" id="login" name="login" placeholder="Ingresá tu usuario" required autofocus />
-        </div>
-        <div class="mb-3">
-          <label class="form-label" for="password">Contraseña</label>
-          <input type="password" class="form-control" id="password" name="password" placeholder="Tu contraseña" required />
-        </div>
-        <div class="mt-4">
-          <button class="btn btn-primary w-100" type="submit">Ingresar <i class="ri-arrow-right-line ms-1"></i></button>
-        </div>
-      </form>
-      <p class="auth-hint">© ${new Date().getFullYear()} Seguimiento ESAM</p>
-    </div>
-  </section>
-</main>
-${scripts()}
-</body>
-</html>`;
-}
+/** Pantalla de login (nuevo diseño ESAM Seguimiento). */
+export { renderLogin } from './login-view.js';
 
 /** Página de error simple. */
 export function renderPlain(title: string, message: string): string {

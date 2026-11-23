@@ -643,15 +643,15 @@ export function batchDetailPage(
     return `<tr data-st="${esc(it.status)}" data-eng="${engTokens(e).join(' ')}" data-search="${esc(search)}">
       <td class="text-muted">${n}</td>
       <td><div class="bd-dest">${esc(it.contact_name ?? (isGroup ? 'Grupo' : '—'))}</div>
-        <a class="bd-phone ff-monospace" href="/conversations/${encodeURIComponent(it.chat_id)}" title="Abrir la conversación">${isGroup ? '<i class="ri-group-line"></i> ' : ''}${esc(phone)}</a></td>
-      <td>${statusBadge(it.status)}</td>
-      <td class="text-nowrap">${esc(when)}</td>
+        <a class="bd-phone ff-monospace" href="/conversations/${encodeURIComponent(it.chat_id)}" title="Abrir la conversación">${isGroup ? '<i class="ri-group-line"></i> ' : ''}${esc(phone)}</a>
+        ${it.external_ref ? `<div class="bd-ref" title="Referencia de origen">${esc(it.external_ref)}</div>` : ''}</td>
+      <td>
+        ${statusBadge(it.status)}
+        <div class="bd-when">${esc(when)}</div>
+        ${errInfo ? `<div class="bd-err-inline" title="${esc(errInfo.detail)} ${esc(errInfo.action)}"><i class="ri-error-warning-line" aria-hidden="true"></i>${esc(errInfo.title)}</div>` : ''}
+      </td>
       <td class="bd-read">${lectura || '<span class="text-muted">—</span>'}</td>
-      <td class="bd-msg">${msg}</td>
-      <td class="bd-err">${errInfo
-        ? `<span class="bd-err-title" title="${esc(errInfo.detail)} ${esc(errInfo.action)}">${esc(errInfo.title)}</span>
-           <details class="bd-err-raw"><summary>Ver error técnico</summary><code>${esc(it.error ?? '')}</code></details>`
-        : ''}${it.external_ref ? `<div class="bd-ref" title="Referencia de origen">${esc(it.external_ref)}</div>` : ''}</td>
+      <td class="bd-msg">${msg}${errInfo ? `<details class="bd-err-raw"><summary>Ver error técnico</summary><code>${esc(it.error ?? '')}</code></details>` : ''}</td>
     </tr>`;
   };
 
@@ -672,10 +672,9 @@ export function batchDetailPage(
       <div class="table-responsive">
         <table class="table table-hover align-middle mb-0 bd-table">
           <colgroup>
-            <col style="width:2.5%" /><col style="width:28%" /><col style="width:10%" />
-            <col style="width:8%" /><col style="width:19%" /><col style="width:25.5%" /><col style="width:7%" />
+            <col style="width:3%" /><col style="width:30%" /><col style="width:15%" /><col style="width:21%" /><col style="width:31%" />
           </colgroup>
-          <thead class="table-light"><tr><th>#</th><th>Destinatario</th><th>Estado</th><th>Hora</th><th>Lectura · respuesta</th><th>Mensaje</th><th>Detalle</th></tr></thead>
+          <thead class="table-light"><tr><th>#</th><th>Destinatario</th><th>Estado</th><th>Lectura · respuesta</th><th>Mensaje</th></tr></thead>
           <tbody>${items.map((it, i) => itemRow(it, i + 1)).join('')}</tbody>
         </table>
       </div>

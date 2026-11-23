@@ -10,7 +10,7 @@ import { esamLogoSymbol } from './login-view.js';
 /** Versión de assets (mtime de app.css/app.js) para evitar caché del navegador. */
 const ASSET_VERSION = (() => {
   let v = 0;
-  for (const file of ['app.css', 'app.js']) {
+  for (const file of ['app.css', 'app.js', 'assets/js/app.js']) {
     try {
       v = Math.max(v, fs.statSync(path.resolve('public', file)).mtimeMs);
     } catch {
@@ -105,10 +105,14 @@ function head(title: string): string {
         document.documentElement.setAttribute('data-bs-theme', t);
         sessionStorage.setItem('data-bs-theme', t);
         document.documentElement.setAttribute('data-theme', sessionStorage.getItem('data-theme') || 'default');
+        if (localStorage.getItem('baileys-sidebar') === 'sm') {
+          document.documentElement.setAttribute('data-sidebar-size', 'sm');
+        }
       } catch (e) {}
     })();
   </script>
-  <link rel="icon" href="/assets/images/favicon.ico" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="apple-touch-icon" href="/favicon.svg" />
   <link rel="preload" href="/assets/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin />
   <link rel="preload" href="/assets/fonts/inter-latin-ext-wght-normal.woff2" as="font" type="font/woff2" crossorigin />
   <script src="/assets/js/layout.js"></script>
@@ -126,24 +130,39 @@ function scripts(): string {
   <script src="/assets/libs/node-waves/waves.min.js"></script>
   <script src="/assets/libs/feather-icons/feather.min.js"></script>
   <script src="/assets/js/plugins.js"></script>
-  <script src="/assets/js/app.js"></script>
+  <script src="/assets/js/app.js?v=${ASSET_VERSION}"></script>
   <script src="/app.js?v=${ASSET_VERSION}"></script>`;
 }
 
-function navList(user: UserRow, active: string, restrictToSettings = false, badges: Record<string, number> = {}, activeHref = ''): string {
+function navList(
+  user: UserRow,
+  active: string,
+  restrictToSettings = false,
+  badges: Record<string, number> = {},
+  activeHref = '',
+  currentPath = '',
+): string {
   // Quien no es Super Admin ve Conversaciones, Notas y tareas y su Conexión
   // (para vincular, reparar o desvincular su número).
-  return NAV.filter((n) => {
+  const items = NAV.filter((n) => {
     if (!esamPuede(user, n.section)) return false;
     if (restrictToSettings) return n.section === 'settings';
     return true;
-  })
+  });
+  // Se resalta una sola entrada: la ruta exacta o el prefijo más específico
+  // (/notes/my-day → /notes). Si la ruta no corresponde a ninguna, se usa la
+  // sección como respaldo.
+  const target = activeHref || currentPath;
+  const pathMatch = (href: string): boolean =>
+    !!target && (target === href || target.startsWith(`${href}/`));
+  const usePath = items.some((n) => pathMatch(n.href));
+  return items
     .map((n) => {
       const count = badges[n.href] ?? 0;
       // El badge existe siempre (oculto en 0) para que app.js pueda actualizar
       // el contador de Conversaciones en vivo sin recargar la página.
       const badge = ` <span class="badge rounded-pill bg-danger ms-auto nav-unread-badge" data-nav-badge="${esc(n.href)}"${count > 0 ? '' : ' hidden'}>${count > 99 ? '99+' : count}</span>`;
-      const isActive = n.href === activeHref || (!activeHref && n.section === active);
+      const isActive = usePath ? pathMatch(n.href) : n.section === active;
       return `<li class="nav-item">
           <a class="nav-link menu-link${isActive ? ' active' : ''}" href="${n.href}"${isActive ? ' aria-current="page"' : ''}>
             <i class="${n.icon}"></i> <span data-key="t-${n.href}">${esc(n.label)}</span>${badge}
@@ -200,7 +219,7 @@ export function renderLayout(
   user: UserRow,
   active: string,
   body: string,
-  opts: { flash?: string; error?: string; subtitle?: string; restrictToSettings?: boolean; badges?: Record<string, number>; activeHref?: string; actions?: string } = {},
+  opts: { flash?: string; error?: string; subtitle?: string; restrictToSettings?: boolean; badges?: Record<string, number>; activeHref?: string; currentPath?: string; actions?: string } = {},
 ): string {
   const role = esamAreaLabel(user);
   const initials = (user.name ?? user.username ?? 'U')
@@ -232,14 +251,11 @@ ${esamLogoSymbol()}
   <header id="page-topbar">
     <div class="layout-width">
       <div class="navbar-header">
-        <div class="d-flex">
-          <div class="navbar-brand-box horizontal-logo">
-            <a href="/" class="logo logo-dark esam-brand"><svg class="esam-mark"><use href="#esam-mark"/></svg><span class="esam-brand-text"><b>ESAM</b><small>SEGUIMIENTO</small></span></a>
-            <a href="/" class="logo logo-light esam-brand"><svg class="esam-mark"><use href="#esam-mark"/></svg><span class="esam-brand-text"><b>ESAM</b><small>SEGUIMIENTO</small></span></a>
-          </div>
-          <button type="button" class="btn btn-sm px-3 fs-16 header-item vertical-menu-btn topnav-hamburger material-shadow-none" id="topnav-hamburger-icon" aria-label="Abrir o cerrar el menú">
-            <span class="hamburger-icon"><span></span><span></span><span></span></span>
+        <div class="d-flex align-items-center gap-2">
+          <button type="button" class="esam-burger" id="esam-sidebar-toggle" aria-label="Mostrar u ocultar el menú" aria-controls="esam-sidebar" aria-expanded="true">
+            <span></span><span></span><span></span>
           </button>
+          <span class="esam-header-title">${esc(title)}</span>
         </div>
         <div class="d-flex align-items-center">
           ${notificationsBell(user)}
@@ -273,18 +289,23 @@ ${esamLogoSymbol()}
     </div>
   </header>
 
-  <div class="app-menu navbar-menu">
+  <div class="app-menu navbar-menu" id="esam-sidebar">
     <div class="navbar-brand-box">
-      <a href="/" class="logo logo-dark"><span class="logo-sm"><svg class="esam-mark"><use href="#esam-mark"/></svg></span><span class="logo-lg esam-brand"><svg class="esam-mark"><use href="#esam-mark"/></svg><span class="esam-brand-text"><b>ESAM</b><small>SEGUIMIENTO</small></span></span></a>
-      <a href="/" class="logo logo-light"><span class="logo-sm"><svg class="esam-mark"><use href="#esam-mark"/></svg></span><span class="logo-lg esam-brand"><svg class="esam-mark"><use href="#esam-mark"/></svg><span class="esam-brand-text"><b>ESAM</b><small>SEGUIMIENTO</small></span></span></a>
-      <button type="button" class="btn btn-sm p-0 fs-20 header-item float-end btn-vertical-sm-hover" id="vertical-hover" aria-label="Contraer o expandir el menú lateral"><i class="ri-record-circle-line"></i></button>
+      <a href="/" class="logo logo-dark" aria-label="ESAM Seguimiento">
+        <span class="logo-sm"><svg class="esam-mark"><use href="#esam-mark"/></svg></span>
+        <span class="logo-lg esam-brand"><svg class="esam-mark"><use href="#esam-mark"/></svg><span class="esam-brand-text"><b>ESAM</b><small>SEGUIMIENTO</small></span></span>
+      </a>
+      <a href="/" class="logo logo-light" aria-label="ESAM Seguimiento">
+        <span class="logo-sm"><svg class="esam-mark"><use href="#esam-mark"/></svg></span>
+        <span class="logo-lg esam-brand"><svg class="esam-mark"><use href="#esam-mark"/></svg><span class="esam-brand-text"><b>ESAM</b><small>SEGUIMIENTO</small></span></span>
+      </a>
     </div>
     <div id="scrollbar">
       <div class="container-fluid">
         <div id="two-column-menu"></div>
         <ul class="navbar-nav" id="navbar-nav">
           <li class="menu-title"><span data-key="t-menu">Menú</span></li>
-          ${navList(user, active, opts.restrictToSettings, opts.badges, opts.activeHref)}
+          ${navList(user, active, opts.restrictToSettings, opts.badges, opts.activeHref, opts.currentPath)}
         </ul>
       </div>
     </div>

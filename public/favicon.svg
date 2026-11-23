@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="ESAM Seguimiento">
+  <rect width="64" height="64" rx="14" fill="#0A2540"/>
+  <path d="M52 32 A20 20 0 1 1 32 12" fill="none" stroke="#F6C445" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="52" cy="32" r="2.4" fill="#F6C445"/>
+  <path d="M41 32 A9 9 0 1 1 32 23" fill="none" stroke="#2FD4DE" stroke-width="2.4" stroke-linecap="round" opacity=".65"/>
+  <g fill="none" stroke="#2FD4DE" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 32 l3.5 4 l6.5 -7.5"/>
+    <path d="M29.5 32 l3.5 4 l6.5 -7.5"/>
+  </g>
+</svg>

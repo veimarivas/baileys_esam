@@ -10,6 +10,7 @@ export interface PageOptions {
   restrictToSettings?: boolean;
   badges?: Record<string, number>;
   activeHref?: string;
+  currentPath?: string;
   actions?: string;
 }
 
@@ -22,6 +23,7 @@ export function pageHtml(req: Request, res: Response, title: string, active: str
   const flash = takeFlash(req, res);
   return renderLayout(title, user, active, body, {
     ...opts,
+    currentPath: opts.currentPath ?? req.path,
     flash: flash?.kind === 'ok' ? flash.message : opts.flash,
     error: flash?.kind === 'error' ? flash.message : opts.error,
   });

@@ -9594,3 +9594,6 @@ html[data-bs-theme="dark"] { --shell-footer-h: 46px; }
   }
   .bt-act { grid-area: act; justify-content: flex-end; align-self: center; }
 }
+
+.bd-table { min-width: 720px; }
+.bd-dest { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }

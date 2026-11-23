@@ -9578,3 +9578,19 @@ html[data-bs-theme="dark"] { --shell-footer-h: 46px; }
   .bd-card { padding: 0.85rem; }
   .bd-callout-body { padding-left: 0.9rem; }
 }
+
+/* Ajustes finos de la tabla de destinatarios y filas del listado */
+.bd-table { table-layout: fixed; width: 100%; min-width: 860px; }
+.bd-table th, .bd-table td { overflow-wrap: anywhere; }
+.bd-msg { max-width: none; }
+.bd-msg > span, .bd-msg summary { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bd-msg .bd-full { white-space: pre-wrap; }
+.bd-table .bd-dest { overflow-wrap: anywhere; }
+
+@media (max-width: 1199.98px) {
+  .bt-row {
+    grid-template-columns: 3.6rem minmax(0, 1fr) auto;
+    grid-template-areas: 'time main state' 'time who who' 'time prog act';
+  }
+  .bt-act { grid-area: act; justify-content: flex-end; align-self: center; }
+}

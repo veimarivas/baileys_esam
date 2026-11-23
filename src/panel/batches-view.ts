@@ -671,6 +671,10 @@ export function batchDetailPage(
       </div>
       <div class="table-responsive">
         <table class="table table-hover align-middle mb-0 bd-table">
+          <colgroup>
+            <col style="width:3%" /><col style="width:23%" /><col style="width:11%" />
+            <col style="width:8%" /><col style="width:20%" /><col style="width:27%" /><col style="width:8%" />
+          </colgroup>
           <thead class="table-light"><tr><th>#</th><th>Destinatario</th><th>Estado</th><th>Hora</th><th>Lectura · respuesta</th><th>Mensaje</th><th>Detalle</th></tr></thead>
           <tbody>${items.map((it, i) => itemRow(it, i + 1)).join('')}</tbody>
         </table>

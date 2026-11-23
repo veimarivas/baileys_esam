@@ -9602,3 +9602,5 @@ html[data-bs-theme="dark"] { --shell-footer-h: 46px; }
 .bd-when { font-size: .72rem; color: var(--bt-mute); margin-top: .2rem; font-variant-numeric: tabular-nums; }
 .bd-err-inline { display: flex; gap: .25rem; align-items: flex-start; margin-top: .25rem; font-size: .72rem; color: var(--bt-danger); line-height: 1.35; }
 .bd-err-inline i { flex: 0 0 auto; margin-top: .1rem; }
+
+.bd-table thead th { white-space: normal; line-height: 1.2; }

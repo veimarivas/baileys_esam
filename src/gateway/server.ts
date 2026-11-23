@@ -8,6 +8,34 @@ import { registerWebhook } from '../core/webhooks.js';
 import { addOptout, isBlocked, listOptouts, normalizeChatId } from '../core/optout.js';
 import { typeForMime } from '../core/phone.js';
 import { systemHealth } from '../core/system-health.js';
+import {
+  chatSummaryForSession,
+  findConversationInSessions,
+  listChatsForSession,
+  listMessages,
+  type ChatKind,
+} from '../core/conversations.js';
+import { teamMembers } from '../core/team.js';
+import { listDirectory } from '../core/directory.js';
+import { phoneKeyOf } from '../core/person.js';
+
+const KINDS: ChatKind[] = ['individual', 'group', 'team'];
+
+/** Cursor de mensajes: fecha + id del más antiguo cargado (paginar hacia atrás). */
+function encodeBefore(occurredAt: string, id: number): string {
+  return Buffer.from(`${occurredAt}|${id}`, 'utf8').toString('base64url');
+}
+
+function decodeBefore(raw: unknown): { occurredAt: string; id: number } | null {
+  if (typeof raw !== 'string' || !raw) return null;
+  try {
+    const [occurredAt, id] = Buffer.from(raw, 'base64url').toString('utf8').split('|');
+    const n = Number(id);
+    return occurredAt && Number.isInteger(n) ? { occurredAt, id: n } : null;
+  } catch {
+    return null;
+  }
+}
 
 /** Envuelve un handler async para capturar errores. */
 function ah(fn: (req: Request, res: Response) => Promise<unknown>) {
@@ -294,6 +322,136 @@ export function createGatewayApp(manager: SessionManager) {
       }),
     );
   }
+
+  // ── Lectura para el CRM (H0 de PLAN_HISTORIAL_BAILEYS.md del ESAM HUB) ──────
+  //
+  // El historial que el panel muestra, por línea y SOLO lectura: chats con las
+  // pestañas del panel (Números, Grupos, Equipo), mensajes paginados hacia
+  // atrás, compañeros del equipo y el directorio de cronogramas.
+  //
+  // La llave de este gateway es una sola: el corte por cuenta y por línea lo
+  // hace el CRM (el wacrm), que es quien la guarda y sabe de quién es cada línea.
+  // Acá solo se valida que la línea exista.
+
+  const lineaOk = (req: Request, res: Response): string | null => {
+    const sessionId = String(req.params.sessionId);
+    if (!manager.byId(sessionId)) {
+      res.status(404).json({ message: 'Sesión no encontrada.' });
+      return null;
+    }
+    return sessionId;
+  };
+
+  app.get(
+    '/api/sessions/:sessionId/chats/summary',
+    ah(async (req, res) => {
+      const sessionId = lineaOk(req, res);
+      if (!sessionId) return;
+      res.json(chatSummaryForSession(sessionId));
+    }),
+  );
+
+  app.get(
+    '/api/sessions/:sessionId/chats',
+    ah(async (req, res) => {
+      const sessionId = lineaOk(req, res);
+      if (!sessionId) return;
+      const kind = KINDS.includes(String(req.query.kind) as ChatKind) ? (String(req.query.kind) as ChatKind) : null;
+      res.json(
+        listChatsForSession(sessionId, {
+          kind,
+          q: typeof req.query.q === 'string' && req.query.q.trim() ? req.query.q.trim().slice(0, 100) : null,
+          limit: parseInt(String(req.query.limit ?? '50'), 10) || 50,
+          cursor: typeof req.query.cursor === 'string' ? req.query.cursor : null,
+        }),
+      );
+    }),
+  );
+
+  // Un chat (para abrirlo desde un lead o un contacto del directorio).
+  app.get(
+    '/api/sessions/:sessionId/chats/:chatId',
+    ah(async (req, res) => {
+      const sessionId = lineaOk(req, res);
+      if (!sessionId) return;
+      const chat = findConversationInSessions([sessionId], String(req.params.chatId));
+      if (!chat) {
+        res.status(404).json({ message: 'Chat no encontrado en esta línea.' });
+        return;
+      }
+      res.json(chat);
+    }),
+  );
+
+  app.get(
+    '/api/sessions/:sessionId/chats/:chatId/messages',
+    ah(async (req, res) => {
+      const sessionId = lineaOk(req, res);
+      if (!sessionId) return;
+      const chat = findConversationInSessions([sessionId], String(req.params.chatId));
+      if (!chat) {
+        res.status(404).json({ message: 'Chat no encontrado en esta línea.' });
+        return;
+      }
+      const after = parseInt(String(req.query.after ?? '0'), 10) || 0;
+      const page = listMessages(sessionId, chat.chat_id, {
+        before: after ? null : decodeBefore(req.query.before),
+        after,
+        limit: parseInt(String(req.query.limit ?? '40'), 10) || 40,
+      });
+      const primero = page.messages[0];
+      res.json({
+        chat_id: chat.chat_id,
+        messages: page.messages,
+        has_more: page.hasMore,
+        // Para pedir los anteriores: ?before=<next_before>
+        next_before: page.hasMore && primero ? encodeBefore(primero.occurred_at, primero.id) : null,
+      });
+    }),
+  );
+
+  // Compañeros del equipo y su chat en esta línea (pestaña Equipo). Se excluye
+  // al dueño de la línea: no tiene sentido «escribirse a sí mismo».
+  app.get(
+    '/api/sessions/:sessionId/team',
+    ah(async (req, res) => {
+      const sessionId = lineaOk(req, res);
+      if (!sessionId) return;
+      const row = manager.byId(sessionId);
+      const propias = new Set(
+        [row?.phone, row?.expected_phone].filter((p): p is string => !!p).map((p) => phoneKeyOf(p)).filter(Boolean),
+      );
+      const members = teamMembers()
+        .filter((m) => !m.keys.some((k) => propias.has(k)))
+        .map((m) => {
+          let conversation = null;
+          for (const k of m.keys) {
+            conversation = findConversationInSessions([sessionId], k) ?? null;
+            if (conversation) break;
+          }
+          return { user_id: m.user_id, name: m.name, area: m.area, area_key: m.area_key, phone: m.phone, line_ready: m.line_ready, conversation };
+        });
+      res.json({ members });
+    }),
+  );
+
+  // Directorio de cronogramas (pestaña Contactos), con su chat en esta línea.
+  app.get(
+    '/api/sessions/:sessionId/directory',
+    ah(async (req, res) => {
+      const sessionId = lineaOk(req, res);
+      if (!sessionId) return;
+      res.json(
+        listDirectory({
+          q: typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 100) || null : null,
+          programa: typeof req.query.programa === 'string' ? req.query.programa.trim() || null : null,
+          sessionIds: [sessionId],
+          limit: parseInt(String(req.query.limit ?? '100'), 10) || 100,
+          offset: parseInt(String(req.query.offset ?? '0'), 10) || 0,
+        }),
+      );
+    }),
+  );
 
   // Descarga de media entrante por id de mensaje.
   app.get(

@@ -266,12 +266,29 @@ const CONV_SELECT = `SELECT c.id, c.session_id, c.chat_id, c.status, c.unread_co
  * persona en otra de sus líneas. Para abrir un chat desde un enlace.
  */
 export function findConversationForUser(user: UserRow, chatParam: string): ConversationDTO | undefined {
+  return findConversationScoped(scopeClause(user), chatParam, user.id);
+}
+
+/**
+ * Lo mismo que `findConversationForUser`, pero acotado a unas LÍNEAS y no a un
+ * usuario del panel: lo usa la API de lectura del gateway (H0 del ESAM HUB),
+ * donde quien pregunta es el CRM y el alcance lo decide él por línea.
+ */
+export function findConversationInSessions(sessionIds: string[], chatParam: string): ConversationDTO | undefined {
+  return findConversationScoped(sessionsClause(sessionIds), chatParam, null);
+}
+
+function sessionsClause(sessionIds: string[], alias = 'c'): Scope {
+  const ids = sessionIds.length ? sessionIds.map(() => '?').join(',') : 'NULL';
+  return { sql: `${alias}.session_id IN (${ids})`, params: [...sessionIds] };
+}
+
+function findConversationScoped(scope: Scope | null, chatParam: string, viewerId: number | null): ConversationDTO | undefined {
   const chat = chatParam.trim();
   if (!chat) return undefined;
   const key = chat.endsWith('@g.us') ? null : phoneKeyOf(chat);
   const where: string[] = [INBOX_WHERE];
   const params: unknown[] = [];
-  const scope = scopeClause(user);
   if (scope) {
     where.push(scope.sql);
     params.push(...scope.params);
@@ -284,7 +301,7 @@ export function findConversationForUser(user: UserRow, chatParam: string): Conve
     ...params,
     chat,
   );
-  return row ? mapConversations([row], user.id)[0] : undefined;
+  return row ? mapConversations([row], viewerId)[0] : undefined;
 }
 
 /** ¿El mensaje pertenece a ese chat de esa línea? (para enlazar una nota a su mensaje). */
@@ -403,6 +420,123 @@ export function listConversations(
     ...params,
   );
   return mapConversations(rows, user.id);
+}
+
+/** Las pestañas de chats del panel: Números, Grupos y Equipo. */
+export type ChatKind = 'individual' | 'group' | 'team';
+
+export interface ChatPage {
+  chats: ConversationDTO[];
+  /** Cursor para pedir la página siguiente (más antigua), o null si no hay más. */
+  next_cursor: string | null;
+}
+
+function chatKindOf(dto: ConversationDTO): ChatKind {
+  if (dto.chat_id.endsWith('@g.us')) return 'group';
+  return dto.team ? 'team' : 'individual';
+}
+
+function encodeCursor(at: string, id: number): string {
+  return Buffer.from(`${at}|${id}`, 'utf8').toString('base64url');
+}
+
+function decodeCursor(cursor: string | null | undefined): { at: string; id: number } | null {
+  if (!cursor) return null;
+  try {
+    const [at, id] = Buffer.from(cursor, 'base64url').toString('utf8').split('|');
+    const n = Number(id);
+    return at && Number.isInteger(n) ? { at, id: n } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Chats de UNA línea, del más reciente al más antiguo, con el mismo armado que
+ * la lista del panel (`ConversationDTO`) y separados como sus pestañas.
+ *
+ * Para la API de lectura del gateway (H0 del ESAM HUB). El equipo se reconoce
+ * al armar cada fila (`teamTagFor`), no en SQL, así que la página se completa
+ * leyendo por tandas hasta juntar `limit` chats de la pestaña pedida.
+ */
+export function listChatsForSession(
+  sessionId: string,
+  opts: { kind?: ChatKind | null; q?: string | null; limit?: number; cursor?: string | null } = {},
+): ChatPage {
+  const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
+  const where: string[] = [INBOX_WHERE, 'c.session_id = ?'];
+  const params: unknown[] = [sessionId];
+  if (opts.kind === 'group') where.push("c.chat_id LIKE '%@g.us'");
+  else if (opts.kind) where.push("c.chat_id NOT LIKE '%@g.us'");
+  if (opts.q) {
+    where.push(
+      "(COALESCE(ct.name, c.contact_name, '') LIKE ? OR c.chat_id LIKE ? OR COALESCE(c.last_message_text, '') LIKE ?)",
+    );
+    const like = `%${opts.q}%`;
+    params.push(like, like, like);
+  }
+
+  const order = 'COALESCE(c.last_message_at, c.updated_at)';
+  const chats: ConversationDTO[] = [];
+  let cursor = decodeCursor(opts.cursor);
+  let nextCursor: string | null = null;
+  // Tope de tandas: la pestaña Equipo filtra en memoria y no puede recorrer
+  // toda la base en una sola petición.
+  for (let ronda = 0; ronda < 20; ronda += 1) {
+    const w = [...where];
+    const p = [...params];
+    if (cursor) {
+      w.push(`(${order}, c.id) < (?, ?)`);
+      p.push(cursor.at, cursor.id);
+    }
+    const tanda = limit * 2;
+    const rows = all<ConvJoinRow & { orden_at: string }>(
+      `${CONV_SELECT.replace('SELECT ', `SELECT ${order} AS orden_at, `)} WHERE ${w.join(' AND ')}
+       ORDER BY ${order} DESC, c.id DESC LIMIT ${tanda}`,
+      ...p,
+    );
+    const dtos = mapConversations(rows, null);
+    const entra = (i: number) => !opts.kind || chatKindOf(dtos[i]) === opts.kind;
+    let lleno = false;
+    for (let i = 0; i < rows.length; i += 1) {
+      cursor = { at: rows[i].orden_at, id: rows[i].id };
+      if (entra(i)) chats.push(dtos[i]);
+      if (chats.length === limit) {
+        // ¿Queda algo? Si en esta tanda ya no hay más de la pestaña y la tanda
+        // fue la última, no hay página siguiente (no se manda a una vacía).
+        let quedan = rows.length === tanda;
+        for (let j = i + 1; j < rows.length && !quedan; j += 1) quedan = entra(j);
+        lleno = true;
+        if (quedan) nextCursor = encodeCursor(cursor.at, cursor.id);
+        break;
+      }
+    }
+    if (lleno) break;
+    if (rows.length < tanda) break; // no hay más chats
+    if (ronda === 19 && cursor) nextCursor = encodeCursor(cursor.at, cursor.id);
+  }
+  return { chats, next_cursor: nextCursor };
+}
+
+/** Cuántos chats y cuántos sin leer hay en cada pestaña de una línea. */
+export function chatSummaryForSession(sessionId: string): Record<ChatKind, { chats: number; unread: number }> {
+  const out: Record<ChatKind, { chats: number; unread: number }> = {
+    individual: { chats: 0, unread: 0 },
+    group: { chats: 0, unread: 0 },
+    team: { chats: 0, unread: 0 },
+  };
+  const rows = all<{ chat_id: string; ct_phone_key: string | null; unread_count: number }>(
+    `SELECT c.chat_id, ct.phone_key AS ct_phone_key, c.unread_count
+       FROM conversations c LEFT JOIN contacts ct ON ct.id = c.contact_id
+      WHERE ${INBOX_WHERE} AND c.session_id = ?`,
+    sessionId,
+  );
+  for (const r of rows) {
+    const kind: ChatKind = r.chat_id.endsWith('@g.us') ? 'group' : teamTagFor(personKey(r)) ? 'team' : 'individual';
+    out[kind].chats += 1;
+    out[kind].unread += r.unread_count > 0 ? 1 : 0;
+  }
+  return out;
 }
 
 function messageReactions(messageIds: number[], sessionId: string): Map<number, MessageDTO['reactions']> {

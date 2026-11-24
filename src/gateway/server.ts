@@ -492,6 +492,23 @@ export function createGatewayApp(manager: SessionManager) {
     }),
   );
 
+  // Marcar un chat como leído: resetea el contador de la línea y envía el
+  // acuse de lectura real a WhatsApp.
+  app.post(
+    '/api/sessions/:sessionId/chats/:chatId/read',
+    ah(async (req, res) => {
+      const sessionId = lineaOk(req, res);
+      if (!sessionId) return;
+      const chatId = String(req.params.chatId);
+      try {
+        await manager.markChatRead(sessionId, chatId);
+      } catch (err) {
+        logger.warn({ err: (err as Error).message, sessionId, chatId }, 'No se pudo marcar el chat como leído');
+      }
+      res.json({ ok: true });
+    }),
+  );
+
   app.get(
     '/api/sessions/:sessionId/chats/:chatId/messages',
     ah(async (req, res) => {

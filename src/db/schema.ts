@@ -186,6 +186,7 @@ CREATE TABLE IF NOT EXISTS configs (
 CREATE TABLE IF NOT EXISTS users (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
   name           TEXT,
+  ci             TEXT,
   username       TEXT UNIQUE,
   email          TEXT UNIQUE,
   password       TEXT NOT NULL,

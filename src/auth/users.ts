@@ -9,6 +9,8 @@ export interface UserRow {
   name: string | null;
   username: string | null;
   email: string | null;
+  /** Carnet de identidad (cuentas locales). */
+  ci: string | null;
   password: string;
   source: string;
   source_uid: string | null;
@@ -33,15 +35,36 @@ export interface UserRow {
  */
 export const ESAM_ADMINS = ['Super Admin'];
 
-/** Cargos que se pueden crear desde el panel para usuarios locales. */
-export const LOCAL_CARGOS = [
-  'Gerente General',
-  'Gerente de Marketing',
-  'Supervisor de Marketing',
-  'Asesor de Marketing',
-] as const;
+/**
+ * Áreas de la institución y los cargos de cada una. El formulario de usuarios
+ * pide primero el área y después el cargo, para que no se mezclen puestos de
+ * áreas distintas.
+ */
+export const LOCAL_CARGOS_POR_AREA: Record<string, string[]> = {
+  Marketing: ['Gerente de Marketing', 'Supervisor de Marketing', 'Asesor de Marketing'],
+  Contabilidad: ['Contador General', 'Analista Contable', 'Auxiliar Contable'],
+  Académica: ['Director Académico', 'Coordinador Académico', 'Asesor Académico'],
+  Dirección: ['Gerente General'],
+};
 
-export type LocalCargo = (typeof LOCAL_CARGOS)[number];
+/** Cargos válidos para una cuenta local (todas las áreas). */
+export const LOCAL_CARGOS = Object.values(LOCAL_CARGOS_POR_AREA).flat() as readonly string[];
+
+export type LocalCargo = string;
+
+/** Área a la que pertenece cada cargo (clave interna, igual que `esam_area`). */
+export const LOCAL_CARGO_AREA: Record<string, string> = {
+  'Gerente de Marketing': 'marketing',
+  'Supervisor de Marketing': 'marketing',
+  'Asesor de Marketing': 'marketing',
+  'Contador General': 'contabilidad',
+  'Analista Contable': 'contabilidad',
+  'Auxiliar Contable': 'contabilidad',
+  'Director Académico': 'academico',
+  'Coordinador Académico': 'academico',
+  'Asesor Académico': 'academico',
+  'Gerente General': 'general',
+};
 
 export const ROLE_AREAS: Record<string, string> = {
   'Super Admin': 'admin',
@@ -54,6 +77,13 @@ export const ROLE_AREAS: Record<string, string> = {
   'Gerencia Marketing': 'marketing',
   'Gerente de Marketing': 'marketing',
   'Supervisor de Marketing': 'marketing',
+  'Contador General': 'contabilidad',
+  'Analista Contable': 'contabilidad',
+  'Auxiliar Contable': 'contabilidad',
+  'Director Académico': 'academico',
+  'Coordinador Académico': 'academico',
+  'Asesor Académico': 'academico',
+  'Gerente General': 'general',
 };
 
 /** Secciones de quien no es Super Admin: su bandeja, notas y tareas, y su conexión (QR). */
@@ -167,7 +197,7 @@ export function esamAreaName(area: string | null | undefined): string {
     consulta: 'Consulta',
     admin: 'Administrador',
     administracion: 'Administración',
-    general: 'General',
+    general: 'Dirección',
   };
   return nombres[key] ?? key.charAt(0).toUpperCase() + key.slice(1);
 }
@@ -645,12 +675,16 @@ export function syncUserSessions(user: UserRow): void {
 
 /** Área interna que corresponde a un cargo local (solo Marketing la usa). */
 export function areaForLocalRoles(roles: string[]): string | null {
-  if (roles.some((r) => ROLE_AREAS[r] === 'marketing')) return 'marketing';
+  for (const role of roles) {
+    const area = LOCAL_CARGO_AREA[role] ?? ROLE_AREAS[role];
+    if (area) return area;
+  }
   return null;
 }
 
 export interface LocalUserInput {
   name: string;
+  ci?: string | null;
   username: string;
   email: string | null;
   password: string;
@@ -662,30 +696,38 @@ export interface LocalUserInput {
 
 /** Crea una cuenta local (no cronogramas) con cargo y sede. */
 export function createLocalUser(input: LocalUserInput): UserRow {
-  const name = String(input.name ?? '').trim().slice(0, 120);
+  const name = String(input.name ?? '').trim().replace(/\s+/g, ' ').slice(0, 120);
   const username = String(input.username ?? '').trim().slice(0, 60);
   const email = String(input.email ?? '').trim() || null;
-  const password = String(input.password ?? '');
+  const ci = String(input.ci ?? '').trim().toUpperCase().slice(0, 20) || null;
   const numero = normalizePhone(input.numero);
+  // La contraseña por defecto es el CI (se puede cambiar desde el formulario).
+  const password = String(input.password ?? '').trim() || ci || '';
   if (!name) throw new Error('Escribí el nombre.');
+  if (!ci) throw new Error('Escribí el CI.');
+  if (!/^\d{6,10}(-[A-Za-z0-9]{1,3})?$/.test(ci)) throw new Error('El CI no es válido (ej.: 1234567 o 1234567-1A).');
   if (!username) throw new Error('Escribí el usuario.');
   if (!input.sedeId) throw new Error('Elegí una sede.');
   if (!input.roles.length) throw new Error('Elegí un cargo.');
-  if (input.roles.some((r) => !(LOCAL_CARGOS as readonly string[]).includes(r))) {
+  if (input.roles.some((r) => !LOCAL_CARGOS.includes(r))) {
     throw new Error('El cargo elegido no es válido.');
   }
   if (password.length < 6) throw new Error('La contraseña debe tener al menos 6 caracteres.');
   if (!numero || numero.length < 8 || numero.length > 15) throw new Error('El número de WhatsApp no es válido.');
   if (findByLogin(username)) throw new Error('Ese usuario ya existe.');
   if (email && findByEmail(email)) throw new Error('Ese correo ya está registrado.');
+  if (get<{ id: number }>('SELECT id FROM users WHERE ci = ? COLLATE NOCASE', ci)) {
+    throw new Error('Ese CI ya está registrado para otra persona.');
+  }
   const repetido = userWithNumber(numero);
   if (repetido) throw new Error(`Ese número de WhatsApp ya está registrado para ${repetido.name}.`);
   const now = nowIso();
   const created = run(
-    `INSERT INTO users (name, username, email, password, source, esam_autorizado, esam_area, esam_numero,
+    `INSERT INTO users (name, ci, username, email, password, source, esam_autorizado, esam_area, esam_numero,
        esam_roles, sede_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'local', ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, 'local', ?, ?, ?, ?, ?, ?, ?)`,
     name,
+    ci,
     username,
     email,
     bcrypt.hashSync(password, 10),
@@ -705,6 +747,7 @@ export function createLocalUser(input: LocalUserInput): UserRow {
 
 export interface ManagedUserPatch {
   name?: string;
+  ci?: string | null;
   username?: string;
   email?: string | null;
   password?: string | null;
@@ -723,8 +766,14 @@ export function updateManagedUser(id: number, patch: ManagedUserPatch): UserRow 
   const username = patch.username !== undefined ? String(patch.username).trim().slice(0, 60) : current.username;
   const name = patch.name !== undefined ? String(patch.name).trim().slice(0, 120) : current.name;
   const email = patch.email !== undefined ? (String(patch.email ?? '').trim() || null) : current.email;
+  const ci = patch.ci !== undefined ? (String(patch.ci ?? '').trim().toUpperCase().slice(0, 20) || null) : current.ci;
   if (!name) throw new Error('Escribí el nombre.');
   if (!username) throw new Error('Escribí el usuario.');
+  if (ci && !/^\d{6,10}(-[A-Za-z0-9]{1,3})?$/.test(ci)) throw new Error('El CI no es válido (ej.: 1234567 o 1234567-1A).');
+  if (ci) {
+    const dupCi = get<{ id: number }>('SELECT id FROM users WHERE ci = ? COLLATE NOCASE AND id <> ?', ci, id);
+    if (dupCi) throw new Error('Ese CI ya está registrado para otra persona.');
+  }
   if (username) {
     const dup = get<{ id: number }>('SELECT id FROM users WHERE username = ? AND id <> ?', username, id);
     if (dup) throw new Error('Ese usuario ya existe.');
@@ -744,9 +793,10 @@ export function updateManagedUser(id: number, patch: ManagedUserPatch): UserRow 
   const area = patch.preserveRoles ? current.esam_area : areaForLocalRoles(roles);
   const password = patch.password ? bcrypt.hashSync(patch.password, 10) : current.password;
   run(
-    `UPDATE users SET name = ?, username = ?, email = ?, password = ?, esam_autorizado = ?, esam_area = ?,
+    `UPDATE users SET name = ?, ci = ?, username = ?, email = ?, password = ?, esam_autorizado = ?, esam_area = ?,
        esam_numero = ?, esam_roles = ?, sede_id = ?, updated_at = ? WHERE id = ?`,
     name,
+    ci,
     username,
     email,
     password,

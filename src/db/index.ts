@@ -198,6 +198,9 @@ export function migrate(): void {
   addColumnIfMissing('contact_notes', 'contact_result', 'TEXT');
   // Sedes y cargos de usuarios locales (creados desde el panel).
   addColumnIfMissing('users', 'sede_id', 'INTEGER');
+  // Carnet de identidad de las cuentas locales (es único cuando está cargado).
+  addColumnIfMissing('users', 'ci', 'TEXT');
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_ci ON users(ci) WHERE ci IS NOT NULL');
   addColumnIfMissing('sessions', 'sede_id', 'INTEGER');
   addColumnIfMissing('sedes', 'business_unit_id', 'INTEGER');
   db.exec('CREATE INDEX IF NOT EXISTS idx_sedes_unit ON sedes(business_unit_id)');

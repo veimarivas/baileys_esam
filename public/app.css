@@ -9761,3 +9761,65 @@ html[data-bs-theme="dark"] { --shell-footer-h: 46px; }
 }
 
 .ub-danger-zone { margin-top: 0.85rem; padding-top: 0.75rem; border-top: 1px solid var(--esam-line); }
+
+/* --- Tarjeta con acciones (editar / eliminar) ---------------------------- */
+.ub-card-wrap { position: relative; }
+.ub-card { padding-right: 5.4rem; }
+.ub-card-actions { position: absolute; top: 0.7rem; right: 0.7rem; display: flex; gap: 0.25rem; }
+.ub-card-actions .btn { padding: 0.15rem 0.4rem; }
+
+/* --- Sede con enlace a su ficha ------------------------------------------ */
+.ub-sede-card {
+  display: flex; flex-direction: column;
+  background: var(--esam-surface);
+  border: 1px solid var(--esam-line);
+  border-radius: 16px;
+  box-shadow: var(--esam-shadow-xs);
+  overflow: hidden;
+}
+.ub-sede-link { display: block; flex: 1; color: inherit; text-decoration: none; }
+.ub-sede-link:hover { color: inherit; background: color-mix(in srgb, var(--ub-tone) 4%, transparent); }
+.ub-sede-link:focus-visible { outline: 2px solid var(--ub-tone); outline-offset: -2px; }
+.ub-sede-card .ub-user { padding: 0.45rem 1rem; }
+.ub-users-more { margin: 0; padding: 0.3rem 1rem 0.55rem; font-size: 0.7rem; color: var(--esam-muted); }
+.ub-sede-tools { display: flex; gap: 0.3rem; }
+.ub-sede-foot .btn { white-space: nowrap; }
+.ub-users-table td { vertical-align: middle; }
+.ub-empty-inline { padding: 1.4rem; text-align: center; font-size: 0.8rem; color: var(--esam-muted); }
+
+/* --- Modales -------------------------------------------------------------- */
+.ub-modal {
+  width: min(560px, calc(100vw - 2rem));
+  max-height: calc(100dvh - 3rem);
+  padding: 0; border: 0; border-radius: 16px;
+  background: var(--esam-surface);
+  color: var(--esam-ink);
+  box-shadow: 0 30px 80px -30px rgba(6, 32, 63, 0.75);
+  overflow: auto;
+}
+.ub-modal-wide { width: min(780px, calc(100vw - 2rem)); }
+.ub-modal::backdrop { background: rgba(6, 32, 63, 0.55); backdrop-filter: blur(2px); }
+.ub-modal-form { display: flex; flex-direction: column; margin: 0; }
+.ub-modal-head { display: flex; align-items: flex-start; gap: 1rem; padding: 1.05rem 1.25rem 0.85rem; border-bottom: 1px solid var(--esam-line); }
+.ub-modal-head h5 { margin: 0; font-size: 1rem; font-weight: 700; color: var(--esam-ink); }
+.ub-modal-head p { margin: 0.18rem 0 0; font-size: 0.74rem; color: var(--esam-muted); }
+.ub-modal-x { margin-left: auto; flex: 0 0 auto; border: 0; background: transparent; color: var(--esam-muted); font-size: 1.2rem; line-height: 1; padding: 0.2rem; border-radius: 8px; cursor: pointer; }
+.ub-modal-x:hover { color: var(--esam-ink); background: var(--esam-surface-2); }
+.ub-modal-body { padding: 1rem 1.25rem; }
+.ub-modal-text { margin: 0; font-size: 0.86rem; color: var(--esam-ink-soft); }
+.ub-modal-foot { display: flex; align-items: center; justify-content: flex-end; gap: 0.5rem; padding: 0.85rem 1.25rem 1rem; border-top: 1px solid var(--esam-line); }
+.ub-modal-buttons { display: flex; gap: 0.5rem; margin-left: auto; }
+.ub-modal-check { margin-right: auto; font-size: 0.76rem; }
+.ub-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.85rem; }
+.ub-error { display: block; margin-top: 0.2rem; font-size: 0.7rem; font-weight: 600; color: var(--ab-danger, #bb3b3b); }
+.ub-error:empty { display: none; }
+.ub-req { color: var(--ab-danger, #bb3b3b); }
+.form-control.is-invalid, .form-select.is-invalid { border-color: var(--ab-danger, #bb3b3b); }
+.form-control.is-invalid:focus, .form-select.is-invalid:focus { box-shadow: 0 0 0 0.15rem rgba(187, 59, 59, 0.15); }
+
+@media (max-width: 720px) {
+  .ub-form-grid { grid-template-columns: 1fr; }
+  .ub-card { padding-right: 1rem; }
+  .ub-card-actions { position: static; justify-content: flex-end; padding: 0 1rem 0.9rem; }
+  .ub-modal-foot { flex-wrap: wrap; }
+}

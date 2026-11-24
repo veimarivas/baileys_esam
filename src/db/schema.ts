@@ -225,8 +225,6 @@ CREATE TABLE IF NOT EXISTS sedes (
   updated_at        TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_sedes_unit ON sedes(business_unit_id);
-
 -- Sesiones del panel web (cookie -> usuario).
 CREATE TABLE IF NOT EXISTS web_sessions (
   id         TEXT PRIMARY KEY,

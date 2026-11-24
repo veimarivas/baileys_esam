@@ -314,6 +314,78 @@
     if (!password.value) password.value = norm(source.value);
   });
 
+  // --- Cargos: dependencia por área ---------------------------------------
+  const cargoDescendants = (all, id) => {
+    const out = new Set();
+    if (!id) return out;
+    const walk = (parent) => {
+      out.add(Number(parent));
+      all.filter((cargo) => Number(cargo.parentId) === Number(parent)).forEach((cargo) => walk(cargo.id));
+    };
+    walk(id);
+    return out;
+  };
+  const fillCargoParents = (form, area, selected) => {
+    const select = form.querySelector('[name="parent_id"]');
+    if (!select) return;
+    select.disabled = !area;
+    select.innerHTML = '';
+    if (!area) {
+      select.add(new Option('Primero elegí el área', ''));
+      return;
+    }
+    const all = JSON.parse(form.dataset.cargos || '[]');
+    const excluded = cargoDescendants(all, form.dataset.self || '');
+    select.add(new Option('— Cargo raíz (sin dependencia) —', ''));
+    all
+      .filter((cargo) => cargo.area === area)
+      .filter((cargo) => !excluded.has(Number(cargo.id)))
+      .forEach((cargo) => select.add(new Option(cargo.name, String(cargo.id))));
+    if (selected && [...select.options].some((option) => option.value === String(selected))) {
+      select.value = String(selected);
+    }
+  };
+  document.querySelectorAll('[data-cargo-area]').forEach((areaSelect) => {
+    const form = areaSelect.closest('form');
+    const refresh = () => fillCargoParents(form, areaSelect.value, '');
+    areaSelect.addEventListener('change', refresh);
+    if (!form.dataset.self) refresh();
+  });
+  document.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-ub-edit-cargo]');
+    if (!button) return;
+    event.preventDefault();
+    const dialog = document.getElementById('ub-cargo-edit');
+    if (!dialog) return;
+    const form = dialog.querySelector('form');
+    form.action = '/cargos/' + button.dataset.id;
+    form.dataset.self = button.dataset.id;
+    const area = form.querySelector('[name="area"]');
+    const name = form.querySelector('[name="name"]');
+    area.value = button.dataset.area || '';
+    name.value = button.dataset.name || '';
+    fillCargoParents(form, area.value, button.dataset.parent || '');
+    form.querySelectorAll('[data-v]').forEach((field) => field.dispatchEvent(new Event('input')));
+    dialog.showModal();
+    name.focus();
+  });
+
+  // --- Sede: organigrama / lista -----------------------------------------
+  document.querySelectorAll('[data-sede-view]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const view = button.dataset.sedeView;
+      document.querySelectorAll('[data-sede-view]').forEach((other) => {
+        const on = other === button;
+        other.classList.toggle('on', on);
+        other.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      const org = document.getElementById('sede-org');
+      const list = document.getElementById('sede-list');
+      if (org) org.hidden = view !== 'org';
+      if (list) list.hidden = view !== 'list';
+    });
+  });
+
   // --- Modal indicado por la URL (después de un error del servidor) --------
   const automatic = document.querySelector('dialog[data-auto-open]');
   if (automatic) setTimeout(() => automatic.showModal(), 80);

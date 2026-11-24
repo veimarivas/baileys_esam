@@ -8,8 +8,6 @@ import { resolvePanelRange } from './period-filter.js';
 import { setFlash } from './flash.js';
 import { pageHtml, sendPage } from './page.js';
 import {
-  LOCAL_CARGOS,
-  LOCAL_CARGOS_POR_AREA,
   createLocalUser,
   esamAreaName,
   esamAreas,
@@ -22,6 +20,16 @@ import {
   type UserRow,
 } from '../auth/users.js';
 import { createSede, deleteSede, getSede, listSedes, renameSede } from '../core/sedes.js';
+import {
+  CARGOS_AREAS,
+  cargoMap,
+  createCargo,
+  deleteCargo,
+  getCargo,
+  listCargos,
+  updateCargo,
+  type CargoRow,
+} from '../core/cargos.js';
 import {
   createBusinessUnit,
   deleteBusinessUnit,
@@ -466,11 +474,17 @@ function sedeSelect(selected: number | null, opts: { required?: boolean; emptyLa
   </select>`;
 }
 
-/** Selector de cargo para usuarios locales. */
+/** Selector de cargo para usuarios locales (agrupado por área). */
 function cargoSelect(selected: string | null, id = ''): string {
+  const map = cargoMap();
+  const groups = Object.entries(map)
+    .map(([area, list]) => `<optgroup label="${esc(area)}">${list
+      .map((c) => `<option value="${esc(c)}"${c === selected ? ' selected' : ''}>${esc(c)}</option>`)
+      .join('')}</optgroup>`)
+    .join('');
   return `<select class="form-select" name="cargo" required${id ? ` id="${esc(id)}"` : ''}>
     <option value="">Elegí un cargo</option>
-    ${LOCAL_CARGOS.map((c) => `<option value="${esc(c)}"${c === selected ? ' selected' : ''}>${esc(c)}</option>`).join('')}
+    ${groups}
   </select>`;
 }
 
@@ -898,9 +912,9 @@ function renderUsers(req: Request, sessions: SessionRow[]): string {
           <div class="ab-field"><label class="form-label" for="eu-sede">Sede</label>
             <select class="form-select" id="eu-sede" name="sede_id"></select></div>
           <div class="ab-field"><label class="form-label" for="eu-area">Área</label>
-            <select class="form-select" id="eu-area" name="area" data-v="required" data-cargos-target="eu-cargo" data-cargos='${esc(JSON.stringify(LOCAL_CARGOS_POR_AREA))}'>
+            <select class="form-select" id="eu-area" name="area" data-v="required" data-cargos-target="eu-cargo" data-cargos='${esc(JSON.stringify(cargoMap()))}'>
               <option value="">Elegí el área</option>
-              ${Object.keys(LOCAL_CARGOS_POR_AREA).map((a) => `<option value="${esc(a)}">${esc(a)}</option>`).join('')}
+              ${Object.keys(cargoMap()).map((a) => `<option value="${esc(a)}">${esc(a)}</option>`).join('')}
             </select>
             <small class="ub-error" data-error></small></div>
           <div class="ab-field"><label class="form-label" for="eu-cargo">Cargo</label>
@@ -995,7 +1009,7 @@ function selectField(opts: {
 
 /** Script compartido de modales, validación en vivo y área → cargo. */
 function unitsScript(): string {
-  return '<script src="/assets/js/unidades.js?v=3" defer></script>';
+  return '<script src="/assets/js/unidades.js?v=5" defer></script>';
 }
 
 /** Botón que abre un modal. */
@@ -1226,14 +1240,189 @@ function renderBusinessUnitPage(unit: BusinessUnitRow, openModal = ''): string {
   </div>`;
 }
 
+/** Organigrama de una sede: cargos por área con sus dependencias y personas. */
+function renderOrgChart(sedeUsers: UserRow[]): string {
+  const cargos = listCargos().filter((c) => c.active);
+  const byId = new Map(cargos.map((c) => [c.id, c]));
+  const childrenOf = new Map<number, CargoRow[]>();
+  for (const cargo of cargos) {
+    if (!cargo.parent_id) continue;
+    const list = childrenOf.get(cargo.parent_id) ?? [];
+    list.push(cargo);
+    childrenOf.set(cargo.parent_id, list);
+  }
+
+  const usersByCargo = new Map<string, UserRow[]>();
+  for (const u of sedeUsers) {
+    for (const role of esamRoles(u)) {
+      const list = usersByCargo.get(role) ?? [];
+      if (!list.some((x) => x.id === u.id)) list.push(u);
+      usersByCargo.set(role, list);
+    }
+  }
+
+  const known = new Set(cargos.map((c) => c.name));
+  const hasPeople = (cargo: CargoRow): boolean =>
+    (usersByCargo.get(cargo.name)?.length ?? 0) > 0 || (childrenOf.get(cargo.id) ?? []).some(hasPeople);
+  const relevant = new Set(cargos.filter(hasPeople).map((c) => c.id));
+
+  const peopleChips = (people: UserRow[]) => {
+    if (!people.length) return '<span class="org-empty">Sin personas</span>';
+    const shown = people.slice(0, 3);
+    return `${shown.map((u) => `<span class="org-person"><span class="avatar-xs rounded-circle av-${u.id % 8}">${esc(initials(u.name ?? u.username ?? '?'))}</span><span class="org-person-name">${esc(u.name ?? '—')}</span></span>`).join('')}${people.length > 3 ? `<span class="org-more">+${people.length - 3}</span>` : ''}`;
+  };
+
+  const node = (cargo: CargoRow): string => {
+    const people = usersByCargo.get(cargo.name) ?? [];
+    const children = (childrenOf.get(cargo.id) ?? []).filter((c) => relevant.has(c.id));
+    return `<li>
+      <div class="org-node">
+        <div class="org-node-title">${esc(cargo.name)}</div>
+        <div class="org-node-people">${peopleChips(people)}</div>
+      </div>
+      ${children.length ? `<ul>${children.map(node).join('')}</ul>` : ''}
+    </li>`;
+  };
+
+  const areasHtml = CARGOS_AREAS.map((area) => {
+    const roots = cargos.filter(
+      (c) => c.area === area && (!c.parent_id || !byId.has(c.parent_id)) && relevant.has(c.id),
+    );
+    if (!roots.length) return '';
+    return `<section class="org-area">
+      <div class="org-area-head"><span class="ab-pill ab-info">${esc(area)}</span><span>${roots.length} raíz${roots.length === 1 ? '' : 'es'}</span></div>
+      <div class="org-chart"><ul class="org-tree">${roots.map(node).join('')}</ul></div>
+    </section>`;
+  }).join('');
+
+  const sueltos = [...usersByCargo.entries()].filter(([role]) => !known.has(role));
+  const sueltosHtml = sueltos.length
+    ? `<section class="org-area">
+        <div class="org-area-head"><span class="ab-pill ab-warn">Sin estructura</span><span>cargos que no están registrados</span></div>
+        <div class="org-loose">${sueltos
+          .map(([role, people]) => `<div class="org-loose-item"><b>${esc(role)}</b><div class="org-node-people">${peopleChips(people)}</div></div>`)
+          .join('')}</div>
+      </section>`
+    : '';
+
+  const content = areasHtml + sueltosHtml;
+  if (!content) {
+    return emptyState(
+      'ri-organization-chart',
+      'Todavía no hay organigrama',
+      'Asigná área y cargo a las personas de la sede y registrá los cargos en «Cargos y organigrama» para ver la estructura.',
+      '<a class="btn btn-primary btn-sm" href="/cargos"><i class="ri-node-tree me-1"></i>Administrar cargos</a>',
+    );
+  }
+  return `<div class="org-wrap">${content}</div>`;
+}
+
+/** Administración de cargos: áreas, dependencias y personas asignadas. */
+function renderCargosPage(): string {
+  const cargos = listCargos();
+  const dataAttr = `data-cargos='${esc(JSON.stringify(cargos.map((c) => ({ id: c.id, area: c.area, name: c.name, parentId: c.parent_id }))))}'`;
+  const totalPeople = cargos.reduce((n, c) => n + c.users, 0);
+
+  const areaOptions = CARGOS_AREAS.map((a) => `<option value="${esc(a)}">${esc(a)}</option>`).join('');
+
+  const areaSections = CARGOS_AREAS.map((area) => {
+    const list = cargos.filter((c) => c.area === area);
+    const rows = list.length
+      ? list
+          .map((c) => {
+            const parent = c.parent_id ? cargos.find((p) => p.id === c.parent_id) : null;
+            return `<tr>
+              <td><b>${esc(c.name)}</b></td>
+              <td>${parent ? esc(parent.name) : '<span class="text-muted">Cargo raíz</span>'}</td>
+              <td>${c.users ? `<span class="ab-pill ab-info">${c.users} persona${c.users === 1 ? '' : 's'}</span>` : '<span class="text-muted">—</span>'}</td>
+              <td class="text-end ub-cargo-actions">
+                <button type="button" class="btn btn-sm btn-soft-secondary" title="Editar cargo"
+                  data-ub-edit-cargo data-id="${c.id}" data-area="${esc(c.area)}" data-name="${esc(c.name)}" data-parent="${c.parent_id ?? ''}">
+                  <i class="ri-pencil-line" aria-hidden="true"></i></button>
+                <button type="button" class="btn btn-sm btn-soft-danger" title="Eliminar cargo"
+                  data-ub-delete data-action="/cargos/${c.id}/delete" data-name="${esc(c.name)}" data-kind="el cargo" data-target="#ub-cargo-del">
+                  <i class="ri-delete-bin-6-line" aria-hidden="true"></i></button>
+              </td>
+            </tr>`;
+          })
+          .join('')
+      : '<tr><td colspan="4"><span class="text-muted">Sin cargos en esta área.</span></td></tr>';
+    return `<section class="ab-card ub-cargo-area"><div class="card-body">
+      <div class="ab-card-title"><h5>${esc(area)}</h5><span>${list.length} cargo${list.length === 1 ? '' : 's'}</span></div>
+      <div class="adm-table-wrap"><table class="table table-hover align-middle mb-0 ab-table">
+        <thead><tr><th>Cargo</th><th>Depende de</th><th>Personas</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+    </div></section>`;
+  }).join('');
+
+  return `<div class="ab-page ub-page">
+    <div class="ab-kpis adm-kpis-3">
+      ${kpi('ri-node-tree', 'info', 'Áreas', CARGOS_AREAS.length, 'Marketing, Contabilidad, Académica y Dirección')}
+      ${kpi('ri-organization-chart', 'ok', 'Cargos', cargos.length, 'con su dependencia')}
+      ${kpi('ri-user-3-line', 'mute', 'Personas clasificadas', totalPeople, 'con área y cargo')}
+    </div>
+    ${areaSections}
+
+    <dialog class="ub-modal" id="ub-cargo-new">
+      <form method="post" action="/cargos" class="ub-modal-form" data-ub-validate ${dataAttr} novalidate>
+        <header class="ub-modal-head">
+          <div><h5>Nuevo cargo</h5><p>El cargo pertenece a un área y puede depender de otro cargo.</p></div>
+          <button class="ub-modal-x" type="button" data-ub-close aria-label="Cerrar"><i class="ri-close-line"></i></button>
+        </header>
+        <div class="ub-modal-body ub-form-grid">
+          <div class="ab-field"><label class="form-label" for="cg-area">Área</label>
+            <select class="form-select" id="cg-area" name="area" required data-v="required" data-cargo-area>
+              <option value="">Elegí el área</option>${areaOptions}
+            </select><small class="ub-error" data-error></small></div>
+          ${field({ id: 'cg-name', name: 'name', label: 'Nombre del cargo', required: true, maxlength: 60, rules: 'required|min:2|max:60' })}
+          <div class="ab-field ub-span-2"><label class="form-label" for="cg-parent">Depende de</label>
+            <select class="form-select" id="cg-parent" name="parent_id"></select>
+            <small class="ub-hint">Si no elegís, es un cargo raíz del área.</small></div>
+        </div>
+        <footer class="ub-modal-foot">
+          <button class="btn btn-soft-secondary" type="button" data-ub-close>Cancelar</button>
+          <button class="btn btn-primary" type="submit"><i class="ri-add-line me-1"></i>Crear cargo</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog class="ub-modal" id="ub-cargo-edit">
+      <form method="post" action="" class="ub-modal-form" data-ub-validate ${dataAttr} novalidate>
+        <header class="ub-modal-head">
+          <div><h5>Editar cargo</h5><p>Cambiar el nombre actualiza a las personas que lo tienen.</p></div>
+          <button class="ub-modal-x" type="button" data-ub-close aria-label="Cerrar"><i class="ri-close-line"></i></button>
+        </header>
+        <div class="ub-modal-body ub-form-grid">
+          <div class="ab-field"><label class="form-label" for="ce-area">Área</label>
+            <select class="form-select" id="ce-area" name="area" required data-v="required" data-cargo-area>
+              <option value="">Elegí el área</option>${areaOptions}
+            </select><small class="ub-error" data-error></small></div>
+          ${field({ id: 'ce-name', name: 'name', label: 'Nombre del cargo', required: true, maxlength: 60, rules: 'required|min:2|max:60' })}
+          <div class="ab-field ub-span-2"><label class="form-label" for="ce-parent">Depende de</label>
+            <select class="form-select" id="ce-parent" name="parent_id"></select>
+            <small class="ub-hint">No puede depender de sí mismo ni de un cargo que depende de él.</small></div>
+        </div>
+        <footer class="ub-modal-foot">
+          <button class="btn btn-soft-secondary" type="button" data-ub-close>Cancelar</button>
+          <button class="btn btn-primary" type="submit"><i class="ri-save-3-line me-1"></i>Guardar cambios</button>
+        </footer>
+      </form>
+    </dialog>
+
+    ${deleteModal('ub-cargo-del', 'Eliminar cargo')}
+    ${unitsScript()}
+  </div>`;
+}
+
 function renderSedePage(unit: BusinessUnitRow, sede: ReturnType<typeof getSede>, openModal = ''): string {
   if (!sede) return '';
   const allUsers = listUsers();
   const users = allUsers.filter((u) => u.sede_id === sede.id);
   const conNumero = users.filter((u) => digits(u.esam_numero)).length;
   const names = JSON.stringify(listSedes().map((s) => s.name));
-  const areas = Object.keys(LOCAL_CARGOS_POR_AREA);
-  const cargosJson = JSON.stringify(LOCAL_CARGOS_POR_AREA);
+  const areas = Object.keys(cargoMap());
+  const cargosJson = JSON.stringify(cargoMap());
   const existingCi = JSON.stringify(allUsers.map((u) => u.ci).filter(Boolean));
   const existingPhones = JSON.stringify(allUsers.map((u) => digits(u.esam_numero)).filter(Boolean));
   const existingEmails = JSON.stringify(allUsers.map((u) => (u.email ?? '').toLowerCase()).filter(Boolean));
@@ -1284,7 +1473,17 @@ function renderSedePage(unit: BusinessUnitRow, sede: ReturnType<typeof getSede>,
       </div>
     </section>
 
-    <div class="card ab-card"><div class="card-body">
+    <div class="ub-sede-views">
+      <div class="ab-tabs" role="tablist" aria-label="Vista de la sede">
+        <button type="button" class="ab-tab on" data-sede-view="org" role="tab" aria-selected="true"><i class="ri-organization-chart" aria-hidden="true"></i> Organigrama</button>
+        <button type="button" class="ab-tab" data-sede-view="list" role="tab" aria-selected="false"><i class="ri-list-check-2" aria-hidden="true"></i> Lista</button>
+      </div>
+      <a class="btn btn-sm btn-soft-secondary" href="/cargos"><i class="ri-node-tree me-1" aria-hidden="true"></i>Administrar cargos</a>
+    </div>
+
+    <div id="sede-org">${renderOrgChart(users)}</div>
+
+    <div class="card ab-card" id="sede-list" hidden><div class="card-body">
       <div class="ab-card-title"><h5>Equipo de la sede</h5>
         <span>Cada persona ingresa al panel solo con el número de WhatsApp registrado acá.</span></div>
       <div class="adm-table-wrap"><table class="table table-hover align-middle mb-0 ab-table ub-users-table">
@@ -1314,7 +1513,7 @@ function renderSedePage(unit: BusinessUnitRow, sede: ReturnType<typeof getSede>,
             </select>
             <small class="ub-error" data-error></small>
           </div>
-          ${selectField({ id: 'nu-cargo', name: 'cargo', label: 'Cargo', options: LOCAL_CARGOS, placeholder: 'Primero elegí el área', rules: 'required', hint: 'Los cargos se filtran según el área.' })}
+          ${selectField({ id: 'nu-cargo', name: 'cargo', label: 'Cargo', options: Object.values(cargoMap()).flat(), placeholder: 'Primero elegí el área', rules: 'required', hint: 'Los cargos se filtran según el área.' })}
           ${field({ id: 'nu-password', name: 'password', label: 'Contraseña', type: 'password', placeholder: 'Por defecto, el CI', required: true, maxlength: 60, rules: 'required|min:6', autocomplete: 'new-password', hint: 'Por defecto se usa el CI; podés cambiarla.', attrs: 'data-from="nu-ci"' })}
         </div>
         <footer class="ub-modal-foot">
@@ -1561,7 +1760,7 @@ export function registerAdminRoutes(app: express.Express, ctx: Ctx): void {
     const b = (req.body ?? {}) as Record<string, unknown>;
     const cargo = String(b.cargo ?? '');
     try {
-      if (!(LOCAL_CARGOS as readonly string[]).includes(cargo)) throw new Error('Elegí un cargo válido.');
+      if (!Object.values(cargoMap()).flat().includes(cargo)) throw new Error('Elegí un cargo válido.');
       const user = createLocalUser({
         name: String(b.name ?? ''),
         ci: String(b.ci ?? ''),
@@ -1617,7 +1816,7 @@ export function registerAdminRoutes(app: express.Express, ctx: Ctx): void {
       if (isLocal && !isSuper) {
         const cargo = String(b.cargo ?? '');
         const area = String(b.area ?? '').trim();
-        const cargos = area ? (LOCAL_CARGOS_POR_AREA[area] ?? []) : LOCAL_CARGOS;
+        const cargos = area ? (cargoMap()[area] ?? []) : Object.values(cargoMap()).flat();
         if (!cargos.includes(cargo)) throw new Error('Elegí un cargo del área seleccionada.');
         if (!String(b.numero ?? '').trim()) throw new Error('Escribí el número de WhatsApp.');
         updateManagedUser(target.id, {
@@ -1639,7 +1838,7 @@ export function registerAdminRoutes(app: express.Express, ctx: Ctx): void {
         const cargoNuevo = String(b.cargo ?? '').trim();
         const reclasificar = !isSuper && areaNueva !== '' && cargoNuevo !== '';
         if (reclasificar) {
-          const cargos = LOCAL_CARGOS_POR_AREA[areaNueva] ?? [];
+          const cargos = cargoMap()[areaNueva] ?? [];
           if (!cargos.includes(cargoNuevo)) throw new Error('Elegí un cargo del área seleccionada.');
         }
         updateManagedUser(target.id, {
@@ -1874,7 +2073,7 @@ export function registerAdminRoutes(app: express.Express, ctx: Ctx): void {
     const cargo = String(b.cargo ?? '').trim();
     const ci = String(b.ci ?? '').trim();
     try {
-      const cargos = LOCAL_CARGOS_POR_AREA[area] ?? [];
+      const cargos = cargoMap()[area] ?? [];
       if (!cargos.includes(cargo)) throw new Error('Elegí un cargo del área seleccionada.');
       const user = createLocalUser({
         name: `${nombres} ${apellidos}`,
@@ -1901,6 +2100,66 @@ export function registerAdminRoutes(app: express.Express, ctx: Ctx): void {
       res.redirect(backToSede(res, unit.id, sede.id, `Usuario «${user.name ?? user.username}» creado.`));
     } catch (err) {
       res.redirect(backToSede(res, unit.id, sede.id, (err as Error).message, 'error', 'usuario'));
+    }
+  });
+
+  // Cargos y organigrama
+  app.get('/cargos', ...usersGuard, (req: Request, res: Response) => {
+    sendPage(req, res, 'Cargos y organigrama', 'users', renderCargosPage(), {
+      subtitle: 'Cargos por área y sus dependencias: la base del organigrama de cada sede.',
+      activeHref: '/cargos',
+      actions: openButton('#ub-cargo-new', 'Nuevo cargo', 'ri-add-line'),
+    });
+  });
+
+  app.post('/cargos', ...usersGuard, (req: Request, res: Response) => {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    try {
+      const id = createCargo({
+        name: String(b.name ?? ''),
+        area: String(b.area ?? ''),
+        parentId: Number(b.parent_id) || null,
+      });
+      audit('user.cargo_created', { cargo_id: id, name: String(b.name ?? ''), area: String(b.area ?? ''), by: usersUserId(req) });
+      setFlash(res, 'ok', 'Cargo creado.');
+      res.redirect('/cargos');
+    } catch (err) {
+      setFlash(res, 'error', (err as Error).message);
+      res.redirect('/cargos?abrir=cargo');
+    }
+  });
+
+  app.post('/cargos/:id', ...usersGuard, (req: Request, res: Response) => {
+    const id = positiveInt(req.params.id);
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    try {
+      if (!id) throw new Error('Cargo no encontrado.');
+      updateCargo(id, {
+        name: String(b.name ?? ''),
+        area: String(b.area ?? ''),
+        parentId: Number(b.parent_id) || null,
+      });
+      audit('user.cargo_updated', { cargo_id: id, name: String(b.name ?? ''), area: String(b.area ?? ''), by: usersUserId(req) });
+      setFlash(res, 'ok', 'Cargo actualizado.');
+      res.redirect('/cargos');
+    } catch (err) {
+      setFlash(res, 'error', (err as Error).message);
+      res.redirect('/cargos');
+    }
+  });
+
+  app.post('/cargos/:id/delete', ...usersGuard, (req: Request, res: Response) => {
+    const id = positiveInt(req.params.id);
+    try {
+      if (!id) throw new Error('Cargo no encontrado.');
+      const cargo = getCargo(id);
+      deleteCargo(id);
+      audit('user.cargo_deleted', { cargo_id: id, name: cargo?.name ?? '', by: usersUserId(req) });
+      setFlash(res, 'ok', 'Cargo eliminado.');
+      res.redirect('/cargos');
+    } catch (err) {
+      setFlash(res, 'error', (err as Error).message);
+      res.redirect('/cargos');
     }
   });
 

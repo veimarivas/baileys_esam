@@ -205,6 +205,7 @@ export function migrate(): void {
   addColumnIfMissing('sedes', 'business_unit_id', 'INTEGER');
   db.exec('CREATE INDEX IF NOT EXISTS idx_sedes_unit ON sedes(business_unit_id)');
   setupBusinessUnits();
+  setupCargos();
   addColumnIfMissing('web_sessions', 'last_seen_at', 'TEXT');
   db.exec('CREATE INDEX IF NOT EXISTS idx_users_sede ON users(sede_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_sede ON sessions(sede_id)');
@@ -386,6 +387,35 @@ function setupBusinessUnits(): void {
   if (Number(moved.changes) > 0) {
     logger.info({ sedes: Number(moved.changes) }, 'Sedes existentes asignadas a la unidad por defecto');
   }
+}
+
+/**
+ * Cargos por área y su dependencia (organigrama). La primera vez se siembra el
+ * catálogo con el que ya trabajaba el panel; después se administran en /cargos.
+ */
+function setupCargos(): void {
+  const total = (db.prepare('SELECT COUNT(*) AS c FROM cargos').get() as { c: number } | undefined)?.c ?? 0;
+  if (total > 0) return;
+  const now = new Date().toISOString();
+  const insert = (area: string, name: string, parentName: string | null, position: number) => {
+    const parent = parentName
+      ? (db.prepare('SELECT id FROM cargos WHERE area = ? AND name = ?').get(area, parentName) as { id: number } | undefined)
+      : undefined;
+    db.prepare(
+      'INSERT INTO cargos (area, name, parent_id, position, active, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)',
+    ).run(area, name, parent?.id ?? null, position, now, now);
+  };
+  insert('Dirección', 'Gerente General', null, 1);
+  insert('Marketing', 'Gerente de Marketing', null, 1);
+  insert('Marketing', 'Supervisor de Marketing', 'Gerente de Marketing', 2);
+  insert('Marketing', 'Asesor de Marketing', 'Supervisor de Marketing', 3);
+  insert('Contabilidad', 'Contador General', null, 1);
+  insert('Contabilidad', 'Analista Contable', 'Contador General', 2);
+  insert('Contabilidad', 'Auxiliar Contable', 'Analista Contable', 3);
+  insert('Académica', 'Director Académico', null, 1);
+  insert('Académica', 'Coordinador Académico', 'Director Académico', 2);
+  insert('Académica', 'Asesor Académico', 'Coordinador Académico', 3);
+  logger.info('Cargos iniciales del organigrama creados');
 }
 
 /** Marca en `configs` si la busqueda full-text (FTS5) quedo disponible. */

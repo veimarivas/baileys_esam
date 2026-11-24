@@ -82,6 +82,7 @@ const NAV: NavItem[] = [
   { section: 'policies', href: '/anti-ban', label: 'Anti-Baneo', icon: 'ri-shield-star-line' },
   { section: 'audit', href: '/audit', label: 'Auditoría', icon: 'ri-history-line' },
   { section: 'users', href: '/unidades', label: 'Unidades de negocio', icon: 'ri-community-line' },
+  { section: 'users', href: '/cargos', label: 'Cargos y organigrama', icon: 'ri-node-tree' },
   { section: 'users', href: '/users', label: 'Usuarios', icon: 'ri-team-line' },
   { section: 'settings', href: '/settings', label: 'Conexión', icon: 'ri-plug-line' },
 ];

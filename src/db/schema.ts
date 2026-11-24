@@ -216,6 +216,22 @@ CREATE TABLE IF NOT EXISTS business_units (
   updated_at TEXT NOT NULL
 );
 
+-- Cargos por área y su dependencia (organigrama). Cada sede arma su
+-- organigrama con estos cargos y las personas que los ocupan.
+CREATE TABLE IF NOT EXISTS cargos (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  area       TEXT NOT NULL,
+  name       TEXT NOT NULL,
+  parent_id  INTEGER,
+  position   INTEGER NOT NULL DEFAULT 0,
+  active     INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(area, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cargos_area ON cargos(area);
+
 -- Sedes de la institución. Cada usuario local pertenece a una sede y tiene un cargo.
 CREATE TABLE IF NOT EXISTS sedes (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import { all, get, run } from '../db/index.js';
 import { nowIso } from '../util/async.js';
 import { normalizePhone } from '../core/phone.js';
+import { AREA_KEY, areaOfCargo, cargoExists } from '../core/cargos.js';
 
 export interface UserRow {
   id: number;
@@ -676,6 +677,8 @@ export function syncUserSessions(user: UserRow): void {
 /** Área interna que corresponde a un cargo local (solo Marketing la usa). */
 export function areaForLocalRoles(roles: string[]): string | null {
   for (const role of roles) {
+    const label = areaOfCargo(role);
+    if (label && AREA_KEY[label]) return AREA_KEY[label];
     const area = LOCAL_CARGO_AREA[role] ?? ROLE_AREAS[role];
     if (area) return area;
   }
@@ -709,7 +712,7 @@ export function createLocalUser(input: LocalUserInput): UserRow {
   if (!username) throw new Error('Escribí el usuario.');
   if (!input.sedeId) throw new Error('Elegí una sede.');
   if (!input.roles.length) throw new Error('Elegí un cargo.');
-  if (input.roles.some((r) => !LOCAL_CARGOS.includes(r))) {
+  if (input.roles.some((r) => !cargoExists(r))) {
     throw new Error('El cargo elegido no es válido.');
   }
   if (password.length < 6) throw new Error('La contraseña debe tener al menos 6 caracteres.');

@@ -119,7 +119,10 @@
     const isLocal = data.local === '1';
     const isSuper = data.super === '1';
     const basicEditable = isLocal || isSuper;
-    const rolesEditable = isLocal && !isSuper;
+    // Área y cargo: se editan en las cuentas locales y también en las de
+    // cronogramas (para poder clasificarlas en la estructura). El Super Admin
+    // mantiene su acceso total y no se reclasifica.
+    const rolesEditable = !isSuper;
     const ciEditable = isLocal && !isSuper;
 
     for (const name of ['name', 'username', 'email', 'numero', 'password']) {
@@ -136,6 +139,21 @@
     if (areaSelect) areaSelect.disabled = !rolesEditable;
     if (cargoSelect) cargoSelect.disabled = !rolesEditable;
 
+    // En las cuentas locales el área y el cargo son obligatorios; en las de
+    // cronogramas se pueden dejar como están (sin reclasificar).
+    const setRequired = (field, required) => {
+      if (!field) return;
+      if (required) {
+        field.setAttribute('required', '');
+        field.setAttribute('data-v', 'required');
+      } else {
+        field.removeAttribute('required');
+        field.removeAttribute('data-v');
+      }
+    };
+    setRequired(areaSelect, isLocal && !isSuper);
+    setRequired(cargoSelect, isLocal && !isSuper);
+
     const rolesPill = form.querySelector('[data-roles]');
     const rolesHelp = form.querySelector('[data-roles-help]');
     const rolesNote = form.querySelector('[data-roles-note]');
@@ -143,10 +161,10 @@
     if (rolesNote) rolesNote.textContent = isLocal ? 'Cuenta local' : isSuper ? 'Super Admin' : 'Cuenta de cronogramas';
     if (rolesHelp) {
       rolesHelp.textContent = rolesEditable
-        ? 'Elegí el área y el cargo de esta persona.'
-        : isSuper
-          ? 'La cuenta principal mantiene acceso total al panel.'
-          : 'El área y el cargo se actualizan al iniciar sesión desde cronogramas.';
+        ? isLocal
+          ? 'Elegí el área y el cargo de esta persona.'
+          : 'Podés ajustar el área y el cargo; cronogramas puede actualizarlos al iniciar sesión.'
+        : 'La cuenta principal mantiene acceso total al panel.';
     }
 
     // Unidad de negocio → sede

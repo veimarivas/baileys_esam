@@ -995,7 +995,7 @@ function selectField(opts: {
 
 /** Script compartido de modales, validación en vivo y área → cargo. */
 function unitsScript(): string {
-  return '<script src="/assets/js/unidades.js?v=2" defer></script>';
+  return '<script src="/assets/js/unidades.js?v=3" defer></script>';
 }
 
 /** Botón que abre un modal. */
@@ -1632,11 +1632,21 @@ export function registerAdminRoutes(app: express.Express, ctx: Ctx): void {
           autorizado,
         });
       } else {
-        // Super Admin y cuentas de cronogramas: el rol no se toca desde acá.
+        // Super Admin: mantiene su rol. Cuentas de cronogramas: se les puede
+        // elegir área y cargo para ubicarlas en la estructura; si no se eligen,
+        // se conserva el rol que trae cronogramas.
+        const areaNueva = String(b.area ?? '').trim();
+        const cargoNuevo = String(b.cargo ?? '').trim();
+        const reclasificar = !isSuper && areaNueva !== '' && cargoNuevo !== '';
+        if (reclasificar) {
+          const cargos = LOCAL_CARGOS_POR_AREA[areaNueva] ?? [];
+          if (!cargos.includes(cargoNuevo)) throw new Error('Elegí un cargo del área seleccionada.');
+        }
         updateManagedUser(target.id, {
           sedeId,
           autorizado,
-          preserveRoles: true,
+          preserveRoles: !reclasificar,
+          ...(reclasificar ? { roles: [cargoNuevo] } : {}),
           ...(isSuper
             ? {
                 name: String(b.name ?? ''),

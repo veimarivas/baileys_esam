@@ -438,7 +438,7 @@ function usersUserId(req: Request): number | null {
   return (req as Request & { user?: UserRow }).user?.id ?? null;
 }
 
-/** Selector de sede para formularios de alta y edición. */
+/** Selector de sede para formularios de alta y edición (agrupado por unidad). */
 function sedeSelect(selected: number | null, opts: { required?: boolean; emptyLabel?: string } = {}): string {
   const sedes = listSedes();
   const required = opts.required ?? false;
@@ -446,8 +446,20 @@ function sedeSelect(selected: number | null, opts: { required?: boolean; emptyLa
     return '<select class="form-select" disabled><option value="">Primero creá una sede</option></select>';
   }
   const empty = required ? '' : `<option value="">${esc(opts.emptyLabel ?? 'Sin sede')}</option>`;
+  const groups = new Map<string, ReturnType<typeof listSedes>>();
+  for (const s of sedes) {
+    const key = s.business_unit_name ?? 'Sin unidad de negocio';
+    const list = groups.get(key) ?? [];
+    list.push(s);
+    groups.set(key, list);
+  }
+  const options = [...groups.entries()]
+    .map(([unit, list]) => `<optgroup label="${esc(unit)}">${list
+      .map((s) => `<option value="${s.id}"${s.id === selected ? ' selected' : ''}>${esc(s.name)}</option>`)
+      .join('')}</optgroup>`)
+    .join('');
   return `<select class="form-select" name="sede_id"${required ? ' required' : ''}>
-    ${empty}${sedes.map((s) => `<option value="${s.id}"${s.id === selected ? ' selected' : ''}>${esc(s.name)}</option>`).join('')}
+    ${empty}${options}
   </select>`;
 }
 
@@ -460,6 +472,7 @@ function cargoSelect(selected: string | null, id = ''): string {
 }
 
 function renderSedesPanel(sedes: ReturnType<typeof listSedes>, open: boolean): string {
+  const units = listBusinessUnits();
   const list = sedes.length
     ? `<div class="adm-sede-list">${sedes.map((s) => `
         <div class="adm-sede-row">
@@ -467,6 +480,7 @@ function renderSedesPanel(sedes: ReturnType<typeof listSedes>, open: boolean): s
             <input class="form-control form-control-sm" name="name" value="${esc(s.name)}" maxlength="80" required aria-label="Nombre de la sede"/>
             <button class="btn btn-sm btn-light" type="submit" title="Guardar nombre"><i class="ri-save-3-line"></i></button>
           </form>
+          <span class="adm-sede-count"><i class="ri-community-line"></i>${esc(s.business_unit_name ?? 'Sin unidad')}</span>
           <span class="adm-sede-count">${s.users} usuario${s.users === 1 ? '' : 's'}</span>
           <form method="post" action="/sedes/${s.id}/delete" ${s.users ? '' : `data-confirm="¿Eliminar la sede «${esc(s.name)}»?"`}>
             <button class="btn btn-sm btn-soft-danger" type="submit" ${s.users ? 'disabled' : ''} title="${s.users ? 'Tiene usuarios asignados' : 'Eliminar sede'}"><i class="ri-delete-bin-6-line"></i></button>
@@ -476,15 +490,21 @@ function renderSedesPanel(sedes: ReturnType<typeof listSedes>, open: boolean): s
   return `<details class="adm-tool" id="sedes"${open || !sedes.length ? ' open' : ''}>
     <summary>
       <span class="adm-tool-ic"><i class="ri-building-2-line"></i></span>
-      <span class="adm-tool-txt"><b>Sedes</b><small>Agrupá las líneas y los cargos por sede.</small></span>
+      <span class="adm-tool-txt"><b>Sedes</b><small>Cada sede pertenece a una unidad de negocio.</small></span>
       <span class="adm-tool-count">${sedes.length}</span>
     </summary>
     <div class="adm-tool-body">
       ${list}
       <form method="post" action="/sedes" class="adm-inline-form">
         <input class="form-control" name="name" maxlength="80" required placeholder="Nombre de la nueva sede" aria-label="Nombre de la nueva sede"/>
+        ${units.length
+          ? `<select class="form-select" name="business_unit_id" required aria-label="Unidad de negocio">${units
+              .map((u) => `<option value="${u.id}">${esc(u.name)}</option>`)
+              .join('')}</select>`
+          : ''}
         <button class="btn btn-soft-primary" type="submit"><i class="ri-add-line me-1"></i>Crear sede</button>
       </form>
+      <p class="adm-foot"><i class="ri-information-line"></i>La jerarquía completa (unidades → sedes → usuarios) se administra en <a href="/unidades">Unidades de negocio</a>.</p>
     </div>
   </details>`;
 }
@@ -1187,9 +1207,10 @@ export function registerAdminRoutes(app: express.Express, ctx: Ctx): void {
 
   app.post('/sedes', ...usersGuard, (req: Request, res: Response) => {
     const name = String(req.body?.name ?? '').trim();
+    const unitId = Number(req.body?.business_unit_id) || 0;
     try {
-      const id = createSede(name);
-      audit('user.sede_created', { sede_id: id, name, by: usersUserId(req) });
+      const id = createSede(name, unitId || null);
+      audit('user.sede_created', { sede_id: id, unit_id: unitId || null, name, by: usersUserId(req) });
       res.redirect(backToUsers(res, `Sede «${name}» creada.`));
     } catch (err) {
       res.redirect(backToUsers(res, (err as Error).message, { kind: 'error', panel: 'sedes' }));

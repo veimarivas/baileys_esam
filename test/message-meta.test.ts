@@ -56,7 +56,7 @@ describe('contactMeta', () => {
   it('prefiere el nombre que muestra WhatsApp', () => {
     const meta = contactMeta('Ana', 'BEGIN:VCARD\nFN:Ana Pérez\nTEL;waid=59179323041:+591 79 323 041\nEND:VCARD');
     assert.deepEqual(meta.contacts, [{ name: 'Ana', phone: '59179323041' }]);
-    assert.equal(contactPreview(meta), 'Ana');
+    assert.equal(contactPreview(meta), 'Ana · +59179323041');
   });
 
   it('resume una lista de varios contactos', () => {
@@ -65,7 +65,7 @@ describe('contactMeta', () => {
       { displayName: 'Luis', vcard: 'BEGIN:VCARD\nFN:Luis\nTEL;waid=59170000002:+591 70 000 002\nEND:VCARD' },
     ]);
     assert.equal(meta.contacts.length, 2);
-    assert.equal(contactPreview(meta), 'Ana y 1 más');
+    assert.equal(contactPreview(meta), 'Ana · +59170000001 y 1 más');
   });
 
   it('no inventa teléfono cuando el vCard no lo trae', () => {

@@ -93,6 +93,106 @@
     dialog.showModal();
   });
 
+  // --- Editar usuario (página Usuarios) ------------------------------------
+  document.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-ub-edit-user]');
+    if (!button) return;
+    event.preventDefault();
+    const dialog = document.getElementById('ub-user-edit');
+    if (!dialog) return;
+    const form = dialog.querySelector('form');
+    const data = button.dataset;
+    form.action = '/users/' + data.id;
+    const setValue = (name, value) => {
+      const field = form.querySelector('[name="' + name + '"]');
+      if (field) field.value = value || '';
+    };
+    setValue('name', data.name);
+    setValue('ci', data.ci);
+    setValue('username', data.username);
+    setValue('email', data.email);
+    setValue('numero', data.numero);
+    setValue('password', '');
+    const autorizado = form.querySelector('[name="autorizado"]');
+    if (autorizado) autorizado.checked = data.autorizado === '1';
+
+    const isLocal = data.local === '1';
+    const isSuper = data.super === '1';
+    const basicEditable = isLocal || isSuper;
+    const rolesEditable = isLocal && !isSuper;
+    const ciEditable = isLocal && !isSuper;
+
+    for (const name of ['name', 'username', 'email', 'numero', 'password']) {
+      const field = form.querySelector('[name="' + name + '"]');
+      if (field) {
+        field.disabled = !basicEditable;
+        field.readOnly = !basicEditable;
+      }
+    }
+    const ciField = form.querySelector('[name="ci"]');
+    if (ciField) ciField.disabled = !ciEditable;
+    const areaSelect = form.querySelector('[name="area"]');
+    const cargoSelect = form.querySelector('[name="cargo"]');
+    if (areaSelect) areaSelect.disabled = !rolesEditable;
+    if (cargoSelect) cargoSelect.disabled = !rolesEditable;
+
+    const rolesPill = form.querySelector('[data-roles]');
+    const rolesHelp = form.querySelector('[data-roles-help]');
+    const rolesNote = form.querySelector('[data-roles-note]');
+    if (rolesPill) rolesPill.textContent = data.roles || 'Sin cargo';
+    if (rolesNote) rolesNote.textContent = isLocal ? 'Cuenta local' : isSuper ? 'Super Admin' : 'Cuenta de cronogramas';
+    if (rolesHelp) {
+      rolesHelp.textContent = rolesEditable
+        ? 'Elegí el área y el cargo de esta persona.'
+        : isSuper
+          ? 'La cuenta principal mantiene acceso total al panel.'
+          : 'El área y el cargo se actualizan al iniciar sesión desde cronogramas.';
+    }
+
+    // Unidad de negocio → sede
+    const units = JSON.parse(form.dataset.units || '[]');
+    const sedes = JSON.parse(form.dataset.sedes || '[]');
+    const unitSelect = form.querySelector('#eu-unit');
+    const sedeSelect = form.querySelector('#eu-sede');
+    if (unitSelect && sedeSelect) {
+      unitSelect.innerHTML = '';
+      unitSelect.add(new Option('Sin unidad de negocio', ''));
+      units.forEach((unit) => unitSelect.add(new Option(unit.name, String(unit.id))));
+      unitSelect.value = data.unit ? String(data.unit) : '';
+      const fillSedes = (unitId, selected) => {
+        sedeSelect.innerHTML = '';
+        sedeSelect.add(new Option(unitId ? 'Sin sede' : 'Primero elegí la unidad', ''));
+        sedes
+          .filter((sede) => !unitId || String(sede.unitId) === String(unitId))
+          .forEach((sede) => sedeSelect.add(new Option(sede.name, String(sede.id))));
+        sedeSelect.disabled = !unitId;
+        if (selected && [...sedeSelect.options].some((option) => option.value === String(selected))) {
+          sedeSelect.value = String(selected);
+        }
+      };
+      fillSedes(data.unit || '', data.sede || '');
+      unitSelect.onchange = () => fillSedes(unitSelect.value, '');
+    }
+
+    // Área → cargo
+    if (areaSelect) {
+      areaSelect.value = data.area || '';
+      areaSelect.dispatchEvent(new Event('change'));
+      if (cargoSelect && data.cargo && [...cargoSelect.options].some((option) => option.value === data.cargo)) {
+        cargoSelect.value = data.cargo;
+      }
+    }
+    // El render de cargos vuelve a habilitar el select; si el cargo no se
+    // edita (cronogramas / Super Admin), se vuelve a bloquear después.
+    if (!rolesEditable) {
+      if (areaSelect) areaSelect.disabled = true;
+      if (cargoSelect) cargoSelect.disabled = true;
+    }
+
+    dialog.showModal();
+    form.querySelectorAll('[data-v]').forEach((field) => field.dispatchEvent(new Event('input')));
+  });
+
   // --- Validación en vivo ---------------------------------------------------
   const errorFor = (field) => {
     const value = norm(field.value);
@@ -129,9 +229,14 @@
     const validate = () => {
       let ok = true;
       for (const field of fields) {
-        const message = errorFor(field);
         const box = field.closest('.ab-field');
         const error = box ? box.querySelector('[data-error]') : null;
+        if (field.disabled) {
+          if (error) error.textContent = '';
+          field.classList.remove('is-invalid');
+          continue;
+        }
+        const message = errorFor(field);
         if (error) error.textContent = message;
         field.classList.toggle('is-invalid', !!message);
         if (message) ok = false;

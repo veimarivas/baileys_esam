@@ -30,8 +30,6 @@ import {
   updateBusinessUnit,
   type BusinessUnitRow,
 } from '../core/business-units.js';
-import { lastUseByUser } from '../core/user-activity.js';
-import { lineVerdict, type VerdictLevel } from '../core/line-verdict.js';
 import { audit } from '../core/webhooks.js';
 import {
   createTemplate,
@@ -400,32 +398,34 @@ function renderAudit(f: AuditFilters, maps: { sessions: Map<string, SessionRow>;
 
 // ══ Usuarios ═══════════════════════════════════════════════════════════════════
 
-const SESSION_STATUS: Record<string, { label: string; tone: string }> = {
-  ready: { label: 'Conectada', tone: 'ok' },
-  qr: { label: 'Esperando QR', tone: 'warn' },
-  connecting: { label: 'Conectando', tone: 'warn' },
-  disconnected: { label: 'Desconectada', tone: 'danger' },
-  blocked: { label: 'Bloqueada', tone: 'danger' },
-  created: { label: 'Sin vincular', tone: 'mute' },
-};
-
-/** Semáforo de salud de la línea, enlazado al detalle de Anti-Baneo. */
-const USER_HEALTH: Record<VerdictLevel, { label: string; tone: string }> = {
-  green: { label: 'Sana', tone: 'ok' },
-  yellow: { label: 'Con cuidado', tone: 'warn' },
-  red: { label: 'En riesgo', tone: 'danger' },
-  off: { label: 'Sin conexión', tone: 'mute' },
-};
-
 const INACTIVE_DAYS = 30;
 
 const USER_AREA_TABS: Array<{ key: string; label: string }> = [
   { key: 'admin', label: 'Administración' },
-  { key: 'academico', label: 'Académico' },
+  { key: 'academico', label: 'Académica' },
   { key: 'contabilidad', label: 'Contabilidad' },
   { key: 'marketing', label: 'Marketing' },
+  { key: 'general', label: 'Dirección' },
   { key: 'consulta', label: 'Consulta' },
 ];
+
+/** Área del formulario (nombre visible) a partir de la clave interna. */
+const AREA_FORM_LABEL: Record<string, string> = {
+  marketing: 'Marketing',
+  contabilidad: 'Contabilidad',
+  academico: 'Académica',
+  general: 'Dirección',
+};
+
+/** Orden de las áreas dentro de cada sede en la vista agrupada. */
+const AREA_ORDER = ['marketing', 'contabilidad', 'academico', 'general', 'admin', 'consulta'];
+
+/** Cargo visible de una cuenta (roles del SSO o del panel). */
+function userCargoLabel(u: UserRow): string {
+  const roles = esamRoles(u);
+  if (roles.length) return roles.join(' · ');
+  return esamEsAdmin(u) ? 'Super Admin' : 'Sin cargo';
+}
 
 /** Áreas de un usuario: su área de cronogramas + las áreas de sus roles. */
 function userAreas(u: UserRow): string[] {
@@ -635,31 +635,6 @@ function renderUsers(req: Request, sessions: SessionRow[]): string {
   const filter = q(req, 'f');
   const area = q(req, 'area') || 'all';
   const sedeFilter = Number(q(req, 'sede')) || 0;
-  const since = new Date(Date.now() - 30 * 86_400_000).toISOString();
-  const responses = new Map(
-    all<{ uid: number; c: number; chats: number }>(
-      `SELECT sender_uid AS uid, COUNT(*) AS c, COUNT(DISTINCT chat_id) AS chats FROM messages
-        WHERE direction = 'out' AND sender_uid IS NOT NULL AND occurred_at >= ? GROUP BY sender_uid`,
-      since,
-    ).map((r) => [r.uid, r]),
-  );
-  const notes = new Map(
-    all<{ uid: number; c: number }>(
-      'SELECT user_id AS uid, COUNT(*) AS c FROM contact_notes WHERE user_id IS NOT NULL AND created_at >= ? AND deleted_at IS NULL GROUP BY user_id',
-      since,
-    ).map((r) => [r.uid, r.c]),
-  );
-  const lastUse = lastUseByUser(users);
-  // Una sola evaluación de salud por línea, aunque varios usuarios compartan el número.
-  const verdictCache = new Map<string, ReturnType<typeof lineVerdict>>();
-  const verdictOf = (session: SessionRow) => {
-    let verdict = verdictCache.get(session.id);
-    if (!verdict) {
-      verdict = lineVerdict(session);
-      verdictCache.set(session.id, verdict);
-    }
-    return verdict;
-  };
   const lineOf = (u: UserRow) => {
     const num = digits(u.esam_numero);
     if (!num) return null;
@@ -727,65 +702,131 @@ function renderUsers(req: Request, sessions: SessionRow[]): string {
       <span>${esc(t.label)}</span><b>${t.count}</b></a>`)
     .join('');
 
-  const table = rows.length
-    ? `<div class="adm-table-wrap"><table class="table table-hover align-middle mb-0 ab-table adm-users">
-        <thead><tr><th>Persona</th><th>Rol</th><th>Sede</th><th>Línea de WhatsApp</th><th>Último ingreso</th><th>Última actividad</th><th>Actividad 30 días</th><th>Acceso</th><th></th></tr></thead>
-        <tbody>${rows
-          .map((u, i) => {
-            const roles = esamRoles(u);
-            const roleCell = roles.length
-              ? roles.map((r) => `<span class="ab-pill ab-info">${esc(r)}</span>`).join(' ')
-              : esamEsAdmin(u)
-                ? '<span class="ab-pill ab-ok">Super Admin</span>'
-                : '<span class="text-muted">—</span>';
-            const sedeCell = u.sede_id
-              ? `<span class="adm-sub">${esc(sedeMap.get(u.sede_id) ?? 'Sede eliminada')}</span>`
-              : '<span class="ab-pill ab-warn">Sin sede</span>';
-            const line = lineOf(u);
-            const st = line?.session ? SESSION_STATUS[line.session.status] ?? { label: line.session.status, tone: 'mute' } : null;
-            const verdict = line?.session ? verdictOf(line.session) : null;
-            const health = verdict ? USER_HEALTH[verdict.level] : null;
-            const healthHref = line?.session ? `/anti-ban/line/${encodeURIComponent(line.session.id)}` : '';
-            const healthReason = verdict?.reasons[0] || verdict?.title || '';
-            const healthPill = health && healthHref
-              ? `<a class="ab-pill ab-${health.tone} adm-health-pill" href="${healthHref}" title="${esc(healthReason)}"><span class="ab-dot"></span>${esc(health.label)}</a>`
-              : '';
-            const healthLine = health && healthHref
-              ? `<a class="adm-health-reason" href="${healthHref}" title="${esc(healthReason)}">${esc(healthReason.length > 90 ? `${healthReason.slice(0, 90)}…` : healthReason)}</a>`
-              : '';
-            const lineCell =
-              u.source === 'local' && !line
-                ? '<span class="text-muted">Cuenta de servicio</span>'
-                : !line
-                  ? '<span class="ab-pill ab-mute">Sin número asignado</span>'
-                  : `<div class="adm-line"><span class="ab-mono">+${esc(line.num)}</span>
-                     ${st ? `<span class="ab-pill ab-${st.tone}"><span class="ab-dot"></span>${esc(st.label)}</span>` : '<span class="ab-pill ab-warn">Línea no creada</span>'}
-                     ${healthPill}</div>${healthLine}`;
-            const r = responses.get(u.id);
-            const n = notes.get(u.id) ?? 0;
-            const inactive = isInactive(u);
-            const use = lastUse.get(u.id);
-            const useIcon = use?.kind === 'batch' ? 'ri-send-plane-2-line' : use?.kind === 'note' ? 'ri-sticky-note-line' : 'ri-chat-1-line';
-            return `<tr>
-              <td data-label="Persona"><div class="user-cell">
-                <span class="avatar-xs rounded-circle av-${i % 8}">${esc(initials(u.name ?? u.username))}</span>
-                <div class="min-w-0"><div class="user-name"><a class="adm-user-link" href="/reports/users/${u.id}" title="Ver ficha y seguimiento">${esc(u.name ?? '—')}</a></div>
-                  <div class="user-mail">${u.ci ? `CI ${esc(u.ci)} · ` : ''}${esc(u.username ?? '')}${u.email ? ` · ${esc(u.email)}` : ''}</div></div>
-              </div></td>
-              <td data-label="Rol">${roleCell}${u.esam_area ? `<div class="adm-sub">${esc(u.esam_area)}</div>` : ''}</td>
-              <td data-label="Sede">${sedeCell}</td>
-              <td data-label="Línea de WhatsApp">${lineCell}</td>
-              <td data-label="Último ingreso"><span title="${esc(fmtDate(u.last_login_at))}" class="${inactive ? 'ab-t-warn' : ''}">${esc(relTime(u.last_login_at))}</span>
-                <div class="adm-sub">${u.login_count} ingreso${u.login_count === 1 ? '' : 's'}</div></td>
-              <td data-label="Última actividad">${use ? `<span class="adm-use" title="${esc(fmtDate(use.at))}"><i class="${useIcon}"></i>${esc(relTime(use.at))}</span>
-                <div class="adm-sub">${esc(use.label)}</div>` : '<span class="text-muted">Sin actividad registrada</span>'}</td>
-              <td data-label="Actividad 30 días">${r || n ? `<b>${r?.c ?? 0}</b> respuestas · ${r?.chats ?? 0} chats<div class="adm-sub">${n} nota${n === 1 ? '' : 's'} registrada${n === 1 ? '' : 's'}</div>` : '<span class="text-muted">Sin actividad</span>'}</td>
-              <td data-label="Acceso">${u.esam_autorizado ? '<span class="ab-pill ab-ok"><i class="ri-check-line"></i>Autorizado</span>' : '<span class="ab-pill ab-danger">Sin autorizar</span>'}
-                <div class="adm-sub">${esc(u.source === 'local' ? 'Local' : u.source === 'cronogramas' ? 'Cronogramas' : u.source)}</div></td>
-              <td data-label="Editar"><a class="btn btn-sm btn-soft-secondary" href="/users/${u.id}" title="Editar cuenta, sede y cargo"><span class="ri-pencil-line"></span></a></td>
-            </tr>`;
-          })
-          .join('')}</tbody></table></div>`
+  const units = listBusinessUnits();
+  const unitById = new Map(units.map((x) => [x.id, x]));
+  const sedeById = new Map(sedes.map((x) => [x.id, x]));
+
+  type CargoNode = { name: string; users: UserRow[] };
+  type AreaNode = { label: string; cargos: Map<string, CargoNode> };
+  type SedeNode = { name: string; areas: Map<string, AreaNode> };
+  type UnitNode = { name: string; code: string | null; sedes: Map<string, SedeNode> };
+
+  const tree = new Map<string, UnitNode>();
+  for (const u of rows) {
+    const sede = u.sede_id ? sedeById.get(u.sede_id) : undefined;
+    const unit = sede?.business_unit_id ? unitById.get(sede.business_unit_id) : undefined;
+
+    const unitKey = unit ? `u${unit.id}` : 'sin';
+    const unitNode = tree.get(unitKey) ?? {
+      name: unit?.name ?? 'Sin unidad de negocio',
+      code: unit?.code ?? null,
+      sedes: new Map<string, SedeNode>(),
+    };
+    tree.set(unitKey, unitNode);
+
+    const sedeKey = sede ? `s${sede.id}` : 'sin';
+    const sedeNode = unitNode.sedes.get(sedeKey) ?? { name: sede?.name ?? 'Sin sede', areas: new Map<string, AreaNode>() };
+    unitNode.sedes.set(sedeKey, sedeNode);
+
+    const areaKey = u.esam_area ? String(u.esam_area).toLowerCase() : 'sin-area';
+    const areaNode = sedeNode.areas.get(areaKey) ?? { label: esamAreaName(u.esam_area), cargos: new Map<string, CargoNode>() };
+    sedeNode.areas.set(areaKey, areaNode);
+
+    const cargo = userCargoLabel(u);
+    const cargoNode = areaNode.cargos.get(cargo) ?? { name: cargo, users: [] };
+    cargoNode.users.push(u);
+    areaNode.cargos.set(cargo, cargoNode);
+  }
+
+  const areaRank = (key: string) => {
+    const i = AREA_ORDER.indexOf(key);
+    return i === -1 ? AREA_ORDER.length : i;
+  };
+  const byName = (a: string, b: string) => a.localeCompare(b, 'es');
+
+  /** Botón que abre el modal de edición (el JS lo completa con estos datos). */
+  const editUserButton = (u: UserRow) => {
+    const sede = u.sede_id ? sedeById.get(u.sede_id) : undefined;
+    const roles = esamRoles(u);
+    const areaForm = AREA_FORM_LABEL[(u.esam_area ?? '').toLowerCase()] ?? '';
+    return `<button type="button" class="btn btn-sm btn-soft-secondary" title="Editar cuenta, sede, área y cargo"
+      data-ub-edit-user data-id="${u.id}" data-name="${esc(u.name ?? '')}" data-ci="${esc(u.ci ?? '')}"
+      data-username="${esc(u.username ?? '')}" data-email="${esc(u.email ?? '')}" data-numero="${esc(u.esam_numero ?? '')}"
+      data-sede="${u.sede_id ?? ''}" data-unit="${sede?.business_unit_id ?? ''}" data-area="${esc(areaForm)}"
+      data-cargo="${esc(roles[0] ?? '')}" data-local="${u.source === 'local' ? 1 : 0}" data-super="${esamEsAdmin(u) ? 1 : 0}"
+      data-autorizado="${u.esam_autorizado ? 1 : 0}" data-roles="${esc(roles.join(' · '))}">
+      <i class="ri-pencil-line" aria-hidden="true"></i></button>`;
+  };
+
+  const userLine = (u: UserRow) => {
+    const num = digits(u.esam_numero);
+    const inactive = isInactive(u);
+    return `<div class="adm-ug-user">
+      <span class="avatar-xs rounded-circle av-${u.id % 8}">${esc(initials(u.name ?? u.username ?? '?'))}</span>
+      <div class="adm-ug-user-main">
+        <b>${esc(u.name ?? '—')}</b>
+        <span>${u.ci ? `CI ${esc(u.ci)} · ` : ''}${esc(u.username ?? '')}${u.email ? ` · ${esc(u.email)}` : ''}</span>
+      </div>
+      <div class="adm-ug-user-meta">
+        <span class="adm-ug-login ${inactive ? 'ab-t-warn' : ''}" title="Último ingreso: ${esc(fmtDate(u.last_login_at))}">${esc(relTime(u.last_login_at))}</span>
+        ${num ? `<span class="ub-number" title="Único número con el que ingresa"><i class="ri-whatsapp-line" aria-hidden="true"></i>+${esc(num)}</span>` : '<span class="ab-pill ab-warn">Sin número</span>'}
+        ${u.esam_autorizado ? '<span class="ab-pill ab-ok">Ingresa</span>' : '<span class="ab-pill ab-mute">Sin acceso</span>'}
+        <a class="btn btn-sm btn-soft-secondary" href="/reports/users/${u.id}" title="Ver actividad"><i class="ri-pulse-line" aria-hidden="true"></i></a>
+        ${editUserButton(u)}
+      </div>
+    </div>`;
+  };
+
+  const grouped = tree.size
+    ? [...tree.entries()]
+        .sort(([, a], [, b]) => (a.name === 'Sin unidad de negocio' ? 1 : 0) - (b.name === 'Sin unidad de negocio' ? 1 : 0) || byName(a.name, b.name))
+        .map(([, unit]) => {
+          const unitUsers = [...unit.sedes.values()].reduce(
+            (n, s) => n + [...s.areas.values()].reduce((m, a) => m + [...a.cargos.values()].reduce((k, c) => k + c.users.length, 0), 0),
+            0,
+          );
+          const sedesHtml = [...unit.sedes.entries()]
+            .sort(([, a], [, b]) => (a.name === 'Sin sede' ? 1 : 0) - (b.name === 'Sin sede' ? 1 : 0) || byName(a.name, b.name))
+            .map(([, sede]) => {
+              const sedeUsers = [...sede.areas.values()].reduce(
+                (n, a) => n + [...a.cargos.values()].reduce((k, c) => k + c.users.length, 0),
+                0,
+              );
+              const areasHtml = [...sede.areas.entries()]
+                .sort(([a], [b]) => areaRank(a) - areaRank(b))
+                .map(([, area]) => `
+                  <div class="adm-ug-area">
+                    <span class="ab-pill ab-info">${esc(area.label)}</span>
+                    ${[...area.cargos.values()]
+                      .sort((a, b) => byName(a.name, b.name))
+                      .map((cargo) => `
+                        <div class="adm-ug-cargo">
+                          <div class="adm-ug-cargo-title">${esc(cargo.name)} <span>${cargo.users.length}</span></div>
+                          <div class="adm-ug-list">${cargo.users.map(userLine).join('')}</div>
+                        </div>`)
+                      .join('')}
+                  </div>`)
+                .join('');
+              return `<div class="adm-ug-sede">
+                <div class="adm-ug-sede-head">
+                  <i class="ri-building-2-line" aria-hidden="true"></i>
+                  <h6>${esc(sede.name)}</h6>
+                  <span>${sedeUsers} usuario${sedeUsers === 1 ? '' : 's'}</span>
+                </div>
+                ${areasHtml}
+              </div>`;
+            })
+            .join('');
+          return `<section class="adm-ug-unit">
+            <header class="adm-ug-unit-head">
+              <span class="ub-code">${esc(unit.code ?? initials(unit.name))}</span>
+              <div class="adm-ug-title"><h5>${esc(unit.name)}</h5><span>${unit.sedes.size} sede${unit.sedes.size === 1 ? '' : 's'}</span></div>
+              <span class="adm-ug-count">${unitUsers} usuario${unitUsers === 1 ? '' : 's'}</span>
+            </header>
+            <div class="adm-ug-sedes">${sedesHtml}</div>
+          </section>`;
+        })
+        .join('')
     : emptyState('ri-user-search-line', 'Sin coincidencias', 'Probá con otro nombre o quitá el filtro.');
 
   return `<div class="ab-page adm-page">
@@ -820,9 +861,67 @@ function renderUsers(req: Request, sessions: SessionRow[]): string {
           ${unauthorized ? chip('sin-autorizar', 'Sin autorizar', unauthorized) : ''}
         </div>
       </div>
-      ${table}
-      <p class="adm-foot"><i class="ri-information-line"></i>Las cuentas de <b>cronogramas</b> actualizan su cargo al iniciar sesión desde ese sistema. Las <b>cuentas locales</b> se crean y administran acá con su sede y cargo. Para vincular un número, la persona escanea el QR en <a href="/settings">Conexión</a>.</p>
+      ${grouped}
+      <p class="adm-foot"><i class="ri-information-line"></i>Los usuarios se agrupan por <b>unidad de negocio → sede → área → cargo</b>. Las cuentas de <b>cronogramas</b> actualizan su cargo al ingresar desde ese sistema; las <b>locales</b> se administran acá. El número de WhatsApp es su llave de acceso.</p>
     </div></div>
+
+    <dialog class="ub-modal ub-modal-wide" id="ub-user-edit">
+      <form method="post" action="" class="ub-modal-form" data-ub-validate
+        data-sedes='${esc(JSON.stringify(sedes.map((s) => ({ id: s.id, name: s.name, unitId: s.business_unit_id }))))}'
+        data-units='${esc(JSON.stringify(units.map((x) => ({ id: x.id, name: x.name }))))}' novalidate>
+        <header class="ub-modal-head">
+          <div><h5>Editar usuario</h5><p data-roles-note>Cuenta y acceso</p></div>
+          <button class="ub-modal-x" type="button" data-ub-close aria-label="Cerrar"><i class="ri-close-line"></i></button>
+        </header>
+        <div class="ub-modal-body ub-form-grid">
+          <div class="ab-field"><label class="form-label" for="eu-name">Nombre completo</label>
+            <input class="form-control" id="eu-name" name="name" maxlength="120" data-v="required|min:2" required autocomplete="off"/>
+            <small class="ub-error" data-error></small></div>
+          <div class="ab-field"><label class="form-label" for="eu-ci">CI</label>
+            <input class="form-control" id="eu-ci" name="ci" maxlength="20" data-v="ci" autocomplete="off" placeholder="1234567"/>
+            <small class="ub-error" data-error></small></div>
+          <div class="ab-field"><label class="form-label" for="eu-user">Usuario</label>
+            <input class="form-control" id="eu-user" name="username" maxlength="60" data-v="required|min:2" required autocomplete="off"/>
+            <small class="ub-error" data-error></small></div>
+          <div class="ab-field"><label class="form-label" for="eu-email">Correo</label>
+            <input class="form-control" id="eu-email" name="email" type="email" maxlength="120" data-v="email" autocomplete="off"/>
+            <small class="ub-error" data-error></small></div>
+          <div class="ab-field"><label class="form-label" for="eu-phone">WhatsApp</label>
+            <input class="form-control" id="eu-phone" name="numero" inputmode="numeric" maxlength="20" data-v="phone"/>
+            <small class="ub-error" data-error></small></div>
+          <div class="ab-field"><label class="form-label" for="eu-password">Contraseña</label>
+            <input class="form-control" id="eu-password" name="password" type="password" minlength="6" data-v="min:6" autocomplete="new-password" placeholder="Dejar en blanco para no cambiarla"/>
+            <small class="ub-error" data-error></small></div>
+          <div class="ab-field"><label class="form-label" for="eu-unit">Unidad de negocio</label>
+            <select class="form-select" id="eu-unit"></select>
+            <small class="ub-hint">La unidad se deduce de la sede elegida.</small></div>
+          <div class="ab-field"><label class="form-label" for="eu-sede">Sede</label>
+            <select class="form-select" id="eu-sede" name="sede_id"></select></div>
+          <div class="ab-field"><label class="form-label" for="eu-area">Área</label>
+            <select class="form-select" id="eu-area" name="area" data-v="required" data-cargos-target="eu-cargo" data-cargos='${esc(JSON.stringify(LOCAL_CARGOS_POR_AREA))}'>
+              <option value="">Elegí el área</option>
+              ${Object.keys(LOCAL_CARGOS_POR_AREA).map((a) => `<option value="${esc(a)}">${esc(a)}</option>`).join('')}
+            </select>
+            <small class="ub-error" data-error></small></div>
+          <div class="ab-field"><label class="form-label" for="eu-cargo">Cargo</label>
+            <select class="form-select" id="eu-cargo" name="cargo" data-v="required"></select>
+            <small class="ub-error" data-error></small></div>
+          <div class="ab-field ub-span-2">
+            <div class="adm-readonly"><span class="ab-pill ab-mute" data-roles>Sin cargo</span>
+              <small data-roles-help>El cargo de las cuentas de cronogramas se actualiza al iniciar sesión desde ese sistema.</small>
+            </div>
+          </div>
+        </div>
+        <footer class="ub-modal-foot">
+          <label class="form-check ub-modal-check"><input class="form-check-input" type="checkbox" name="autorizado" value="1"/> <span class="form-check-label">Puede ingresar al panel</span></label>
+          <div class="ub-modal-buttons">
+            <button class="btn btn-soft-secondary" type="button" data-ub-close>Cancelar</button>
+            <button class="btn btn-primary" type="submit"><i class="ri-save-3-line me-1"></i>Guardar cambios</button>
+          </div>
+        </footer>
+      </form>
+    </dialog>
+    ${unitsScript()}
   </div>`;
 }
 
@@ -896,7 +995,7 @@ function selectField(opts: {
 
 /** Script compartido de modales, validación en vivo y área → cargo. */
 function unitsScript(): string {
-  return '<script src="/assets/js/unidades.js?v=1" defer></script>';
+  return '<script src="/assets/js/unidades.js?v=2" defer></script>';
 }
 
 /** Botón que abre un modal. */
@@ -1517,7 +1616,9 @@ export function registerAdminRoutes(app: express.Express, ctx: Ctx): void {
       if (me === target.id && !autorizado) throw new Error('No podés quitarte tu propio acceso al panel.');
       if (isLocal && !isSuper) {
         const cargo = String(b.cargo ?? '');
-        if (!(LOCAL_CARGOS as readonly string[]).includes(cargo)) throw new Error('Elegí un cargo válido.');
+        const area = String(b.area ?? '').trim();
+        const cargos = area ? (LOCAL_CARGOS_POR_AREA[area] ?? []) : LOCAL_CARGOS;
+        if (!cargos.includes(cargo)) throw new Error('Elegí un cargo del área seleccionada.');
         if (!String(b.numero ?? '').trim()) throw new Error('Escribí el número de WhatsApp.');
         updateManagedUser(target.id, {
           name: String(b.name ?? ''),

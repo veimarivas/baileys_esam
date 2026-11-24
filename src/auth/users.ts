@@ -192,7 +192,7 @@ export function esamAreaName(area: string | null | undefined): string {
   if (!key) return 'Sin área';
   const nombres: Record<string, string> = {
     contabilidad: 'Contabilidad',
-    academico: 'Académico',
+    academico: 'Académica',
     marketing: 'Marketing',
     consulta: 'Consulta',
     admin: 'Administrador',

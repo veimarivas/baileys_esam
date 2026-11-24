@@ -2474,6 +2474,10 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
   // ── 404 amigable ────────────────────────────────────────────────────────────
   // Sin esto, una ruta desconocida caía en el 404 crudo de Express («Cannot GET …»).
   app.use((req: AuthedRequest, res: Response) => {
+    // Un 404 nunca se cachea: si el panel se reinicia justo cuando alguien abre
+    // una ruta (o un asset), el navegador se quedaba con el 404 pegado hasta
+    // limpiar la caché — parecía que la página no existía.
+    res.set('Cache-Control', 'no-store');
     if (wantsJson(req)) return res.status(404).json({ error: 'No encontramos esta página.', code: 'not_found' });
     const user = currentUser(req);
     if (!user) return res.status(404).send(renderPlain('Página no encontrada', 'El enlace no existe o cambió de lugar.'));

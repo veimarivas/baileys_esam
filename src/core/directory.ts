@@ -18,6 +18,8 @@ export interface DirectoryChat {
   chat_id: string;
   contact_name: string | null;
   last_message_at: string | null;
+  /** Tiene foto de perfil guardada (para pedirla al gateway). */
+  avatar: boolean;
 }
 
 export interface DirectoryPerson {
@@ -280,7 +282,8 @@ function chatsFor(
     ? ''
     : ` AND c.session_id IN (${sessionIds.map(() => '?').join(',')})`;
   const rows = all<DirectoryChat>(
-    `SELECT ct.id AS contact_id, ct.phone_key, c.session_id, c.chat_id, ct.name AS contact_name, c.last_message_at
+    `SELECT ct.id AS contact_id, ct.phone_key, c.session_id, c.chat_id, ct.name AS contact_name, c.last_message_at,
+            ct.avatar_path IS NOT NULL AS avatar
        FROM contacts ct
        JOIN conversations c ON c.session_id = ct.session_id AND c.chat_id = ct.chat_id
       WHERE ct.phone_key IN (${inList})

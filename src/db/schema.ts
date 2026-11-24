@@ -204,14 +204,28 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE INDEX IF NOT EXISTS idx_users_source_uid ON users(source_uid);
 
--- Sedes de la institución. Cada usuario local pertenece a una sede y tiene un cargo.
-CREATE TABLE IF NOT EXISTS sedes (
+-- Unidades de negocio (ESAM, DBS, ...). Agrupan sedes y, a través de ellas,
+-- a los usuarios. Un usuario pertenece a una sede y una sede a una unidad.
+CREATE TABLE IF NOT EXISTS business_units (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  name       TEXT NOT NULL UNIQUE,
+  name       TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  code       TEXT,
   active     INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+-- Sedes de la institución. Cada usuario local pertenece a una sede y tiene un cargo.
+CREATE TABLE IF NOT EXISTS sedes (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  name              TEXT NOT NULL UNIQUE,
+  business_unit_id  INTEGER,
+  active            INTEGER NOT NULL DEFAULT 1,
+  created_at        TEXT NOT NULL,
+  updated_at        TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_sedes_unit ON sedes(business_unit_id);
 
 -- Sesiones del panel web (cookie -> usuario).
 CREATE TABLE IF NOT EXISTS web_sessions (

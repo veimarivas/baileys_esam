@@ -199,6 +199,9 @@ export function migrate(): void {
   // Sedes y cargos de usuarios locales (creados desde el panel).
   addColumnIfMissing('users', 'sede_id', 'INTEGER');
   addColumnIfMissing('sessions', 'sede_id', 'INTEGER');
+  addColumnIfMissing('sedes', 'business_unit_id', 'INTEGER');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_sedes_unit ON sedes(business_unit_id)');
+  setupBusinessUnits();
   addColumnIfMissing('web_sessions', 'last_seen_at', 'TEXT');
   db.exec('CREATE INDEX IF NOT EXISTS idx_users_sede ON users(sede_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_sede ON sessions(sede_id)');
@@ -359,6 +362,27 @@ function setupPersonPrograms(): void {
     logger.warn({ err: (err as Error).message }, 'No se pudieron recuperar los programas de los lotes');
   }
   setConfigFlag('person_programs_v1', '1');
+}
+
+/**
+ * Unidades de negocio: la primera vez se siembra «ESAM» y las sedes que ya
+ * existían (creadas antes de la jerarquía) se asignan a esa unidad.
+ */
+function setupBusinessUnits(): void {
+  const total = (db.prepare('SELECT COUNT(*) AS c FROM business_units').get() as { c: number } | undefined)?.c ?? 0;
+  const now = new Date().toISOString();
+  if (total === 0) {
+    db.prepare(
+      "INSERT INTO business_units (name, code, active, created_at, updated_at) VALUES ('ESAM', 'ESAM', 1, ?, ?)",
+    ).run(now, now);
+    logger.info('Unidad de negocio ESAM creada');
+  }
+  const first = db.prepare('SELECT id FROM business_units ORDER BY id LIMIT 1').get() as { id: number } | undefined;
+  if (!first) return;
+  const moved = db.prepare('UPDATE sedes SET business_unit_id = ? WHERE business_unit_id IS NULL').run(first.id);
+  if (Number(moved.changes) > 0) {
+    logger.info({ sedes: Number(moved.changes) }, 'Sedes existentes asignadas a la unidad por defecto');
+  }
 }
 
 /** Marca en `configs` si la busqueda full-text (FTS5) quedo disponible. */

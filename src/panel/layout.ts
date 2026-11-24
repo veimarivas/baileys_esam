@@ -81,6 +81,7 @@ const NAV: NavItem[] = [
   { section: 'optouts', href: '/optouts', label: 'No enviar', icon: 'ri-forbid-2-line' },
   { section: 'policies', href: '/anti-ban', label: 'Anti-Baneo', icon: 'ri-shield-star-line' },
   { section: 'audit', href: '/audit', label: 'Auditoría', icon: 'ri-history-line' },
+  { section: 'users', href: '/unidades', label: 'Unidades de negocio', icon: 'ri-community-line' },
   { section: 'users', href: '/users', label: 'Usuarios', icon: 'ri-team-line' },
   { section: 'settings', href: '/settings', label: 'Conexión', icon: 'ri-plug-line' },
 ];

@@ -9604,3 +9604,160 @@ html[data-bs-theme="dark"] { --shell-footer-h: 46px; }
 .bd-err-inline i { flex: 0 0 auto; margin-top: .1rem; }
 
 .bd-table thead th { white-space: normal; line-height: 1.2; }
+
+/* ══ Unidades de negocio → sedes → usuarios ══════════════════════════════════
+   Jerarquía nueva del panel: una tarjeta por unidad, y adentro las sedes con su
+   equipo. Mismos tokens que el resto (--esam-*) para que el modo oscuro
+   funcione sin reglas extra. */
+
+.ub-page { --ub-tone: #0e7c8c; }
+
+.ub-breadcrumb { display: flex; align-items: center; gap: 0.35rem; font-size: 0.76rem; color: var(--esam-muted); }
+.ub-breadcrumb a { display: inline-flex; align-items: center; gap: 0.3rem; color: var(--esam-muted); text-decoration: none; }
+.ub-breadcrumb a:hover { color: var(--ub-tone); }
+.ub-breadcrumb i { font-size: 0.9rem; }
+
+/* --- Tarjetas de unidad --- */
+.ub-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 0.9rem; }
+
+.ub-card {
+  display: flex; flex-direction: column; gap: 0.8rem;
+  padding: 1rem 1.1rem;
+  background: var(--esam-surface);
+  border: 1px solid var(--esam-line);
+  border-radius: 16px;
+  box-shadow: var(--esam-shadow-xs);
+  color: inherit; text-decoration: none;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.14s ease;
+}
+.ub-card:hover { border-color: color-mix(in srgb, var(--ub-tone) 45%, var(--esam-line)); transform: translateY(-2px); box-shadow: var(--esam-shadow-sm); color: inherit; }
+.ub-card:focus-visible { outline: 2px solid var(--ub-tone); outline-offset: 2px; }
+
+.ub-card-head { display: flex; align-items: center; gap: 0.7rem; min-width: 0; }
+.ub-code {
+  flex: 0 0 auto; width: 46px; height: 46px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 13px;
+  font-size: 0.76rem; font-weight: 800; letter-spacing: 0.04em;
+  color: #fff;
+  background: linear-gradient(135deg, #0e7c8c, #045474);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+.ub-code-lg { width: 58px; height: 58px; border-radius: 16px; font-size: 0.9rem; }
+.ub-card-title { min-width: 0; flex: 1; display: flex; flex-direction: column; line-height: 1.25; }
+.ub-card-title h5 { margin: 0; font-size: 1rem; font-weight: 700; color: var(--esam-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ub-card-title span { font-size: 0.7rem; color: var(--esam-muted); }
+.ub-chevron { flex: 0 0 auto; color: var(--esam-muted); font-size: 1.1rem; }
+
+.ub-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; }
+.ub-metric { padding: 0.45rem 0.6rem; background: var(--esam-surface-2); border: 1px solid var(--esam-line); border-radius: 11px; }
+.ub-metric b { display: block; font-size: 1.05rem; font-weight: 700; line-height: 1.2; color: var(--esam-ink); font-variant-numeric: tabular-nums; }
+.ub-metric span { font-size: 0.66rem; color: var(--esam-muted); }
+
+.ub-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.ub-chip {
+  display: inline-flex; align-items: center; gap: 0.25rem;
+  max-width: 100%; padding: 0.15rem 0.5rem;
+  border-radius: 999px; border: 1px solid var(--esam-line);
+  background: var(--esam-surface-2);
+  font-size: 0.7rem; color: var(--esam-ink-soft);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ub-chip i { color: var(--ub-tone); }
+.ub-muted { font-size: 0.75rem; color: var(--esam-muted); }
+
+/* --- Detalle de la unidad --- */
+.ub-hero {
+  display: flex; align-items: center; gap: 1rem;
+  padding: 1.1rem 1.2rem;
+  background:
+    radial-gradient(120% 160% at 0% 0%, rgba(14, 124, 140, 0.08), transparent 60%),
+    var(--esam-surface);
+  border: 1px solid var(--esam-line);
+  border-radius: 16px;
+  box-shadow: var(--esam-shadow-xs);
+}
+.ub-hero-body { min-width: 0; flex: 1; }
+.ub-hero-body h2 { margin: 0; font-size: 1.3rem; font-weight: 700; color: var(--esam-ink); }
+.ub-hero-body p { margin: 0.15rem 0 0; font-size: 0.78rem; color: var(--esam-muted); }
+.ub-hero-actions { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+
+/* --- Tarjetas de sede --- */
+.ub-sede-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 0.9rem; align-items: start; }
+
+.ub-sede {
+  background: var(--esam-surface);
+  border: 1px solid var(--esam-line);
+  border-radius: 16px;
+  box-shadow: var(--esam-shadow-xs);
+  overflow: hidden;
+}
+.ub-sede:target { border-color: color-mix(in srgb, var(--ub-tone) 55%, var(--esam-line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ub-tone) 18%, transparent); }
+
+.ub-sede-head {
+  display: flex; align-items: center; gap: 0.65rem;
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid var(--esam-line);
+  background: linear-gradient(180deg, rgba(14, 124, 140, 0.07), transparent);
+}
+.ub-sede-ic {
+  flex: 0 0 auto; width: 36px; height: 36px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 10px; font-size: 1rem;
+  color: var(--ub-tone);
+  background: color-mix(in srgb, var(--ub-tone) 13%, transparent);
+}
+.ub-sede-title { min-width: 0; flex: 1; display: flex; flex-direction: column; line-height: 1.3; }
+.ub-sede-title h6 { margin: 0; font-size: 0.9rem; font-weight: 700; color: var(--esam-ink); }
+.ub-sede-title span { font-size: 0.69rem; color: var(--esam-muted); }
+.ub-sede-count {
+  flex: 0 0 auto; min-width: 26px; height: 22px; padding: 0 0.4rem;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 999px; font-size: 0.68rem; font-weight: 800;
+  color: var(--ub-tone);
+  background: color-mix(in srgb, var(--ub-tone) 14%, transparent);
+}
+
+.ub-users { display: flex; flex-direction: column; }
+.ub-user { display: flex; align-items: center; gap: 0.6rem; padding: 0.55rem 1rem; border-bottom: 1px solid var(--esam-line); }
+.ub-user:last-child { border-bottom: 0; }
+.ub-user-main { min-width: 0; flex: 1; display: flex; flex-direction: column; line-height: 1.25; }
+.ub-user-main b { font-size: 0.8rem; font-weight: 600; color: var(--esam-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ub-user-main span { font-size: 0.68rem; color: var(--esam-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ub-user-side { flex: 0 0 auto; display: flex; align-items: center; gap: 0.3rem; }
+.ub-number {
+  display: inline-flex; align-items: center; gap: 0.25rem;
+  padding: 0.12rem 0.4rem; border-radius: 8px;
+  border: 1px solid var(--esam-line);
+  background: var(--esam-surface-2);
+  font-size: 0.69rem; font-weight: 700; color: var(--esam-ink-soft);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.ub-number i { color: #25a35a; }
+.ub-user-edit { padding: 0.1rem 0.35rem; }
+.ub-users-empty { display: flex; align-items: center; gap: 0.35rem; margin: 0; padding: 0.9rem 1rem; font-size: 0.74rem; color: var(--esam-muted); }
+
+.ub-user-form { border-top: 1px solid var(--esam-line); }
+.ub-user-form > summary {
+  display: flex; align-items: center; gap: 0.4rem;
+  padding: 0.55rem 1rem; cursor: pointer; list-style: none;
+  font-size: 0.75rem; font-weight: 700; color: var(--ub-tone);
+}
+.ub-user-form > summary::-webkit-details-marker { display: none; }
+.ub-user-form > summary::after { content: "▾"; margin-left: auto; font-size: 0.8rem; color: var(--ub-tone); transition: transform 0.15s ease; }
+.ub-user-form[open] > summary::after { transform: rotate(180deg); }
+.ub-user-form > summary:hover { background: var(--esam-surface-2); }
+.ub-user-form .ab-stack { padding: 0 1rem 1rem; }
+.ub-hint { display: block; margin-top: 0.2rem; font-size: 0.67rem; color: var(--esam-muted); }
+
+.ub-sede-foot { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.6rem 1rem; border-top: 1px solid var(--esam-line); }
+.ub-note { display: inline-flex; align-items: flex-start; gap: 0.3rem; font-size: 0.67rem; color: var(--esam-muted); }
+.ub-note i { flex: 0 0 auto; color: var(--ub-tone); }
+
+@media (max-width: 767.98px) {
+  .ub-hero { flex-wrap: wrap; }
+  .ub-user { flex-wrap: wrap; }
+  .ub-user-side { width: 100%; justify-content: flex-start; padding-left: 2.3rem; }
+}
+
+.ub-danger-zone { margin-top: 0.85rem; padding-top: 0.75rem; border-top: 1px solid var(--esam-line); }

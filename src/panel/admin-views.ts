@@ -18,7 +18,15 @@ import {
   updateManagedUser,
   type UserRow,
 } from '../auth/users.js';
-import { createSede, deleteSede, listSedes, renameSede } from '../core/sedes.js';
+import { createSede, deleteSede, getSede, listSedes, renameSede } from '../core/sedes.js';
+import {
+  createBusinessUnit,
+  deleteBusinessUnit,
+  getBusinessUnit,
+  listBusinessUnits,
+  updateBusinessUnit,
+  type BusinessUnitRow,
+} from '../core/business-units.js';
 import { lastUseByUser } from '../core/user-activity.js';
 import { lineVerdict, type VerdictLevel } from '../core/line-verdict.js';
 import { audit } from '../core/webhooks.js';
@@ -444,8 +452,8 @@ function sedeSelect(selected: number | null, opts: { required?: boolean; emptyLa
 }
 
 /** Selector de cargo para usuarios locales. */
-function cargoSelect(selected: string | null): string {
-  return `<select class="form-select" name="cargo" required>
+function cargoSelect(selected: string | null, id = ''): string {
+  return `<select class="form-select" name="cargo" required${id ? ` id="${esc(id)}"` : ''}>
     <option value="">Elegí un cargo</option>
     ${LOCAL_CARGOS.map((c) => `<option value="${esc(c)}"${c === selected ? ' selected' : ''}>${esc(c)}</option>`).join('')}
   </select>`;
@@ -789,6 +797,223 @@ function renderUsers(req: Request, sessions: SessionRow[]): string {
   </div>`;
 }
 
+// ══ Unidades de negocio ═══════════════════════════════════════════════════════
+
+/** Distintivo de la tarjeta: el código si lo tiene; si no, las iniciales. */
+function unitMark(unit: { name: string; code: string | null }): string {
+  return (unit.code ?? initials(unit.name)).slice(0, 8);
+}
+
+function renderBusinessUnitsPage(): string {
+  const units = listBusinessUnits();
+  const totalSedes = units.reduce((n, u) => n + u.sedes, 0);
+  const totalUsers = units.reduce((n, u) => n + u.users, 0);
+
+  const cards = units.map((u) => {
+    const sedes = listSedes(u.id);
+    const chips = sedes.length
+      ? sedes.slice(0, 4).map((s) => `<span class="ub-chip"><i class="ri-building-2-line" aria-hidden="true"></i>${esc(s.name)}</span>`).join('')
+      : '<span class="ub-muted">Todavía sin sedes</span>';
+    const extra = sedes.length > 4 ? `<span class="ub-chip">+${sedes.length - 4} más</span>` : '';
+    return `<a class="ub-card" href="/unidades/${u.id}">
+      <div class="ub-card-head">
+        <span class="ub-code">${esc(unitMark(u))}</span>
+        <span class="ub-card-title"><h5>${esc(u.name)}</h5><span>Unidad de negocio</span></span>
+        <i class="ri-arrow-right-s-line ub-chevron" aria-hidden="true"></i>
+      </div>
+      <div class="ub-metrics">
+        <div class="ub-metric"><b>${u.sedes}</b><span>sede${u.sedes === 1 ? '' : 's'}</span></div>
+        <div class="ub-metric"><b>${u.users}</b><span>usuario${u.users === 1 ? '' : 's'}</span></div>
+      </div>
+      <div class="ub-chips">${chips}${extra}</div>
+    </a>`;
+  }).join('');
+
+  return `<div class="ab-page ub-page">
+    <div class="ab-kpis adm-kpis-3">
+      ${kpi('ri-community-line', 'info', 'Unidades de negocio', units.length, 'ESAM, DBS y más')}
+      ${kpi('ri-building-2-line', 'ok', 'Sedes', totalSedes, 'con su equipo')}
+      ${kpi('ri-user-3-line', 'mute', 'Usuarios', totalUsers, 'con número de acceso')}
+    </div>
+    <details class="adm-tool" id="nueva-unidad"${units.length ? '' : ' open'}>
+      <summary>
+        <span class="adm-tool-ic"><i class="ri-add-circle-line"></i></span>
+        <span class="adm-tool-txt"><b>Nueva unidad de negocio</b><small>El primer nivel: adentro van las sedes y, en cada sede, los usuarios.</small></span>
+      </summary>
+      <div class="adm-tool-body">
+        <form method="post" action="/unidades" class="ab-stack">
+          <div class="adm-grid-2">
+            <div class="ab-field"><label class="form-label" for="ub-name">Nombre</label>
+              <input class="form-control" id="ub-name" name="name" maxlength="80" required placeholder="Ej.: ESAM"/></div>
+            <div class="ab-field"><label class="form-label" for="ub-code">Código (opcional)</label>
+              <input class="form-control" id="ub-code" name="code" maxlength="8" placeholder="ESAM"/></div>
+          </div>
+          <div class="adm-form-actions">
+            <span class="adm-foot"><i class="ri-information-line"></i>El código es la sigla que se muestra en la tarjeta.</span>
+            <button class="btn btn-primary" type="submit"><i class="ri-add-line me-1"></i>Crear unidad</button>
+          </div>
+        </form>
+      </div>
+    </details>
+    ${units.length
+      ? `<div class="ub-grid">${cards}</div>`
+      : emptyState('ri-community-line', 'Todavía no hay unidades', 'Creá la primera unidad de negocio (por ejemplo ESAM) para ordenar sus sedes y usuarios.')}
+  </div>`;
+}
+
+function userCreateForm(unitId: number, sedeId: number, sedeName: string): string {
+  return `<details class="ub-user-form">
+    <summary><i class="ri-user-add-line" aria-hidden="true"></i> Nuevo usuario en esta sede</summary>
+    <form method="post" action="/unidades/${unitId}/sedes/${sedeId}/usuarios" class="ab-stack">
+      <div class="adm-grid-2">
+        <div class="ab-field"><label class="form-label" for="nu-name-${sedeId}">Nombre completo</label>
+          <input class="form-control" id="nu-name-${sedeId}" name="name" maxlength="120" required placeholder="Ej.: Ana Pérez"/></div>
+        <div class="ab-field"><label class="form-label" for="nu-user-${sedeId}">Usuario</label>
+          <input class="form-control" id="nu-user-${sedeId}" name="username" maxlength="60" required autocomplete="off" placeholder="ana.perez"/></div>
+      </div>
+      <div class="adm-grid-2">
+        <div class="ab-field"><label class="form-label" for="nu-num-${sedeId}">WhatsApp (único número de acceso)</label>
+          <input class="form-control" id="nu-num-${sedeId}" name="numero" inputmode="numeric" required placeholder="59171234567"/>
+          <small class="ub-hint">Con este número ingresa la persona; no puede usar otro.</small></div>
+        <div class="ab-field"><label class="form-label" for="nu-cargo-${sedeId}">Cargo</label>
+          ${cargoSelect(null, `nu-cargo-${sedeId}`)}</div>
+      </div>
+      <div class="adm-grid-2">
+        <div class="ab-field"><label class="form-label" for="nu-mail-${sedeId}">Correo (opcional)</label>
+          <input class="form-control" id="nu-mail-${sedeId}" name="email" type="email" maxlength="120" autocomplete="off" placeholder="ana@ejemplo.com"/></div>
+        <div class="ab-field"><label class="form-label" for="nu-pass-${sedeId}">Contraseña</label>
+          <input class="form-control" id="nu-pass-${sedeId}" name="password" type="password" minlength="6" required autocomplete="new-password" placeholder="Mínimo 6 caracteres"/></div>
+      </div>
+      <label class="form-check"><input class="form-check-input" type="checkbox" name="autorizado" value="1" checked/> <span class="form-check-label">Puede ingresar al panel</span></label>
+      <div class="adm-form-actions">
+        <span class="adm-foot"><i class="ri-shield-keyhole-line"></i>${esc(sedeName)} · el número es la llave de acceso de esta persona.</span>
+        <button class="btn btn-primary" type="submit"><i class="ri-user-add-line me-1"></i>Crear usuario</button>
+      </div>
+    </form>
+  </details>`;
+}
+
+function renderBusinessUnitPage(unit: BusinessUnitRow): string {
+  const sedes = listSedes(unit.id);
+  const users = listUsers().filter((u) => u.sede_id && sedes.some((s) => s.id === u.sede_id));
+  const bySede = new Map<number, UserRow[]>();
+  for (const u of users) {
+    const key = Number(u.sede_id);
+    const list = bySede.get(key) ?? [];
+    list.push(u);
+    bySede.set(key, list);
+  }
+  const conNumero = users.filter((u) => digits(u.esam_numero)).length;
+  const autorizados = users.filter((u) => u.esam_autorizado).length;
+
+  const sedeCards = sedes.map((s) => {
+    const miembros = bySede.get(s.id) ?? [];
+    const conLinea = miembros.filter((u) => digits(u.esam_numero)).length;
+    const rows = miembros.length
+      ? miembros.map((u, i) => {
+          const roles = esamRoles(u);
+          const cargo = esamEsAdmin(u) ? 'Super Admin' : roles.length ? roles.join(' · ') : 'Sin cargo';
+          const num = digits(u.esam_numero);
+          return `<div class="ub-user">
+            <span class="avatar-xs rounded-circle av-${i % 8}">${esc(initials(u.name ?? u.username ?? '?'))}</span>
+            <div class="ub-user-main">
+              <b>${esc(u.name ?? u.username ?? '—')}</b>
+              <span>${esc(cargo)}${u.username ? ` · ${esc(u.username)}` : ''}</span>
+            </div>
+            <div class="ub-user-side">
+              ${num
+                ? `<span class="ub-number" title="Único número con el que puede ingresar"><i class="ri-whatsapp-line" aria-hidden="true"></i>+${esc(num)}</span>`
+                : '<span class="ab-pill ab-warn">Sin número</span>'}
+              ${u.esam_autorizado
+                ? '<span class="ab-pill ab-ok"><span class="ab-dot"></span>Ingresa</span>'
+                : '<span class="ab-pill ab-mute">Sin acceso</span>'}
+              <a class="btn btn-sm btn-soft-secondary ub-user-edit" href="/users/${u.id}" title="Editar cuenta, cargo y número"><span class="ri-pencil-line" aria-hidden="true"></span></a>
+            </div>
+          </div>`;
+        }).join('')
+      : '<p class="ub-users-empty"><i class="ri-user-search-line" aria-hidden="true"></i> Todavía no hay usuarios en esta sede.</p>';
+
+    return `<article class="ub-sede" id="sede-${s.id}">
+      <header class="ub-sede-head">
+        <span class="ub-sede-ic"><i class="ri-building-2-line" aria-hidden="true"></i></span>
+        <span class="ub-sede-title"><h6>${esc(s.name)}</h6><span>${miembros.length} usuario${miembros.length === 1 ? '' : 's'} · ${conLinea} con número de acceso</span></span>
+        <span class="ub-sede-count">${miembros.length}</span>
+      </header>
+      <div class="ub-users">${rows}</div>
+      ${userCreateForm(unit.id, s.id, s.name)}
+      <footer class="ub-sede-foot">
+        <span class="ub-note"><i class="ri-shield-keyhole-line" aria-hidden="true"></i> Cada persona ingresa solo con el número registrado acá.</span>
+        <form method="post" action="/unidades/${unit.id}/sedes/${s.id}/delete"${miembros.length ? '' : ` data-confirm="¿Eliminar la sede «${esc(s.name)}»?"`}>
+          <button class="btn btn-sm btn-soft-danger" type="submit" ${miembros.length ? 'disabled' : ''} title="${miembros.length ? 'Tiene usuarios asignados' : 'Eliminar sede'}"><i class="ri-delete-bin-6-line" aria-hidden="true"></i></button>
+        </form>
+      </footer>
+    </article>`;
+  }).join('');
+
+  return `<div class="ab-page ub-page">
+    <nav class="ub-breadcrumb" aria-label="Ruta">
+      <a href="/unidades"><i class="ri-community-line" aria-hidden="true"></i> Unidades de negocio</a>
+      <i class="ri-arrow-right-s-line" aria-hidden="true"></i>
+      <span>${esc(unit.name)}</span>
+    </nav>
+    <section class="ub-hero">
+      <span class="ub-code ub-code-lg">${esc(unitMark(unit))}</span>
+      <div class="ub-hero-body">
+        <h2>${esc(unit.name)}</h2>
+        <p>${unit.sedes} sede${unit.sedes === 1 ? '' : 's'} · ${unit.users} usuario${unit.users === 1 ? '' : 's'} · ${conNumero} con número de acceso</p>
+      </div>
+      <div class="ub-hero-actions">
+        <span class="ab-pill ab-ok"><span class="ab-dot"></span>${autorizados} con acceso</span>
+        <span class="ab-pill ab-info"><i class="ri-building-2-line"></i>${sedes.length}</span>
+      </div>
+    </section>
+    <div class="adm-tools">
+      <details class="adm-tool" id="nueva-sede"${sedes.length ? '' : ' open'}>
+        <summary>
+          <span class="adm-tool-ic"><i class="ri-add-line"></i></span>
+          <span class="adm-tool-txt"><b>Nueva sede</b><small>Una sucursal o sede dentro de ${esc(unit.name)}.</small></span>
+        </summary>
+        <div class="adm-tool-body">
+          <form method="post" action="/unidades/${unit.id}/sedes" class="adm-inline-form">
+            <input class="form-control" name="name" maxlength="80" required placeholder="Ej.: ESAM Sucre Central" aria-label="Nombre de la nueva sede"/>
+            <button class="btn btn-soft-primary" type="submit"><i class="ri-add-line me-1"></i>Crear sede</button>
+          </form>
+        </div>
+      </details>
+      <details class="adm-tool" id="editar-unidad">
+        <summary>
+          <span class="adm-tool-ic"><i class="ri-pencil-line"></i></span>
+          <span class="adm-tool-txt"><b>Editar unidad</b><small>Cambiar el nombre o el código de ${esc(unit.name)}.</small></span>
+        </summary>
+        <div class="adm-tool-body">
+          <form method="post" action="/unidades/${unit.id}" class="ab-stack">
+            <div class="adm-grid-2">
+              <div class="ab-field"><label class="form-label" for="ub-edit-name">Nombre</label>
+                <input class="form-control" id="ub-edit-name" name="name" maxlength="80" required value="${esc(unit.name)}"/></div>
+              <div class="ab-field"><label class="form-label" for="ub-edit-code">Código</label>
+                <input class="form-control" id="ub-edit-code" name="code" maxlength="8" value="${esc(unit.code ?? '')}"/></div>
+            </div>
+            <div class="adm-form-actions">
+              <span class="adm-foot"><i class="ri-information-line"></i>Las sedes y usuarios no se modifican al renombrar.</span>
+              <button class="btn btn-primary" type="submit"><i class="ri-save-3-line me-1"></i>Guardar</button>
+            </div>
+          </form>
+          <div class="ub-danger-zone">
+            ${sedes.length
+              ? `<span class="ub-note"><i class="ri-lock-line" aria-hidden="true"></i> Para eliminar la unidad, primero movés o eliminás sus ${sedes.length} sede${sedes.length === 1 ? '' : 's'}.</span>`
+              : `<form method="post" action="/unidades/${unit.id}/delete" data-confirm="¿Eliminar la unidad «${esc(unit.name)}»?">
+                   <button class="btn btn-sm btn-soft-danger" type="submit"><i class="ri-delete-bin-6-line me-1"></i>Eliminar unidad</button>
+                 </form>`}
+          </div>
+        </div>
+      </details>
+    </div>
+    ${sedes.length
+      ? `<div class="ub-sede-grid">${sedeCards}</div>`
+      : emptyState('ri-building-2-line', 'Esta unidad todavía no tiene sedes', 'Creá la primera sede para empezar a registrar usuarios con su número de acceso.')}
+  </div>`;
+}
+
 // ══ Plantillas ═════════════════════════════════════════════════════════════════
 
 /** Vista previa con el formato de WhatsApp: *negrita*, _cursiva_, ~tachado~, variables y variantes. */
@@ -1093,6 +1318,176 @@ export function registerAdminRoutes(app: express.Express, ctx: Ctx): void {
       res.redirect(backToUsers(res, 'Cambios guardados.'));
     } catch (err) {
       res.redirect(backToUsers(res, (err as Error).message, { kind: 'error' }));
+    }
+  });
+
+  // Unidades de negocio → sedes → usuarios
+  const backToUnit = (res: Response, unitId: number, msg: string, opts: { kind?: 'ok' | 'error'; sede?: number } = {}) => {
+    setFlash(res, opts.kind ?? 'ok', msg);
+    return `/unidades/${unitId}${opts.sede ? `#sede-${opts.sede}` : ''}`;
+  };
+
+  app.get('/unidades', ...usersGuard, (req: Request, res: Response) => {
+    sendPage(req, res, 'Unidades de negocio', 'users', renderBusinessUnitsPage(), {
+      subtitle: 'Unidades de negocio → sedes → usuarios. El número de WhatsApp es el acceso de cada persona.',
+      activeHref: '/unidades',
+    });
+  });
+
+  app.post('/unidades', ...usersGuard, (req: Request, res: Response) => {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const name = String(b.name ?? '').trim();
+    try {
+      const id = createBusinessUnit({ name, code: String(b.code ?? '') });
+      audit('user.unit_created', { unit_id: id, name, by: usersUserId(req) });
+      setFlash(res, 'ok', `Unidad «${name}» creada.`);
+      res.redirect(`/unidades/${id}`);
+    } catch (err) {
+      setFlash(res, 'error', (err as Error).message);
+      res.redirect('/unidades');
+    }
+  });
+
+  app.get('/unidades/:id', ...usersGuard, (req: Request, res: Response) => {
+    const id = positiveInt(req.params.id);
+    const unit = id ? getBusinessUnit(id) : undefined;
+    if (!unit) {
+      res
+        .status(404)
+        .send(
+          pageHtml(req, res, 'Unidad no encontrada', 'users', emptyState('ri-community-line', 'Unidad no encontrada', 'La unidad de negocio no existe o se eliminó.'), {
+            activeHref: '/unidades',
+          }),
+        );
+      return;
+    }
+    sendPage(req, res, unit.name, 'users', renderBusinessUnitPage(unit), {
+      subtitle: `Sedes y usuarios de ${unit.name}.`,
+      activeHref: '/unidades',
+    });
+  });
+
+  app.post('/unidades/:id', ...usersGuard, (req: Request, res: Response) => {
+    const id = positiveInt(req.params.id);
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    try {
+      if (!id) throw new Error('Unidad de negocio no encontrada.');
+      const name = String(b.name ?? '').trim();
+      updateBusinessUnit(id, { name, code: String(b.code ?? '') });
+      audit('user.unit_updated', { unit_id: id, name, by: usersUserId(req) });
+      res.redirect(backToUnit(res, id, 'Unidad actualizada.'));
+    } catch (err) {
+      res.redirect(id ? backToUnit(res, id, (err as Error).message, { kind: 'error' }) : '/unidades');
+    }
+  });
+
+  app.post('/unidades/:id/delete', ...usersGuard, (req: Request, res: Response) => {
+    const id = positiveInt(req.params.id);
+    try {
+      if (!id) throw new Error('Unidad de negocio no encontrada.');
+      const unit = getBusinessUnit(id);
+      deleteBusinessUnit(id);
+      audit('user.unit_deleted', { unit_id: id, name: unit?.name ?? '', by: usersUserId(req) });
+      setFlash(res, 'ok', 'Unidad eliminada.');
+      res.redirect('/unidades');
+    } catch (err) {
+      setFlash(res, 'error', (err as Error).message);
+      res.redirect(id ? `/unidades/${id}` : '/unidades');
+    }
+  });
+
+  app.post('/unidades/:id/sedes', ...usersGuard, (req: Request, res: Response) => {
+    const id = positiveInt(req.params.id);
+    const unit = id ? getBusinessUnit(id) : undefined;
+    if (!unit) {
+      setFlash(res, 'error', 'Unidad de negocio no encontrada.');
+      res.redirect('/unidades');
+      return;
+    }
+    const name = String(req.body?.name ?? '').trim();
+    try {
+      const sedeId = createSede(name, unit.id);
+      audit('user.sede_created', { sede_id: sedeId, unit_id: unit.id, name, by: usersUserId(req) });
+      res.redirect(backToUnit(res, unit.id, `Sede «${name}» creada.`));
+    } catch (err) {
+      res.redirect(backToUnit(res, unit.id, (err as Error).message, { kind: 'error' }));
+    }
+  });
+
+  app.post('/unidades/:id/sedes/:sedeId', ...usersGuard, (req: Request, res: Response) => {
+    const id = positiveInt(req.params.id);
+    const sedeId = positiveInt(req.params.sedeId);
+    const unit = id ? getBusinessUnit(id) : undefined;
+    const sede = sedeId ? getSede(sedeId) : undefined;
+    if (!unit || !sede || sede.business_unit_id !== unit.id) {
+      setFlash(res, 'error', 'La sede no pertenece a esa unidad de negocio.');
+      res.redirect(unit ? `/unidades/${unit.id}` : '/unidades');
+      return;
+    }
+    const name = String(req.body?.name ?? '').trim();
+    try {
+      renameSede(sede.id, name);
+      audit('user.sede_renamed', { sede_id: sede.id, unit_id: unit.id, name, by: usersUserId(req) });
+      res.redirect(backToUnit(res, unit.id, `Sede actualizada: «${name}».`, { sede: sede.id }));
+    } catch (err) {
+      res.redirect(backToUnit(res, unit.id, (err as Error).message, { kind: 'error', sede: sede.id }));
+    }
+  });
+
+  app.post('/unidades/:id/sedes/:sedeId/delete', ...usersGuard, (req: Request, res: Response) => {
+    const id = positiveInt(req.params.id);
+    const sedeId = positiveInt(req.params.sedeId);
+    const unit = id ? getBusinessUnit(id) : undefined;
+    const sede = sedeId ? getSede(sedeId) : undefined;
+    if (!unit || !sede || sede.business_unit_id !== unit.id) {
+      setFlash(res, 'error', 'La sede no pertenece a esa unidad de negocio.');
+      res.redirect(unit ? `/unidades/${unit.id}` : '/unidades');
+      return;
+    }
+    try {
+      deleteSede(sede.id);
+      audit('user.sede_deleted', { sede_id: sede.id, unit_id: unit.id, by: usersUserId(req) });
+      res.redirect(backToUnit(res, unit.id, 'Sede eliminada.'));
+    } catch (err) {
+      res.redirect(backToUnit(res, unit.id, (err as Error).message, { kind: 'error', sede: sede.id }));
+    }
+  });
+
+  app.post('/unidades/:id/sedes/:sedeId/usuarios', ...usersGuard, (req: Request, res: Response) => {
+    const id = positiveInt(req.params.id);
+    const sedeId = positiveInt(req.params.sedeId);
+    const unit = id ? getBusinessUnit(id) : undefined;
+    const sede = sedeId ? getSede(sedeId) : undefined;
+    if (!unit || !sede || sede.business_unit_id !== unit.id) {
+      setFlash(res, 'error', 'La sede no pertenece a esa unidad de negocio.');
+      res.redirect(unit ? `/unidades/${unit.id}` : '/unidades');
+      return;
+    }
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const cargo = String(b.cargo ?? '');
+    try {
+      if (!(LOCAL_CARGOS as readonly string[]).includes(cargo)) throw new Error('Elegí un cargo válido.');
+      const user = createLocalUser({
+        name: String(b.name ?? ''),
+        username: String(b.username ?? ''),
+        email: String(b.email ?? ''),
+        password: String(b.password ?? ''),
+        numero: String(b.numero ?? ''),
+        sedeId: sede.id,
+        roles: [cargo],
+        autorizado: b.autorizado === '1',
+      });
+      audit('user.created', {
+        user_id: user.id,
+        name: user.name,
+        sede_id: sede.id,
+        unit_id: unit.id,
+        roles: esamRoles(user),
+        by: usersUserId(req),
+      });
+      res.redirect(backToUnit(res, unit.id, `Usuario «${user.name ?? user.username}» creado en ${sede.name}.`, { sede: sede.id }));
+    } catch (err) {
+      res.redirect(backToUnit(res, unit.id, (err as Error).message, { kind: 'error', sede: sede.id }));
     }
   });
 

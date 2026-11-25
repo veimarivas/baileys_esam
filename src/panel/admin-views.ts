@@ -6,6 +6,7 @@ import { emptyState, fmtDate, initials } from './views.js';
 import { auditUrl, positiveInt, templatesUrl, type AuditCatSlug } from './urls.js';
 import { resolvePanelRange } from './period-filter.js';
 import { setFlash } from './flash.js';
+import { renderOrganigramaPersonas } from './organigrama-views.js';
 import { pageHtml, sendPage } from './page.js';
 import {
   createLocalUser,
@@ -1415,7 +1416,7 @@ function renderCargosPage(): string {
   </div>`;
 }
 
-function renderSedePage(unit: BusinessUnitRow, sede: ReturnType<typeof getSede>, openModal = ''): string {
+function renderSedePage(unit: BusinessUnitRow, sede: ReturnType<typeof getSede>, openModal = '', viewer?: UserRow, editarOrganigrama = false): string {
   if (!sede) return '';
   const allUsers = listUsers();
   const users = allUsers.filter((u) => u.sede_id === sede.id);
@@ -1476,12 +1477,16 @@ function renderSedePage(unit: BusinessUnitRow, sede: ReturnType<typeof getSede>,
     <div class="ub-sede-views">
       <div class="ab-tabs" role="tablist" aria-label="Vista de la sede">
         <button type="button" class="ab-tab on" data-sede-view="org" role="tab" aria-selected="true"><i class="ri-organization-chart" aria-hidden="true"></i> Organigrama</button>
+        <button type="button" class="ab-tab" data-sede-view="cargos" role="tab" aria-selected="false"><i class="ri-node-tree" aria-hidden="true"></i> Cargos</button>
         <button type="button" class="ab-tab" data-sede-view="list" role="tab" aria-selected="false"><i class="ri-list-check-2" aria-hidden="true"></i> Lista</button>
       </div>
       <a class="btn btn-sm btn-soft-secondary" href="/cargos"><i class="ri-node-tree me-1" aria-hidden="true"></i>Administrar cargos</a>
     </div>
 
-    <div id="sede-org">${renderOrgChart(users)}</div>
+    <div id="sede-org">${viewer
+      ? renderOrganigramaPersonas(viewer, sede.id, { base: `/unidades/${unit.id}/sedes/${sede.id}`, editar: editarOrganigrama })
+      : renderOrgChart(users)}</div>
+    <div id="sede-cargos" hidden>${renderOrgChart(users)}</div>
 
     <div class="card ab-card" id="sede-list" hidden><div class="card-body">
       <div class="ab-card-title"><h5>Equipo de la sede</h5>
@@ -1955,7 +1960,8 @@ export function registerAdminRoutes(app: express.Express, ctx: Ctx): void {
         );
       return;
     }
-    sendPage(req, res, sede.name, 'users', renderSedePage(unit, sede, q(req, 'abrir')), {
+    const viewer = (req as Request & { user?: UserRow }).user;
+    sendPage(req, res, sede.name, 'users', renderSedePage(unit, sede, q(req, 'abrir'), viewer, q(req, 'editar') === '1'), {
       subtitle: `Equipo de ${sede.name} · ${unit.name}.`,
       activeHref: '/unidades',
     });

@@ -78,6 +78,8 @@ const NAV: NavItem[] = [
   { section: 'stickers', href: '/stickers', label: 'Stickers', icon: 'ri-emotion-happy-line' },
   { section: 'monitoring', href: '/monitoring', label: 'Seguimiento', icon: 'ri-pulse-line' },
   { section: 'reports', href: '/reports', label: 'Reportes', icon: 'ri-bar-chart-box-line' },
+  // Gerente General: el organigrama de su sede (el Super Admin lo ve en Unidades de negocio).
+  { section: 'organigrama', href: '/organigrama', label: 'Organigrama', icon: 'ri-organization-chart' },
   { section: 'optouts', href: '/optouts', label: 'No enviar', icon: 'ri-forbid-2-line' },
   { section: 'policies', href: '/anti-ban', label: 'Anti-Baneo', icon: 'ri-shield-star-line' },
   { section: 'audit', href: '/audit', label: 'Auditoría', icon: 'ri-history-line' },
@@ -148,6 +150,7 @@ function navList(
   // (para vincular, reparar o desvincular su número).
   const items = NAV.filter((n) => {
     if (!esamPuede(user, n.section)) return false;
+    if (n.section === 'organigrama' && esamEsAdmin(user)) return false;
     if (restrictToSettings) return n.section === 'settings';
     return true;
   });

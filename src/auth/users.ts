@@ -181,6 +181,8 @@ export function esamPuede(user: UserRow, seccion: string): boolean {
     allowed.add('reports');
     allowed.add('monitoring');
   }
+  // Organigrama de su sede (PLAN_ORGANIGRAMA.md): lo ve y lo edita el Gerente General.
+  if (esamEsGerenteSede(user)) allowed.add('organigrama');
   return allowed.has(seccion);
 }
 

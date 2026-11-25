@@ -381,8 +381,10 @@
       });
       const org = document.getElementById('sede-org');
       const list = document.getElementById('sede-list');
+      const cargos = document.getElementById('sede-cargos');
       if (org) org.hidden = view !== 'org';
       if (list) list.hidden = view !== 'list';
+      if (cargos) cargos.hidden = view !== 'cargos';
     });
   });
 

@@ -204,6 +204,35 @@ export function puedeVerLeadsDe(user: UserRow, ownerUserId: number): boolean {
   return alcance === null || alcance.includes(ownerUserId);
 }
 
+/** Días sin actividad para que un lead abierto cuente como «sin movimiento». */
+export const DIAS_SIN_MOVIMIENTO = 7;
+
+export interface MetricasLeads {
+  abiertos: number;
+  sinContactar: number;
+  sinMovimiento: number;
+}
+
+/**
+ * Cifras de control de los leads PROPIOS de cada persona de la sede (las del
+ * equipo se suman en la vista recorriendo el árbol).
+ */
+export function metricasLeadsDeSede(sedeId: number, ahora: Date = new Date()): Map<number, MetricasLeads> {
+  const limite = new Date(ahora.getTime() - DIAS_SIN_MOVIMIENTO * 86_400_000).toISOString();
+  const filas = all<{ owner_user_id: number; abiertos: number; sin_contactar: number; sin_movimiento: number }>(
+    `SELECT l.owner_user_id,
+            COUNT(*) AS abiertos,
+            SUM(CASE WHEN l.etapa = 'nuevo' AND l.ultimo_contacto_at IS NULL THEN 1 ELSE 0 END) AS sin_contactar,
+            SUM(CASE WHEN l.ultima_actividad_at < ? THEN 1 ELSE 0 END) AS sin_movimiento
+       FROM leads l JOIN users u ON u.id = l.owner_user_id
+      WHERE u.sede_id = ? AND l.etapa NOT IN ('no_interesado', 'inscrito')
+      GROUP BY l.owner_user_id`,
+    limite,
+    sedeId,
+  );
+  return new Map(filas.map((f) => [f.owner_user_id, { abiertos: f.abiertos, sinContactar: f.sin_contactar, sinMovimiento: f.sin_movimiento }]));
+}
+
 export interface NodoOrganigrama {
   id: number;
   nombre: string;

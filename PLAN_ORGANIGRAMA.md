@@ -5,6 +5,10 @@
 > `39f091a`…`709bb27`: unidades de negocio, sedes por unidad, cargos por área y
 > organigrama por cargos). **No usa `/agenda`.** Ruta nueva: **`/leads`**.
 > Primero se prueba acá; cuando esté bien plasmado se replica en ESAM HUB (Q8).
+>
+> **Estado (2026-11-24):** ✅ L0 (`src/core/organigrama.ts`, tests `organigrama.test.ts`) ·
+> ✅ L1 (`src/panel/organigrama-views.ts`: ficha de sede → Organigrama, `/organigrama` para el
+> Gerente General, `POST /organigrama/jefe`; tests `organigrama-views.test.ts`) · ⏳ L2.
 
 ---
 

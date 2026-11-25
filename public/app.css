@@ -9966,3 +9966,96 @@ html[data-bs-theme="dark"] { --shell-footer-h: 46px; }
 
 .ub-cargo-area { margin-bottom: 0; }
 .ub-cargo-actions { white-space: nowrap; }
+
+/* ══ Organigrama de personas (PLAN_ORGANIGRAMA.md, L1) ═══════════════════════ */
+.op-wrap {
+  display: flex; flex-direction: column; gap: 0.9rem;
+  padding: 1rem 1.1rem 1.1rem;
+  border: 1px solid var(--esam-line);
+  border-radius: 16px;
+  background: var(--esam-surface);
+  box-shadow: var(--esam-shadow-xs);
+}
+.op-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.op-head h5 { margin: 0; font-size: 0.95rem; font-weight: 700; color: var(--esam-ink); }
+.op-head p { margin: 0.2rem 0 0; max-width: 46rem; font-size: 0.75rem; color: var(--esam-muted); }
+.op-editing {
+  display: flex; align-items: center; gap: 0.45rem;
+  padding: 0.5rem 0.75rem; border-radius: 10px;
+  background: rgba(4, 84, 116, 0.07); color: var(--esam-ink-soft); font-size: 0.74rem;
+}
+
+.op-chart { padding-bottom: 0.75rem; }
+.op-tree li { padding-left: 0.7rem; padding-right: 0.7rem; }
+/* El conector vertical de cada nivel se mide desde su propia lista. */
+.op-tree ul { position: relative; }
+
+.op-node {
+  width: 220px;
+  padding: 0.6rem 0.7rem;
+  background: var(--esam-surface);
+  border: 1px solid var(--esam-line);
+  border-radius: 12px;
+  box-shadow: var(--esam-shadow-xs);
+  text-align: left;
+}
+.op-node.op-mkt { border-top: 3px solid #2e90b5; }
+.op-node.op-root { border: 0; background: #e2683a; color: #fff; }
+.op-node.op-root .op-cargo, .op-node.op-root .op-name { color: #fff; }
+.op-node-head { display: flex; align-items: center; gap: 0.5rem; }
+.op-node-head .avatar-xs { flex: 0 0 auto; width: 1.9rem; height: 1.9rem; display: inline-flex; align-items: center; justify-content: center; font-size: 0.66rem; font-weight: 700; color: #fff; }
+.op-cargo { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.01em; color: var(--esam-ink); }
+.op-name { font-size: 0.78rem; color: var(--esam-ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.op-metrics { display: flex; flex-wrap: wrap; gap: 0.25rem 0.55rem; margin-top: 0.45rem; font-size: 0.66rem; color: var(--esam-muted); }
+.op-metrics b { color: var(--esam-ink); }
+.op-metrics .op-warn b { color: #b45309; }
+.op-metrics .op-alert b { color: #c2410c; }
+.op-node.op-root .op-metrics, .op-node.op-root .op-metrics b { color: #fff; }
+
+.op-form { margin-top: 0.5rem; padding-top: 0.45rem; border-top: 1px dashed var(--esam-line-strong); }
+.op-form.is-saving { opacity: 0.6; }
+.op-form-label { display: block; margin-bottom: 0.2rem; font-size: 0.64rem; font-weight: 600; color: var(--esam-muted); text-transform: uppercase; letter-spacing: 0.03em; }
+.op-form-row { display: flex; gap: 0.3rem; }
+.op-form-row .form-select { min-width: 0; font-size: 0.74rem; }
+.op-hint { margin: 0.45rem 0 0; font-size: 0.66rem; color: var(--esam-muted); }
+
+/* Gente sin gente a cargo: lista vertical con conector a la izquierda. */
+.org-tree ul.op-stack {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 0.55rem;
+  position: relative;
+  margin-left: 1.6rem;
+  padding: 1.1rem 0 0 1.1rem;
+}
+.org-tree ul.op-stack::before {
+  left: 0; top: 0; bottom: 1.55rem; height: auto;
+  border-left: 2px solid var(--esam-line-strong);
+}
+.org-tree ul.op-stack > li { padding: 0; align-items: flex-start; }
+.org-tree ul.op-stack > li::before {
+  display: block !important;
+  top: 1.55rem; right: auto; left: -1.1rem;
+  width: 1.1rem; height: 0;
+  border: 0; border-top: 2px solid var(--esam-line-strong); border-radius: 0;
+}
+.org-tree ul.op-stack > li::after { display: none; }
+.org-tree ul.op-stack .op-node { width: 200px; background: #e7f1f5; border-color: transparent; border-top: 0; }
+.org-tree ul.op-stack .op-node .op-cargo { color: #0f4c63; }
+
+.op-loose { padding-top: 0.8rem; border-top: 1px solid var(--esam-line); }
+.op-loose-head h6 { display: flex; align-items: center; gap: 0.4rem; margin: 0; font-size: 0.82rem; font-weight: 700; }
+.op-loose-head p { margin: 0.15rem 0 0.6rem; font-size: 0.72rem; color: var(--esam-muted); }
+.op-loose-grid { display: flex; flex-wrap: wrap; gap: 0.6rem; }
+.op-loose-grid .op-node { border-style: dashed; }
+
+/* Pantalla chica: el árbol ancho no entra; se muestra como lista anidada. */
+@media (max-width: 767.98px) {
+  .op-wrap { padding: 0.8rem; }
+  .op-chart { overflow: visible; }
+  .op-tree, .op-tree ul, .org-tree ul.op-stack { display: block; margin: 0; padding: 0; }
+  .op-tree ul, .org-tree ul.op-stack { margin-left: 0.9rem; padding-left: 0.9rem; border-left: 2px solid var(--esam-line-strong); }
+  .op-tree li, .org-tree ul.op-stack > li { display: block; padding: 0.5rem 0 0; }
+  .op-tree li::before, .op-tree li::after, .op-tree ul::before,
+  .org-tree ul.op-stack::before, .org-tree ul.op-stack > li::before { display: none !important; }
+  .op-node, .org-tree ul.op-stack .op-node, .op-loose-grid .op-node { width: 100%; max-width: none; }
+}

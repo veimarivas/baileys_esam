@@ -630,7 +630,7 @@ function renderUserEdit(u: UserRow): string {
           <div class="ab-card-title"><h5>Alcance de la cuenta</h5><span>Qué puede ver y administrar.</span></div>
           <ul class="adm-scope-list">
             <li><b>Super Admin:</b> todas las sedes, usuarios, líneas y reportes.</li>
-            <li><b>Gerente General:</b> todas las líneas y conversaciones de su sede.</li>
+            <li><b>Gerente Regional:</b> todas las líneas y conversaciones de su sede.</li>
             <li><b>Gerente de Marketing:</b> toda el área de Marketing de su sede.</li>
             <li><b>Supervisor de Marketing:</b> seguimiento de Marketing de su sede.</li>
             <li><b>Asesor de Marketing:</b> su propia línea y sus notas.</li>

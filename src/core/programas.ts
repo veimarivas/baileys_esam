@@ -10,7 +10,7 @@ import { esamEsAdmin, esamRoles, type UserRow } from '../auth/users.js';
  * certificación—, cada una con su monto total y su cantidad de cuotas. Los
  * montos se guardan en centavos de boliviano.
  *
- * Lo administran el Super Admin y, en su sede, el Gerente General y el Gerente
+ * Lo administran el Super Admin y, en su sede, el Gerente Regional y el Gerente
  * de Marketing. Un lead se asigna a un programa de la oferta de SU sede.
  */
 
@@ -117,11 +117,11 @@ export function totalCredito(p: Programa): number | null {
 
 // ── Permisos ──────────────────────────────────────────────────────────────
 
-/** Super Admin, o Gerente General / Gerente de Marketing miembro de esa sede. */
+/** Super Admin, o Gerente Regional / Gerente de Marketing miembro de esa sede. */
 export function puedeEditarProgramas(user: UserRow, sedeId: number): boolean {
   if (esamEsAdmin(user)) return true;
   const roles = esamRoles(user);
-  const cargo = roles.includes('Gerente General') || roles.includes('Gerente de Marketing') || roles.includes('Gerencia Marketing');
+  const cargo = roles.includes('Gerente Regional') || roles.includes('Gerente General') || roles.includes('Gerente de Marketing') || roles.includes('Gerencia Marketing');
   return cargo && !!get<{ user_id: number }>('SELECT user_id FROM sede_miembros WHERE user_id = ? AND sede_id = ?', user.id, sedeId);
 }
 

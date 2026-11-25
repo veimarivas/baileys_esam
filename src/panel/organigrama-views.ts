@@ -25,7 +25,7 @@ import {
  * Organigrama POR PERSONAS de una sede (PLAN_ORGANIGRAMA.md, L1).
  *
  * Se ve en la ficha de la sede (`/unidades/:u/sedes/:s`, Super Admin) y en
- * `/organigrama` (Gerente General, su sede). Con `?editar=1`, quien puede
+ * `/organigrama` (Gerente Regional, su sede). Con `?editar=1`, quien puede
  * editar ve en cada persona «Depende de» con los jefes válidos según /cargos.
  */
 
@@ -153,8 +153,8 @@ export function renderOrganigramaPersonas(viewer: UserRow, sedeId: number, opts:
     ? `<div class="org-chart op-chart"><ul class="org-tree op-tree">${raices.map((r) => rama(r, true)).join('')}</ul></div>`
     : emptyState(
         'ri-organization-chart',
-        'Falta el Gerente General',
-        'El organigrama empieza en el Gerente General de la sede. Asigná ese cargo a una persona en la lista de usuarios.',
+        'Falta el Gerente Regional',
+        'El organigrama empieza en el Gerente Regional de la sede. Asigná ese cargo a una persona en la lista de usuarios.',
       );
 
   const bandeja = sinJefe.length
@@ -212,14 +212,14 @@ function volverSeguro(valor: unknown, porDefecto: string): string {
 }
 
 export function registerOrganigramaRoutes(app: express.Express, ctx: { requireUser: RequestHandler }): void {
-  // Gerente General: el organigrama de SU sede. El Super Admin lo ve en /unidades.
+  // Gerente Regional: el organigrama de SU sede. El Super Admin lo ve en /unidades.
   app.get('/organigrama', ctx.requireUser, (req: Request, res: Response) => {
     const user = (req as AuthedRequest).user!;
     if (esamEsAdmin(user)) {
       res.redirect('/unidades');
       return;
     }
-    // Un Gerente General puede estarlo en varias sedes: elige cuál ver.
+    // Un Gerente Regional puede estarlo en varias sedes: elige cuál ver.
     const misSedes = esamEsGerenteSede(user) ? sedesDe(user.id) : [];
     if (!misSedes.length) {
       res.status(403).send('No tenés acceso al organigrama.');

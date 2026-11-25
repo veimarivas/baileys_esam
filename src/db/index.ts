@@ -206,6 +206,8 @@ export function migrate(): void {
   db.exec('CREATE INDEX IF NOT EXISTS idx_sedes_unit ON sedes(business_unit_id)');
   setupBusinessUnits();
   setupCargos();
+  // El cargo cabeza de sede pasa de «Gerente General» a «Gerente Regional».
+  migrarGerenteRegional();
   addColumnIfMissing('web_sessions', 'last_seen_at', 'TEXT');
   db.exec('CREATE INDEX IF NOT EXISTS idx_users_sede ON users(sede_id)');
   // Organigrama por personas: jefe directo (PLAN_ORGANIGRAMA.md, L0).
@@ -486,7 +488,7 @@ function setupCargos(): void {
       'INSERT INTO cargos (area, name, parent_id, position, active, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)',
     ).run(area, name, parent?.id ?? null, position, now, now);
   };
-  insert('Dirección', 'Gerente General', null, 1);
+  insert('Dirección', 'Gerente Regional', null, 1);
   insert('Marketing', 'Gerente de Marketing', null, 1);
   insert('Marketing', 'Supervisor de Marketing', 'Gerente de Marketing', 2);
   insert('Marketing', 'Asesor de Marketing', 'Supervisor de Marketing', 3);
@@ -497,6 +499,32 @@ function setupCargos(): void {
   insert('Académica', 'Coordinador Académico', 'Director Académico', 2);
   insert('Académica', 'Asesor Académico', 'Coordinador Académico', 3);
   logger.info('Cargos iniciales del organigrama creados');
+}
+
+/**
+ * Renombra el cargo cabeza de sede y los roles que ya lo usaban.
+ * Idempotente: si ya está migrado no cambia nada.
+ */
+function migrarGerenteRegional(): void {
+  const now = new Date().toISOString();
+  const viejo = db
+    .prepare("SELECT id FROM cargos WHERE area = 'Dirección' AND name = 'Gerente General'")
+    .get() as { id: number } | undefined;
+  const nuevo = db
+    .prepare("SELECT id FROM cargos WHERE area = 'Dirección' AND name = 'Gerente Regional'")
+    .get() as { id: number } | undefined;
+
+  if (viejo && !nuevo) {
+    db.prepare("UPDATE cargos SET name = 'Gerente Regional', updated_at = ? WHERE id = ?").run(now, viejo.id);
+  } else if (viejo && nuevo) {
+    db.prepare('UPDATE cargos SET parent_id = ? WHERE parent_id = ?').run(nuevo.id, viejo.id);
+    db.prepare('UPDATE cargos SET active = 0, updated_at = ? WHERE id = ?').run(now, viejo.id);
+  }
+
+  db.prepare(
+    `UPDATE users SET esam_roles = REPLACE(esam_roles, '"Gerente General"', '"Gerente Regional"')
+      WHERE esam_roles LIKE '%"Gerente General"%'`,
+  ).run();
 }
 
 /** Marca en `configs` si la busqueda full-text (FTS5) quedo disponible. */

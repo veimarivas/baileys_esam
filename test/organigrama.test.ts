@@ -19,7 +19,7 @@ import { nowIso } from '../src/util/async.js';
  * de leads de marketing.
  *
  *   Sede Norte                         Sede Sur
- *   Gerente General (gg)               Supervisor (sb)
+ *   Gerente Regional (gg)               Supervisor (sb)
  *   └ Gerente de Marketing (gm)        └ Asesor (ab)
  *     ├ Supervisor (s1) ─ a1, a2
  *     └ Supervisor (s2) ─ a3
@@ -64,7 +64,7 @@ describe('organigrama por personas', () => {
     ).lastInsertRowid;
     admin = findById(id)!;
 
-    gg = persona('Gerente General', norte, 'Gina');
+    gg = persona('Gerente Regional', norte, 'Gina');
     gm = persona('Gerente de Marketing', norte, 'Mario');
     s1 = persona('Supervisor de Marketing', norte, 'Sara');
     s2 = persona('Supervisor de Marketing', norte, 'Saul');
@@ -86,7 +86,7 @@ describe('organigrama por personas', () => {
   it('ofrece como jefe solo a quien tiene el cargo superior en la misma sede', () => {
     assert.deepEqual(ids(jefesValidos(a1)), ids([s1, s2]));
     assert.deepEqual(ids(jefesValidos(s1)), ids([gm]));
-    assert.deepEqual(ids(jefesValidos(gm)), ids([gg]), 'el cargo raíz de marketing depende del Gerente General');
+    assert.deepEqual(ids(jefesValidos(gm)), ids([gg]), 'el cargo raíz de marketing depende del Gerente Regional');
     assert.deepEqual(jefesValidos(gg), []);
   });
 
@@ -110,12 +110,12 @@ describe('organigrama por personas', () => {
     assert.equal(jefeDe(a1), s1.id, 'un intento rechazado no cambia nada');
   });
 
-  it('editan el Super Admin y el Gerente General de esa sede, nadie más', () => {
+  it('editan el Super Admin y el Gerente Regional de esa sede, nadie más', () => {
     assert.equal(puedeEditarOrganigrama(admin, norte), true);
     assert.equal(puedeEditarOrganigrama(gg, norte), true);
     assert.equal(puedeEditarOrganigrama(gg, sur), false);
     assert.equal(puedeEditarOrganigrama(gm, norte), false);
-    assert.throws(() => asignarJefe(s1, a3.id, s1.id), /Solo el Super Admin o el Gerente General/);
+    assert.throws(() => asignarJefe(s1, a3.id, s1.id), /Solo el Super Admin o el Gerente Regional/);
 
     asignarJefe(gg, a2.id, s2.id);
     assert.equal(jefeDe(a2), s2.id);

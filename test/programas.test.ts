@@ -69,12 +69,12 @@ describe('programas de la oferta por sede', () => {
       "INSERT INTO users (name, username, password, source, esam_autorizado, esam_roles, created_at, updated_at) VALUES ('Admin', 'pg.root', 'x', 'local', 1, '[]', ?, ?)",
       now, now,
     ).lastInsertRowid)!;
-    gg = persona('Gerente General', sucre, 'Gina');
+    gg = persona('Gerente Regional', sucre, 'Gina');
     gm = persona('Gerente de Marketing', sucre, 'Mario');
     sup = persona('Supervisor de Marketing', sucre, 'Sara');
     ana = persona('Asesor de Marketing', sucre, 'Ana');
     beto = persona('Asesor de Marketing', potosi, 'Beto');
-    ggPotosi = persona('Gerente General', potosi, 'Gabo');
+    ggPotosi = persona('Gerente Regional', potosi, 'Gabo');
     asignarJefe(admin, gm.id, gg.id);
     asignarJefe(admin, sup.id, gm.id);
     asignarJefe(admin, ana.id, sup.id);

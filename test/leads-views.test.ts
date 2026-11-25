@@ -83,7 +83,7 @@ describe('/leads', () => {
       "INSERT INTO users (name, username, password, source, esam_autorizado, esam_roles, created_at, updated_at) VALUES ('Admin', 'lv.root', 'x', 'local', 1, '[]', ?, ?)",
       now, now,
     ).lastInsertRowid)!;
-    gg = persona('Gerente General', sede, 'Gaby');
+    gg = persona('Gerente Regional', sede, 'Gaby');
     gm = persona('Gerente de Marketing', sede, 'Mateo');
     sup = persona('Supervisor de Marketing', sede, 'Sofia');
     otroSup = persona('Supervisor de Marketing', sede, 'Sergio');
@@ -170,7 +170,7 @@ describe('/leads', () => {
     assert.ok(r.body?.includes('La etapa la mueve'), 'el jefe ve la etapa sin poder moverla');
   });
 
-  it('acceso a la sección: Marketing y Gerente General, no otras áreas', () => {
+  it('acceso a la sección: Marketing y Gerente Regional, no otras áreas', () => {
     assert.equal(esamPuede(ana, 'leads'), true);
     assert.equal(esamPuede(gm, 'leads'), true);
     assert.equal(esamPuede(gg, 'leads'), true);

@@ -387,7 +387,7 @@ export function equipoDe(viewer: UserRow, sobreId: number = viewer.id, ahora: Da
 
   const directos = directosDe(sobreId, sedeId)
     .filter((u) => !alcance || alcance.includes(u.id))
-    // Solo Marketing (Q5): el Gerente General también tiene a cargo otras áreas.
+    // Solo Marketing (Q5): el Gerente Regional también tiene a cargo otras áreas.
     .filter((u) => cargoDe(u)?.area === 'Marketing');
 
   const filas = directos.map((u) => {
@@ -425,12 +425,12 @@ export function tieneEquipo(viewer: UserRow): boolean {
   return alcance === null || alcance.length > 1;
 }
 
-/** Para Super Admin y Control de Sedes: el Gerente General de cada sede (desde ahí baja a su equipo). */
+/** Para Super Admin y Control de Sedes: el Gerente Regional de cada sede (desde ahí baja a su equipo). */
 export function gerentesDeSede(): Array<{ id: number; nombre: string; sede: string; sede_id: number }> {
   return all<{ id: number; nombre: string; sede: string; sede_id: number }>(
     `SELECT u.id, COALESCE(NULLIF(u.name, ''), u.username) AS nombre, s.name AS sede, s.id AS sede_id
        FROM sede_miembros m JOIN users u ON u.id = m.user_id JOIN sedes s ON s.id = m.sede_id
-      WHERE u.esam_autorizado = 1 AND u.esam_roles LIKE '%"Gerente General"%'
+      WHERE u.esam_autorizado = 1 AND (u.esam_roles LIKE '%"Gerente Regional"%' OR u.esam_roles LIKE '%"Gerente General"%')
       ORDER BY s.name COLLATE NOCASE, nombre COLLATE NOCASE`,
   );
 }

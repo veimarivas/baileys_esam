@@ -48,7 +48,7 @@ export const LOCAL_CARGOS_POR_AREA: Record<string, string[]> = {
   Marketing: ['Gerente de Marketing', 'Supervisor de Marketing', 'Asesor de Marketing'],
   Contabilidad: ['Contador General', 'Analista Contable', 'Auxiliar Contable'],
   Académica: ['Director Académico', 'Coordinador Académico', 'Asesor Académico'],
-  Dirección: ['Gerente General'],
+  Dirección: ['Gerente Regional'],
 };
 
 /** Cargos válidos para una cuenta local (todas las áreas). */
@@ -67,6 +67,7 @@ export const LOCAL_CARGO_AREA: Record<string, string> = {
   'Director Académico': 'academico',
   'Coordinador Académico': 'academico',
   'Asesor Académico': 'academico',
+  'Gerente Regional': 'general',
   'Gerente General': 'general',
 };
 
@@ -87,6 +88,7 @@ export const ROLE_AREAS: Record<string, string> = {
   'Director Académico': 'academico',
   'Coordinador Académico': 'academico',
   'Asesor Académico': 'academico',
+  'Gerente Regional': 'general',
   'Gerente General': 'general',
 };
 
@@ -133,9 +135,9 @@ export function esamEsAdmin(user: UserRow): boolean {
   return user.source === 'local' && roles.length === 0;
 }
 
-/** ¿Es gerente general de una sede? Accede a todas las líneas de su sede. */
+/** ¿Es gerente regional de una sede? Accede a todas las líneas de su sede. */
 export function esamEsGerenteSede(user: UserRow): boolean {
-  return !esamEsAdmin(user) && esamRoles(user).includes('Gerente General');
+  return !esamEsAdmin(user) && (esamRoles(user).includes('Gerente Regional') || esamRoles(user).includes('Gerente General'));
 }
 
 /** Gerente o supervisor de Marketing: supervisa el área en su sede. */
@@ -181,14 +183,14 @@ export function esamPuede(user: UserRow, seccion: string): boolean {
     allowed.add('reports');
     allowed.add('monitoring');
   }
-  // Organigrama de su sede (PLAN_ORGANIGRAMA.md): lo ve y lo edita el Gerente General.
+  // Organigrama de su sede (PLAN_ORGANIGRAMA.md): lo ve y lo edita el Gerente Regional.
   if (esamEsGerenteSede(user)) allowed.add('organigrama');
-  // Leads de marketing: el área Marketing y el Gerente General (lo que ve cada
+  // Leads de marketing: el área Marketing y el Gerente Regional (lo que ve cada
   // uno lo recorta el organigrama, en `alcanceLeads`).
   if (esamEsGerenteSede(user) || esamAreas(user).includes('marketing') || (user.esam_area ?? '').toLowerCase() === 'marketing') {
     allowed.add('leads');
   }
-  // Oferta de programas de su sede: Gerente General y Gerente de Marketing.
+  // Oferta de programas de su sede: Gerente Regional y Gerente de Marketing.
   if (esamEsGerenteSede(user) || esamRoles(user).some((r) => r === 'Gerente de Marketing' || r === 'Gerencia Marketing')) {
     allowed.add('programas');
   }
@@ -246,7 +248,7 @@ export function sessionScopeFor(user: UserRow): string[] | null {
   // cronogramas con Super Admin ven su propio número en el historial.
   if (user.source === 'local' && esamEsAdmin(user)) return null;
 
-  // Gerente General: todas las líneas de su sede.
+  // Gerente Regional: todas las líneas de su sede.
   if (esamEsGerenteSede(user) && user.sede_id) {
     return all<{ id: string }>('SELECT id FROM sessions WHERE sede_id = ?', user.sede_id).map((r) => r.id);
   }

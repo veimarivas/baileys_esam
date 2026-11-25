@@ -16,7 +16,7 @@ import {
   updateManagedUser,
   upsertUser,
 } from '../src/auth/users.js';
-import { get, run } from '../src/db/index.js';
+import { get, run, migrate } from '../src/db/index.js';
 import { nowIso } from '../src/util/async.js';
 
 /**
@@ -78,7 +78,7 @@ describe('sedes', () => {
 
   it('no elimina una sede con usuarios asignados', () => {
     const sede = createSede('Sede Con Usuarios');
-    localUser({ username: 'sede.ocupada', cargo: 'Gerente General', sedeId: sede, numero: '59170000901' });
+    localUser({ username: 'sede.ocupada', cargo: 'Gerente Regional', sedeId: sede, numero: '59170000901' });
     assert.throws(() => deleteSede(sede), /usuarios asignados/);
   });
 });
@@ -86,10 +86,10 @@ describe('sedes', () => {
 describe('usuarios locales y alcance por cargo', () => {
   it('crea la cuenta, la vincula a su sede y le crea su línea', () => {
     const sede = createSede('Sede Oriente');
-    const user = localUser({ username: 'gerente.oriente', cargo: 'Gerente General', sedeId: sede, numero: '59170000902' });
+    const user = localUser({ username: 'gerente.oriente', cargo: 'Gerente Regional', sedeId: sede, numero: '59170000902' });
     assert.equal(user.source, 'local');
     assert.equal(user.sede_id, sede);
-    assert.deepEqual(esamRoles(user), ['Gerente General']);
+    assert.deepEqual(esamRoles(user), ['Gerente Regional']);
     assert.equal(user.esam_autorizado, 1);
     assert.equal(esamEsAdmin(user), false);
     assert.equal(esamEsGerenteSede(user), true);
@@ -100,10 +100,10 @@ describe('usuarios locales y alcance por cargo', () => {
     assert.equal(line?.c, 1);
   });
 
-  it('el Gerente General ve todas las líneas de su sede y ninguna de otra', () => {
+  it('el Gerente Regional ve todas las líneas de su sede y ninguna de otra', () => {
     const sede = createSede('Sede Gerencia');
     const otra = createSede('Sede Ajena');
-    const user = localUser({ username: 'gerente.sede', cargo: 'Gerente General', sedeId: sede, numero: '59170000903' });
+    const user = localUser({ username: 'gerente.sede', cargo: 'Gerente Regional', sedeId: sede, numero: '59170000903' });
     seedSession('g-marketing', { sedeId: sede, area: 'marketing' });
     seedSession('g-academico', { sedeId: sede, area: 'academico' });
     seedSession('g-otra', { sedeId: otra, area: 'marketing' });
@@ -239,5 +239,33 @@ describe('usuarios locales y alcance por cargo', () => {
     assert.equal(esamEsAdmin(user), false);
     assert.equal(esamEsMarketingManager(user), true);
     assert.deepEqual(sessionScopeFor(user), ['crono-linea']);
+  });
+
+  it('migra el cargo cabeza de sede a Gerente Regional', () => {
+    const now = nowIso();
+    run(
+      "INSERT OR IGNORE INTO cargos (area, name, parent_id, position, active, created_at, updated_at) VALUES ('Dirección', 'Gerente General', NULL, 9, 1, ?, ?)",
+      now,
+      now,
+    );
+    const user = upsertUser({
+      sourceUid: 'legacy-gerente',
+      name: 'Gerente legado',
+      username: 'gerente.legado',
+      email: 'gerente.legado@test.local',
+      source: 'cronogramas',
+      autorizado: true,
+      roles: ['Gerente General'],
+    });
+
+    migrate();
+
+    const legacy = get<{ active: number }>(
+      "SELECT active FROM cargos WHERE area = 'Dirección' AND name = 'Gerente General'",
+    );
+    const updated = findById(user.id)!;
+    assert.equal(legacy?.active, 0);
+    assert.deepEqual(esamRoles(updated), ['Gerente Regional']);
+    assert.equal(esamEsGerenteSede(updated), true);
   });
 });

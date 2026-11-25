@@ -345,8 +345,8 @@ export function renderEquipo(viewer: UserRow, sobreId: number | null, ahora: Dat
     return `<div class="ld-team">
       <p class="ld-muted">Elegí la sede para ver su equipo de marketing. Para comparar todas las sedes, abrí <a href="/leads/analisis">Análisis</a>.</p>
       <div class="ld-team-sedes">${gerentes.length
-        ? gerentes.map((g) => `<a class="ld-team-sede" href="/leads/equipo?sobre=${g.id}&amp;sede=${g.sede_id}"><b>${esc(g.sede)}</b><span>${esc(g.nombre)} · Gerente General</span></a>`).join('')
-        : '<p class="ld-muted">Ninguna sede tiene Gerente General todavía (se asigna en Unidades de negocio).</p>'}</div>
+        ? gerentes.map((g) => `<a class="ld-team-sede" href="/leads/equipo?sobre=${g.id}&amp;sede=${g.sede_id}"><b>${esc(g.sede)}</b><span>${esc(g.nombre)} · Gerente Regional</span></a>`).join('')
+        : '<p class="ld-muted">Ninguna sede tiene Gerente Regional todavía (se asigna en Unidades de negocio).</p>'}</div>
     </div>`;
   }
 

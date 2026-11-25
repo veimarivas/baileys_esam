@@ -80,7 +80,7 @@ describe('organigrama de personas (vista)', () => {
       now, now,
     ).lastInsertRowid)!;
 
-    gg = persona('Gerente General', norte, 'Gina');
+    gg = persona('Gerente Regional', norte, 'Gina');
     gm = persona('Gerente de Marketing', norte, 'Mario');
     s1 = persona('Supervisor de Marketing', norte, 'Sara');
     s2 = persona('Supervisor de Marketing', norte, 'Saul');
@@ -88,7 +88,7 @@ describe('organigrama de personas (vista)', () => {
     a2 = persona('Asesor de Marketing', norte, 'Alan');
     a3 = persona('Asesor de Marketing', norte, 'Abel');
     persona('Asesor de Marketing', norte, 'Lucia');
-    ggSur = persona('Gerente General', sur, 'Gabriel');
+    ggSur = persona('Gerente Regional', sur, 'Gabriel');
 
     asignarJefe(admin, gm.id, gg.id);
     asignarJefe(admin, s1.id, gm.id);
@@ -112,7 +112,7 @@ describe('organigrama de personas (vista)', () => {
   it('dibuja a cada supervisor con SUS asesores debajo', () => {
     const html = renderOrganigramaPersonas(admin, norte, { base: `/unidades/1/sedes/${norte}`, editar: false });
 
-    assert.match(html, /op-node op-root[\s\S]*Gina/, 'el Gerente General es la raíz');
+    assert.match(html, /op-node op-root[\s\S]*Gina/, 'el Gerente Regional es la raíz');
     const deSara = entre(html, '>Sara<', '>Saul<');
     assert.ok(deSara.includes('>Ana<') && deSara.includes('>Alan<'), 'Ana y Alan cuelgan de Sara');
     assert.ok(!deSara.includes('>Abel<'), 'Abel no es de Sara');
@@ -167,7 +167,7 @@ describe('organigrama de personas (vista)', () => {
     assert.equal(get<{ jefe_id: number }>('SELECT jefe_id FROM sede_miembros WHERE user_id = ? AND principal = 1', a2.id)?.jefe_id, s2.id, 'no cambió');
   });
 
-  it('/organigrama es solo para el Gerente General; el Super Admin va a Unidades', () => {
+  it('/organigrama es solo para el Gerente Regional; el Super Admin va a Unidades', () => {
     const llamar = rutas();
     assert.equal(llamar('GET', '/organigrama', a1).status, 403);
     assert.equal(llamar('GET', '/organigrama', gm).status, 403);

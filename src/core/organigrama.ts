@@ -14,20 +14,21 @@ import { esamEsAdmin, esamEsGerenteSede, esamRoles, findById, type UserRow } fro
  * - Dentro de cada sede: un solo jefe por persona, miembro de esa misma sede.
  * - El cargo del jefe es el cargo del que depende el cargo de la persona.
  *   Un cargo raíz de un área (p. ej. Gerente de Marketing) depende del
- *   Gerente General de la sede.
+ *   Gerente Regional de la sede.
  * - Sin ciclos. El SSO de cronogramas nunca toca las dependencias.
- * - Editan el Super Admin y el Gerente General de esa sede.
+ * - Editan el Super Admin y el Gerente Regional de esa sede.
  * - «Control de Sedes»: ve los leads de TODAS las sedes (solo mira y comenta);
  *   no edita el organigrama ni mueve etapas.
  */
 
-export const CARGO_GERENTE_SEDE = 'Gerente General';
+export const CARGO_GERENTE_SEDE = 'Gerente Regional';
 /** Personal que controla todas las sedes (ve todos los leads y el análisis). */
 export const CARGO_CONTROL = 'Control de Sedes';
 
 /** Nombres de rol de cronogramas que equivalen a un cargo de `/cargos`. */
 const ALIAS_CARGO: Record<string, string> = {
   'Gerencia Marketing': 'Gerente de Marketing',
+  'Gerente General': 'Gerente Regional',
 };
 
 interface CargoLite {
@@ -58,7 +59,7 @@ export function cargoDe(user: UserRow): CargoLite | null {
 }
 
 function esGerenteDeSede(user: UserRow): boolean {
-  return esamRoles(user).includes(CARGO_GERENTE_SEDE);
+  return esamRoles(user).includes(CARGO_GERENTE_SEDE) || esamRoles(user).includes('Gerente General');
 }
 
 /** ¿Es personal de control de todas las sedes? */
@@ -153,7 +154,7 @@ export function candidatosDeOtrasSedes(sedeId: number): Array<{ id: number; nomb
 
 /** Suma a un gerente o supervisor de otra sede a esta (sin jefe todavía). */
 export function agregarASede(actor: UserRow, sedeId: number, userId: number): void {
-  if (!puedeEditarOrganigrama(actor, sedeId)) throw new Error('Solo el Super Admin o el Gerente General de la sede pueden cambiar el organigrama.');
+  if (!puedeEditarOrganigrama(actor, sedeId)) throw new Error('Solo el Super Admin o el Gerente Regional de la sede pueden cambiar el organigrama.');
   const user = findById(userId);
   if (!user || !user.esam_autorizado) throw new Error('Persona no encontrada.');
   if (!esCargoDeJefe(user)) throw new Error('Solo gerentes y supervisores pueden estar en más de una sede.');
@@ -164,7 +165,7 @@ export function agregarASede(actor: UserRow, sedeId: number, userId: number): vo
 
 /** Saca a alguien de una sede que no es la suya principal; su gente ahí queda sin jefe. */
 export function quitarDeSede(actor: UserRow, sedeId: number, userId: number): void {
-  if (!puedeEditarOrganigrama(actor, sedeId)) throw new Error('Solo el Super Admin o el Gerente General de la sede pueden cambiar el organigrama.');
+  if (!puedeEditarOrganigrama(actor, sedeId)) throw new Error('Solo el Super Admin o el Gerente Regional de la sede pueden cambiar el organigrama.');
   const m = membresia(userId, sedeId);
   if (!m) return;
   if (m.principal) throw new Error('Es su sede principal: se cambia desde la ficha del usuario.');
@@ -181,7 +182,7 @@ export function quitarDeSede(actor: UserRow, sedeId: number, userId: number): vo
 /**
  * Quiénes pueden ser jefe directo de `user` en una sede (por defecto la
  * principal), según `/cargos`. Vacío si no es miembro, no tiene cargo o es el
- * Gerente General.
+ * Gerente Regional.
  */
 export function jefesValidos(user: UserRow, sedeId: number | null = user.sede_id): Array<UserRow & { jefe_id: number | null }> {
   if (!sedeId || esGerenteDeSede(user) || esControlDeSedes(user) || !membresia(user.id, sedeId)) return [];
@@ -190,7 +191,7 @@ export function jefesValidos(user: UserRow, sedeId: number | null = user.sede_id
 
   const candidatos = personasDeSede(sedeId).filter((p) => p.id !== user.id);
   if (cargo.parent_id) return candidatos.filter((p) => cargoDe(p)?.id === cargo.parent_id);
-  // Cargo raíz de su área: depende del Gerente General de la sede.
+  // Cargo raíz de su área: depende del Gerente Regional de la sede.
   return candidatos.filter((p) => esGerenteDeSede(p));
 }
 
@@ -206,7 +207,7 @@ function formaCiclo(userId: number, jefeId: number, sedeId: number): boolean {
   return false;
 }
 
-/** Super Admin, o un Gerente General miembro de esa sede. */
+/** Super Admin, o un Gerente Regional miembro de esa sede. */
 export function puedeEditarOrganigrama(actor: UserRow, sedeId: number | null): boolean {
   if (esamEsAdmin(actor)) return true;
   return !!sedeId && esamEsGerenteSede(actor) && !!membresia(actor.id, sedeId);
@@ -243,7 +244,7 @@ export function asignarJefe(actor: UserRow, userId: number, jefeId: number | nul
   const sede = sedeId ?? user.sede_id;
   if (!sede) throw new Error('La persona no tiene sede.');
   if (!puedeEditarOrganigrama(actor, sede)) {
-    throw new Error('Solo el Super Admin o el Gerente General de la sede pueden cambiar el organigrama.');
+    throw new Error('Solo el Super Admin o el Gerente Regional de la sede pueden cambiar el organigrama.');
   }
   const m = membresia(userId, sede);
   if (!m) throw new Error('Esa persona no es de esta sede.');
@@ -293,7 +294,7 @@ export function revalidarDependencias(userId: number, actorId: number | null = n
  * Ids de usuarios cuyos leads ve `user`. `null` = todos.
  *
  * - Super Admin y «Control de Sedes»: todos.
- * - Gerente General: todas las personas de marketing de CADA sede donde es
+ * - Gerente Regional: todas las personas de marketing de CADA sede donde es
  *   gerente (y él).
  * - Cualquier otro: él y todo su subárbol, sede por sede (un supervisor en dos
  *   sedes ve a sus asesores de las dos).
@@ -392,7 +393,7 @@ export interface NodoOrganigrama {
 }
 
 /**
- * Árbol de personas de una sede: raíces (el Gerente General) y quienes
+ * Árbol de personas de una sede: raíces (el Gerente Regional) y quienes
  * todavía no tienen jefe asignado en esta sede.
  */
 export function organigramaDeSede(sedeId: number): { raices: NodoOrganigrama[]; sinJefe: NodoOrganigrama[] } {

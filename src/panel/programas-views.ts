@@ -26,7 +26,7 @@ import {
 /**
  * /programas — oferta de programas de cada sede (cursos, diplomados,
  * especialidades y maestrías) con precio al contado y a crédito.
- * Super Admin: todas las sedes. Gerente General y Gerente de Marketing: las suyas.
+ * Super Admin: todas las sedes. Gerente Regional y Gerente de Marketing: las suyas.
  */
 
 type AuthedRequest = Request & { user?: UserRow };

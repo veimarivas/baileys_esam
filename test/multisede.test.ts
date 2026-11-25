@@ -74,7 +74,7 @@ describe('varias sedes y control de sedes', () => {
       now, now,
     ).lastInsertRowid)!;
 
-    gina = persona('Gerente General', sucre, 'Gina');
+    gina = persona('Gerente Regional', sucre, 'Gina');
     mario = persona('Gerente de Marketing', sucre, 'Mario');
     pablo = persona('Gerente de Marketing', potosi, 'Pablo');
     sara = persona('Supervisor de Marketing', sucre, 'Sara');
@@ -117,7 +117,7 @@ describe('varias sedes y control de sedes', () => {
     assert.deepEqual(ordenar(alcanceLeads(pablo)), ids(pablo, sara, pedro, bruno, carla));
   });
 
-  it('el gerente general en dos sedes ve marketing de las dos y edita las dos', () => {
+  it('el gerente regional en dos sedes ve marketing de las dos y edita las dos', () => {
     const alcance = alcanceLeads(gina)!;
     for (const u of [mario, pablo, sara, pedro, ana, bruno, carla]) assert.ok(alcance.includes(u.id), u.name!);
     assert.equal(puedeEditarOrganigrama(gina, potosi), true);
@@ -138,7 +138,7 @@ describe('varias sedes y control de sedes', () => {
     assert.ok(candidatosDeOtrasSedes(potosi).some((c) => c.id === mario.id));
     assert.ok(!candidatosDeOtrasSedes(potosi).some((c) => c.id === ana.id), 'un asesor no');
     assert.throws(() => agregarASede(admin, potosi, ana.id), /Solo gerentes y supervisores/);
-    assert.throws(() => agregarASede(mario, potosi, mario.id), /Solo el Super Admin o el Gerente General/);
+    assert.throws(() => agregarASede(mario, potosi, mario.id), /Solo el Super Admin o el Gerente Regional/);
   });
 
   it('quitar de una sede extra suelta a su gente ahí; la principal no se quita desde acá', () => {

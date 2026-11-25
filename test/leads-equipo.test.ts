@@ -12,11 +12,11 @@ import { nowIso } from '../src/util/async.js';
 /**
  * PLAN_ORGANIGRAMA.md, L4: «Mi equipo» y comentarios de los jefes.
  *
- *   Gerente General (gg)
+ *   Gerente Regional (gg)
  *   └ Gerente de Marketing (gm)
  *     ├ Supervisora (sup) ─ ana, beto
  *     └ Supervisor (sup2) ─ carlos
- *   + Contador General (conta), que también depende del Gerente General
+ *   + Contador General (conta), que también depende del Gerente Regional
  */
 
 let n = 0;
@@ -61,7 +61,7 @@ describe('Mi equipo y comentarios', () => {
       "INSERT INTO users (name, username, password, source, esam_autorizado, esam_roles, created_at, updated_at) VALUES ('Admin', 'eq.root', 'x', 'local', 1, '[]', ?, ?)",
       now, now,
     ).lastInsertRowid)!;
-    gg = persona('Gerente General', sede, 'Gaby');
+    gg = persona('Gerente Regional', sede, 'Gaby');
     gm = persona('Gerente de Marketing', sede, 'Mateo');
     sup = persona('Supervisor de Marketing', sede, 'Sofia');
     sup2 = persona('Supervisor de Marketing', sede, 'Sergio');
@@ -99,7 +99,7 @@ describe('Mi equipo y comentarios', () => {
     assert.deepEqual(bajando.ruta.map((r) => r.nombre), ['Mateo', 'Sofia'], 'migas desde quien mira');
   });
 
-  it('el Gerente General ve solo a Marketing, aunque también tenga contabilidad a cargo', () => {
+  it('el Gerente Regional ve solo a Marketing, aunque también tenga contabilidad a cargo', () => {
     assert.deepEqual(equipoDe(gg)!.filas.map((f) => f.nombre), ['Mateo']);
   });
 

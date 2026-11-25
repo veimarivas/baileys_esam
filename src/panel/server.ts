@@ -90,6 +90,7 @@ import { scheduleBatch } from '../core/scheduler.js';
 import { registerAntiBanRoutes } from './anti-ban.js';
 import { registerAdminRoutes } from './admin-views.js';
 import { registerOrganigramaRoutes } from './organigrama-views.js';
+import { registerLeadsRoutes } from './leads-views.js';
 import { registerInboxRoutes } from './inbox.js';
 import { registerNotificationRoutes } from './notifications-view.js';
 import type { SessionRow } from '../types.js';
@@ -2464,6 +2465,7 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
   // /audit, /users y /templates: admin-views.ts
   registerAdminRoutes(app, { requireUser, requireSection, sessions: () => manager.list() });
   registerOrganigramaRoutes(app, { requireUser });
+  registerLeadsRoutes(app, { requireUser, requireSection });
 
   registerAntiBanRoutes(app, {
     requireUser,

@@ -11,7 +11,10 @@
 > Gerente General, `POST /organigrama/jefe`; tests `organigrama-views.test.ts`) ·
 > ✅ L2 (`src/core/leads.ts`: alta desde prospectos y desde el primer mensaje en vivo a una
 > línea de Marketing, actividad por mensajes, migración única de prospectos existentes
-> `leadsDesdeProspectosV1`; tests `leads.test.ts`) · ⏳ L3.
+> `leadsDesdeProspectosV1`; tests `leads.test.ts`) ·
+> ✅ L3 (`/leads`: `src/panel/leads-views.ts` + `src/core/leads-vista.ts`, tablero por etapa con
+> filtros, ficha en panel lateral, arrastrar solo lo propio; tests `leads-views.test.ts`). Ya
+> trae lo básico de L4 (los jefes ven a su gente, con selector de persona y solo lectura) · ⏳ L4.
 
 ---
 

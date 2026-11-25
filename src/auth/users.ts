@@ -183,6 +183,11 @@ export function esamPuede(user: UserRow, seccion: string): boolean {
   }
   // Organigrama de su sede (PLAN_ORGANIGRAMA.md): lo ve y lo edita el Gerente General.
   if (esamEsGerenteSede(user)) allowed.add('organigrama');
+  // Leads de marketing: el área Marketing y el Gerente General (lo que ve cada
+  // uno lo recorta el organigrama, en `alcanceLeads`).
+  if (esamEsGerenteSede(user) || esamAreas(user).includes('marketing') || (user.esam_area ?? '').toLowerCase() === 'marketing') {
+    allowed.add('leads');
+  }
   return allowed.has(seccion);
 }
 

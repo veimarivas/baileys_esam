@@ -68,6 +68,8 @@ export interface NavItem {
 const NAV: NavItem[] = [
   { section: 'conversations', href: '/conversations', label: 'Conversaciones', icon: 'ri-chat-3-line' },
   { section: 'conversations', href: '/notes', label: 'Notas y tareas', icon: 'ri-sticky-note-line' },
+  // Leads de marketing por etapa (PLAN_ORGANIGRAMA.md): Marketing, Gerente General y Super Admin.
+  { section: 'leads', href: '/leads', label: 'Leads', icon: 'ri-user-star-line' },
   { section: 'conversations', href: '/agenda', label: 'Mi agenda', icon: 'ri-calendar-todo-line' },
   { section: 'conversations', href: '/cites', label: 'Cites', icon: 'ri-file-list-3-line' },
   { section: 'batches', href: '/batches', label: 'Lotes', icon: 'ri-send-plane-line' },

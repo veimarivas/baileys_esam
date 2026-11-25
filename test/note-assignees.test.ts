@@ -65,7 +65,7 @@ describe('derivación múltiple de notas', () => {
     assert.ok(dto);
     assert.deepEqual(dto.assignees.map((a) => a.id), [jorge, lucia]);
     assert.equal(dto.assignees[0].primary, true);
-    assert.equal(dto.assignees[0].area_label, 'Académico');
+    assert.equal(dto.assignees[0].area_label, 'Académica');
     assert.equal(dto.assignees[1].area_label, 'Contabilidad');
   });
 
@@ -129,7 +129,7 @@ describe('derivación múltiple de notas', () => {
     const people = noteAssignees();
     const areas = people.map((p) => p.area_label);
     assert.ok(areas.includes('Marketing'));
-    assert.ok(areas.includes('Académico'));
+    assert.ok(areas.includes('Académica'));
     assert.ok(areas.includes('Contabilidad'));
     assert.ok(people.every((p) => !!p.area_label));
   });

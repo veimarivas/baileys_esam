@@ -41,6 +41,10 @@ function seedSession(id: string, opts: { sedeId?: number | null; area?: string |
   );
 }
 
+// El CI es obligatorio y único en las cuentas locales.
+let ciSeq = 0;
+const nextCi = (): string => String(6100000 + ++ciSeq);
+
 function localUser(opts: {
   username: string;
   cargo: string;
@@ -49,6 +53,7 @@ function localUser(opts: {
   name?: string;
 }) {
   return createLocalUser({
+    ci: nextCi(),
     name: opts.name ?? opts.username,
     username: opts.username,
     email: `${opts.username}@test.local`,
@@ -147,6 +152,7 @@ describe('usuarios locales y alcance por cargo', () => {
     const sede = createSede('Sede Validaciones');
     assert.throws(
       () => createLocalUser({
+        ci: nextCi(),
         name: 'Cargo Inválido',
         username: 'cargo.invalido',
         email: null,
@@ -159,6 +165,7 @@ describe('usuarios locales y alcance por cargo', () => {
     );
     assert.throws(
       () => createLocalUser({
+        ci: nextCi(),
         name: 'Clave Corta',
         username: 'clave.corta',
         email: null,

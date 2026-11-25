@@ -25,6 +25,8 @@ function sede(): number {
 function usuario(sedeId: number, numero: string) {
   const suffix = uniq();
   return createLocalUser({
+    // El CI es obligatorio y único en las cuentas locales.
+    ci: String(6200000 + seq++),
     name: `Usuario ${suffix}`,
     username: `numero.${suffix}`,
     email: `numero.${suffix}@test.local`,

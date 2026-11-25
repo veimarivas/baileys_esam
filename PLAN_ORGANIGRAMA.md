@@ -8,7 +8,10 @@
 >
 > **Estado (2026-11-24):** ✅ L0 (`src/core/organigrama.ts`, tests `organigrama.test.ts`) ·
 > ✅ L1 (`src/panel/organigrama-views.ts`: ficha de sede → Organigrama, `/organigrama` para el
-> Gerente General, `POST /organigrama/jefe`; tests `organigrama-views.test.ts`) · ⏳ L2.
+> Gerente General, `POST /organigrama/jefe`; tests `organigrama-views.test.ts`) ·
+> ✅ L2 (`src/core/leads.ts`: alta desde prospectos y desde el primer mensaje en vivo a una
+> línea de Marketing, actividad por mensajes, migración única de prospectos existentes
+> `leadsDesdeProspectosV1`; tests `leads.test.ts`) · ⏳ L3.
 
 ---
 

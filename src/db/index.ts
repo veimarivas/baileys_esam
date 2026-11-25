@@ -271,7 +271,52 @@ export function migrate(): void {
   applyMassProfileV1();
   stopLegacyBatchesV1();
   repairUnreadV1();
+  leadsDesdeProspectosV1();
   logger.info({ db: resolved }, 'Esquema SQLite listo');
+}
+
+/**
+ * /leads (PLAN_ORGANIGRAMA.md, L2): una sola vez, los prospectos que ya
+ * existían pasan a ser leads de su asesor (autor de la nota), con la etapa de
+ * su estado en cronogramas y la actividad de sus mensajes. Lo nuevo lo
+ * mantiene `core/leads.ts`.
+ */
+function leadsDesdeProspectosV1(): void {
+  const done = (db.prepare("SELECT value FROM configs WHERE key = 'leads_prospectos_v1'").get() as { value?: string } | undefined)?.value;
+  if (done) return;
+  const now = new Date().toISOString();
+  try {
+    // El más reciente por persona y asesor gana (UNIQUE + OR IGNORE, en orden descendente).
+    const creados = db.prepare(`
+      INSERT OR IGNORE INTO leads (sede_id, owner_user_id, session_id, contact_id, phone_key, origen, prospect_ref, programa, etapa,
+                                   ultima_actividad_at, created_at, updated_at)
+      SELECT u.sede_id, n.user_id, c.session_id, c.id, c.phone_key, 'prospecto', n.prospect_ref,
+             json_extract(n.prospect_meta, '$.programa'),
+             CASE WHEN json_extract(n.prospect_meta, '$.estado') IN ('nuevo','contactado','interesado','no_interesado','inscrito')
+                  THEN json_extract(n.prospect_meta, '$.estado') ELSE 'nuevo' END,
+             COALESCE(n.updated_at, n.created_at), n.created_at, ?
+        FROM contact_notes n
+        JOIN contacts c ON c.id = n.contact_id
+        JOIN users u ON u.id = n.user_id
+       WHERE n.prospect_ref IS NOT NULL AND n.deleted_at IS NULL AND c.phone_key IS NOT NULL AND c.phone_key <> ''
+       ORDER BY n.id DESC`).run(now);
+    // Actividad real: último mensaje del chat y último que salió de la línea.
+    db.exec(`
+      UPDATE leads SET
+        ultima_actividad_at = COALESCE((
+          SELECT MAX(m.occurred_at) FROM messages m JOIN contacts c ON c.session_id = m.session_id AND c.chat_id = m.chat_id
+           WHERE m.session_id = leads.session_id AND c.phone_key = leads.phone_key), ultima_actividad_at),
+        ultimo_contacto_at = (
+          SELECT MAX(m.occurred_at) FROM messages m JOIN contacts c ON c.session_id = m.session_id AND c.chat_id = m.chat_id
+           WHERE m.session_id = leads.session_id AND c.phone_key = leads.phone_key AND m.direction = 'out')
+      WHERE origen = 'prospecto'`);
+    const n = Number(creados.changes);
+    if (n > 0) logger.info({ leads: n }, 'Prospectos existentes pasados a /leads');
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, 'No se pudieron pasar los prospectos existentes a /leads');
+    return;
+  }
+  setConfigFlag('leads_prospectos_v1', '1');
 }
 
 /**

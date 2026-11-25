@@ -11,6 +11,7 @@ import { storeAvatar, storeIncoming } from '../core/media.js';
 import { audit, dispatchEvent } from '../core/webhooks.js';
 import { getConfig, setConfig } from '../core/config-store.js';
 import { contactIdFor, setAvatar, setContactGroup } from '../core/contacts.js';
+import { crearLeadDesdeLinea, registrarActividadLead } from '../core/leads.js';
 import { setReaction } from '../core/conversations.js';
 import { addOptout, isOptoutRequest, looksLikeBlock, markBlocked } from '../core/optout.js';
 import { recomputeHealth } from '../core/health.js';
@@ -1033,6 +1034,15 @@ export class SessionManager implements OutboundSender {
     if (msg.isGroup && convName) setContactGroup(sessionId, msg.chatId, convName);
     void this.refreshAvatar(sessionId, msg.chatId);
 
+    // Primer mensaje en vivo de una persona a una línea de Marketing: nace su lead.
+    if (!msg.isGroup) {
+      try {
+        crearLeadDesdeLinea(sessionId, msg.chatId, new Date(msg.timestamp * 1000).toISOString());
+      } catch (err) {
+        logger.warn({ err: (err as Error).message, sessionId }, 'No se pudo crear el lead de la línea');
+      }
+    }
+
     // Auto-respuestas y opt-out solo aplican a chats individuales.
     if (!msg.isGroup) {
       if (isOptoutRequest(msg.body, getPolicy(null).optout_keywords)) {
@@ -1843,6 +1853,12 @@ export class SessionManager implements OutboundSender {
       nowIso(),
       incrementUnread ? 1 : 0,
     );
+    // Actividad del lead de esta persona, si lo es (/leads). Nunca corta la recepción.
+    try {
+      registrarActividadLead(sessionId, chatId, direction, occurredAt ?? nowIso());
+    } catch (err) {
+      logger.warn({ err: (err as Error).message, sessionId }, 'No se pudo registrar la actividad del lead');
+    }
   }
 
   /** Arranca las sesiones previamente vinculadas (creds.json presente). */

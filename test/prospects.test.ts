@@ -64,6 +64,17 @@ describe('prospectos de marketing', () => {
     assert.ok(get<{ done_at: string | null }>('SELECT done_at FROM contact_notes WHERE id = ?', first.noteId)!.done_at);
   });
 
+  it('cada prospecto es un lead de su asesor en /leads (L2)', () => {
+    const lead = get<{ owner_user_id: number; origen: string; etapa: string; programa: string; phone_key: string }>(
+      "SELECT owner_user_id, origen, etapa, programa, phone_key FROM leads WHERE prospect_ref = 'mp:1'",
+    );
+    assert.equal(lead?.owner_user_id, ana.user.id);
+    assert.equal(lead?.origen, 'prospecto');
+    assert.equal(lead?.etapa, 'inscrito', 'sigue el estado de cronogramas');
+    assert.equal(lead?.programa, 'Diplomado en Docencia');
+    assert.equal(lead?.phone_key, '59171234501');
+  });
+
   it('rechaza asesor sin usuario o celular inválido', () => {
     assert.throws(() => upsertProspect({ ref: 'mp:x', account: 'nadie', phone: '71234509' }, ana.session), ProspectError);
     assert.throws(() => upsertProspect({ ref: 'mp:y', account: 'pr-ana', phone: '12' }, ana.session), ProspectError);
@@ -93,6 +104,7 @@ describe('prospectos de marketing', () => {
     const id = removeProspect('mp:2');
     assert.ok(id);
     assert.ok(get<{ deleted_at: string | null }>('SELECT deleted_at FROM contact_notes WHERE id = ?', id)!.deleted_at);
+    assert.equal(get("SELECT id FROM leads WHERE prospect_ref = 'mp:2'"), undefined, 'sin conversación, el lead también se va');
     assert.equal(removeProspect('mp:no-existe'), null);
   });
 });

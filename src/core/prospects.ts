@@ -4,6 +4,7 @@ import { addNote, deleteNote, getNote, getOrCreateContact, restoreNote, setNoteS
 import { createTag } from './note-tags.js';
 import { personTagsByKeys, phoneKeyOf, setPersonName } from './person.js';
 import type { SessionRow } from '../types.js';
+import { quitarProspecto, sincronizarProspecto } from './leads.js';
 
 /**
  * Prospectos de marketing registrados en cronogramas. Cada prospecto es una
@@ -146,6 +147,11 @@ export function upsertProspect(input: ProspectInput, session: SessionRow | undef
     run('UPDATE contact_notes SET prospect_ref = ?, prospect_meta = ? WHERE id = ?', ref, JSON.stringify(meta), note.id);
     const stage = stageFor(estado);
     if (stage !== 'todo') setNoteStage(note.id, stage, user.id, `Estado del prospecto: ${label}`);
+    // Su lead para /leads (PLAN_ORGANIGRAMA.md, L2).
+    sincronizarProspecto({
+      ref, ownerUserId: user.id, sessionId: session.id, clave: key, contactId: contact.id,
+      programa: meta.programa, estado, estadoCambio: true,
+    });
     return { noteId: note.id, created: true };
   }
 
@@ -162,6 +168,11 @@ export function upsertProspect(input: ProspectInput, session: SessionRow | undef
   // El pipeline solo se mueve cuando cambia el estado: lo que el asesor movió a
   // mano en /notes se respeta mientras el estado siga igual.
   if (prev.estado !== estado) setNoteStage(existing.id, stageFor(estado), user.id, `Estado del prospecto: ${label}`);
+  const contacto = get<{ id: number; session_id: string }>('SELECT id, session_id FROM contacts WHERE id = ?', existing.contact_id);
+  sincronizarProspecto({
+    ref, ownerUserId: user.id, sessionId: contacto?.session_id ?? session.id, clave: key, contactId: contacto?.id ?? null,
+    programa: meta.programa, estado, estadoCambio: prev.estado !== estado,
+  });
   return { noteId: existing.id, created: false };
 }
 
@@ -171,5 +182,6 @@ export function removeProspect(ref: string): number | null {
   if (!id) return null;
   const note = getNote(id);
   deleteNote(id, note?.user_id ?? null);
+  quitarProspecto(String(ref));
   return id;
 }

@@ -155,7 +155,7 @@ describe('organigrama de personas (vista)', () => {
     const r = llamar('POST', '/organigrama/jefe', gg, { body: { user_id: String(a2.id), jefe_id: String(s2.id), volver: '/organigrama?editar=1#organigrama' } });
 
     assert.equal(r.redirect, '/organigrama?editar=1#organigrama');
-    assert.equal(get<{ jefe_id: number }>('SELECT jefe_id FROM users WHERE id = ?', a2.id)?.jefe_id, s2.id);
+    assert.equal(get<{ jefe_id: number }>('SELECT jefe_id FROM sede_miembros WHERE user_id = ? AND principal = 1', a2.id)?.jefe_id, s2.id);
     assert.ok(r.cookies.some((c) => c.startsWith('flash=') || c.includes('flash')));
   });
 
@@ -164,7 +164,7 @@ describe('organigrama de personas (vista)', () => {
     const r = llamar('POST', '/organigrama/jefe', ggSur, { body: { user_id: String(a2.id), jefe_id: String(s1.id), volver: 'https://malo.com' } });
 
     assert.equal(r.redirect, '/organigrama');
-    assert.equal(get<{ jefe_id: number }>('SELECT jefe_id FROM users WHERE id = ?', a2.id)?.jefe_id, s2.id, 'no cambió');
+    assert.equal(get<{ jefe_id: number }>('SELECT jefe_id FROM sede_miembros WHERE user_id = ? AND principal = 1', a2.id)?.jefe_id, s2.id, 'no cambió');
   });
 
   it('/organigrama es solo para el Gerente General; el Super Admin va a Unidades', () => {

@@ -212,6 +212,10 @@ export function migrate(): void {
   addColumnIfMissing('users', 'jefe_id', 'INTEGER');
   // Comentarios de jefes en /leads: cuándo los leyó el asesor (L4).
   addColumnIfMissing('lead_eventos', 'leido_at', 'TEXT');
+  // Organigrama por sede: varias sedes por persona (gerentes y supervisores).
+  addColumnIfMissing('organigrama_cambios', 'sede_id', 'INTEGER');
+  sedeMiembrosV1();
+  asegurarCargoControl();
   db.exec('CREATE INDEX IF NOT EXISTS idx_users_jefe ON users(jefe_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_sede ON sessions(sede_id)');
   // Heredar sede/área de la línea desde su dueño (para datos ya existentes).
@@ -275,6 +279,30 @@ export function migrate(): void {
   repairUnreadV1();
   leadsDesdeProspectosV1();
   logger.info({ db: resolved }, 'Esquema SQLite listo');
+}
+
+/**
+ * Una sola vez: cada persona con sede pasa a ser miembro de su sede principal,
+ * con el jefe que tenía en `users.jefe_id` (que desde ahora no se usa).
+ */
+function sedeMiembrosV1(): void {
+  const done = (db.prepare("SELECT value FROM configs WHERE key = 'sede_miembros_v1'").get() as { value?: string } | undefined)?.value;
+  if (done) return;
+  db.prepare(
+    `INSERT OR IGNORE INTO sede_miembros (user_id, sede_id, jefe_id, principal, created_at)
+     SELECT id, sede_id, jefe_id, 1, ? FROM users WHERE sede_id IS NOT NULL`,
+  ).run(new Date().toISOString());
+  setConfigFlag('sede_miembros_v1', '1');
+}
+
+/** Cargo «Control de Sedes» (ve los leads de todas las sedes), aunque los cargos ya existan. */
+function asegurarCargoControl(): void {
+  const existe = db.prepare("SELECT id FROM cargos WHERE name = 'Control de Sedes'").get();
+  if (existe) return;
+  const now = new Date().toISOString();
+  db.prepare(
+    "INSERT INTO cargos (area, name, parent_id, position, active, created_at, updated_at) VALUES ('Dirección', 'Control de Sedes', NULL, 0, 1, ?, ?)",
+  ).run(now, now);
 }
 
 /**

@@ -188,6 +188,10 @@ export function esamPuede(user: UserRow, seccion: string): boolean {
   if (esamEsGerenteSede(user) || esamAreas(user).includes('marketing') || (user.esam_area ?? '').toLowerCase() === 'marketing') {
     allowed.add('leads');
   }
+  // «Control de Sedes»: ve los leads de todas las sedes y su análisis (solo mira y comenta).
+  if (esamRoles(user).includes('Control de Sedes')) {
+    allowed.add('leads');
+  }
   return allowed.has(seccion);
 }
 
@@ -757,6 +761,8 @@ export function createLocalUser(input: LocalUserInput): UserRow {
   const user = findById(created.lastInsertRowid)!;
   ensureUserSession(user);
   syncUserSessions(user);
+  // Miembro de su sede principal en el organigrama.
+  revalidarDependencias(user.id);
   return user;
 }
 

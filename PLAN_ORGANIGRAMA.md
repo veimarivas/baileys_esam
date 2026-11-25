@@ -17,7 +17,13 @@
 > trae lo básico de L4 (los jefes ven a su gente, con selector de persona y solo lectura) ·
 > ✅ L4 (`/leads/equipo` «Mi equipo»: una fila por persona a cargo con etapas, conversión y alertas,
 > bajando por el organigrama; comentarios en la ficha con aviso `lead_comment` al asesor y respuesta
-> a los jefes; `?equipo=` en el tablero; tests `leads-equipo.test.ts`) · L5 pendiente (§7).
+> a los jefes; `?equipo=` en el tablero; tests `leads-equipo.test.ts`) ·
+> ✅ **Varias sedes y control** (2026-11-25): el jefe ya no vive en `users.jefe_id` (queda sin uso)
+> sino en `sede_miembros` (persona × sede × jefe; la de `users.sede_id` es la principal). Gerentes y
+> supervisores se suman a otras sedes desde el organigrama («Sumar de otra sede»). Cargo
+> **«Control de Sedes»** (Dirección): ve todos los leads de todas las sedes, solo mira y comenta.
+> **`/leads/analisis`**: KPIs, leads por semana, embudo, por sede, origen, programas y ranking de
+> asesores, recortado por el alcance de quien mira. Tests `multisede.test.ts` · L5 pendiente (§7).
 
 ---
 

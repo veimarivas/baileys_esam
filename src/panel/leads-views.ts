@@ -5,14 +5,16 @@ import { initials } from './views.js';
 import { setFlash } from './flash.js';
 import { pageHtml, sendPage } from './page.js';
 import { positiveInt } from './urls.js';
-import { esamEsAdmin, findById, type UserRow } from '../auth/users.js';
+import { findById, type UserRow } from '../auth/users.js';
 import { ETAPA_LABEL, ETAPAS, esEtapa, moverEtapa, type Etapa } from '../core/leads.js';
 import {
   agruparPorEtapa,
   comentarLead,
   equipoDe,
   gerentesDeSede,
+  sedesPropias,
   tieneEquipo,
+  veTodasLasSedes,
   detalleLead,
   listarLeads,
   personasVisibles,
@@ -23,6 +25,7 @@ import {
   type TarjetaLead,
 } from '../core/leads-vista.js';
 import { DIAS_SIN_MOVIMIENTO } from '../core/organigrama.js';
+import { filtrosAnalisis, renderAnalisis } from './leads-analisis-view.js';
 
 /**
  * /leads — «Leads de marketing» (PLAN_ORGANIGRAMA.md, L3).
@@ -159,7 +162,10 @@ export function renderLeadsBoard(viewer: UserRow, f: FiltrosLeads, ahora: Date =
       ${f.equipo ? `<input type="hidden" name="equipo" value="${f.equipo}" />` : ''}
       <button class="btn btn-sm btn-soft-primary" type="submit" data-ld-submit>Filtrar</button>
       ${hayFiltros ? '<a class="btn btn-sm btn-link" href="/leads">Limpiar</a>' : ''}
-      ${tieneEquipo(viewer) ? '<a class="btn btn-sm btn-soft-secondary ms-auto" href="/leads/equipo"><i class="ri-team-line me-1" aria-hidden="true"></i>Mi equipo</a>' : ''}
+      <span class="ld-toolbar-end">
+        <a class="btn btn-sm btn-soft-secondary" href="/leads/analisis"><i class="ri-pie-chart-2-line me-1" aria-hidden="true"></i>Análisis</a>
+        ${tieneEquipo(viewer) ? '<a class="btn btn-sm btn-soft-secondary" href="/leads/equipo"><i class="ri-team-line me-1" aria-hidden="true"></i>Mi equipo</a>' : ''}
+      </span>
     </form>
     ${f.equipo ? `<div class="ld-scope"><i class="ri-team-line" aria-hidden="true"></i> Equipo de <b>${esc(findById(f.equipo)?.name ?? '—')}</b> <a href="${esc(urlCon(f, { equipo: null }))}" aria-label="Quitar filtro de equipo">✕</a></div>` : ''}
 
@@ -267,20 +273,29 @@ export function renderLeadDetalle(viewer: UserRow, d: DetalleLead, ahora: Date =
 
 
 /** «Mi equipo»: una fila por persona a cargo, con las cifras de todo su equipo. */
-export function renderEquipo(viewer: UserRow, sobreId: number | null, ahora: Date = new Date()): string | null {
-  // El Super Admin no depende de nadie: elige primero la sede (su Gerente General).
-  if (esamEsAdmin(viewer) && !sobreId) {
+export function renderEquipo(viewer: UserRow, sobreId: number | null, ahora: Date = new Date(), sedeId: number | null = null): string | null {
+  // Super Admin y Control de Sedes no dependen de nadie: eligen primero la sede.
+  if (veTodasLasSedes(viewer) && !sobreId) {
     const gerentes = gerentesDeSede();
     return `<div class="ld-team">
-      <p class="ld-muted">Elegí la sede para ver su equipo de marketing.</p>
+      <p class="ld-muted">Elegí la sede para ver su equipo de marketing. Para comparar todas las sedes, abrí <a href="/leads/analisis">Análisis</a>.</p>
       <div class="ld-team-sedes">${gerentes.length
-        ? gerentes.map((g) => `<a class="ld-team-sede" href="/leads/equipo?sobre=${g.id}"><b>${esc(g.sede)}</b><span>${esc(g.nombre)} · Gerente General</span></a>`).join('')
+        ? gerentes.map((g) => `<a class="ld-team-sede" href="/leads/equipo?sobre=${g.id}&amp;sede=${g.sede_id}"><b>${esc(g.sede)}</b><span>${esc(g.nombre)} · Gerente General</span></a>`).join('')
         : '<p class="ld-muted">Ninguna sede tiene Gerente General todavía (se asigna en Unidades de negocio).</p>'}</div>
     </div>`;
   }
 
-  const eq = equipoDe(viewer, sobreId ?? viewer.id, ahora);
+  const eq = equipoDe(viewer, sobreId ?? viewer.id, ahora, sedeId);
   if (!eq) return null;
+  const qsSede = sedeId ? `&amp;sede=${sedeId}` : '';
+  // Quien trabaja en varias sedes puede mirar todas juntas o una por una.
+  const misSedes = !veTodasLasSedes(viewer) && (sobreId ?? viewer.id) === viewer.id ? sedesPropias(viewer) : [];
+  const chipsSede = misSedes.length > 1
+    ? `<div class="ld-chips" role="group" aria-label="Sede">
+        <a class="ld-chip${!sedeId ? ' on' : ''}" href="/leads/equipo">Todas mis sedes</a>
+        ${misSedes.map((s) => `<a class="ld-chip${s.sede_id === sedeId ? ' on' : ''}" href="/leads/equipo?sede=${s.sede_id}">${esc(s.nombre)}</a>`).join('')}
+      </div>`
+    : '';
   const t = eq.total;
 
   const kpi = (label: string, valor: string, tono = '') => `<div class="ld-kpi${tono ? ` ld-kpi-${tono}` : ''}"><span>${label}</span><b>${valor}</b></div>`;
@@ -299,7 +314,7 @@ export function renderEquipo(viewer: UserRow, sobreId: number | null, ahora: Dat
         ${!f.sinContactar24h && !f.sinMovimiento ? '<span class="ld-ok"><i class="ri-check-line" aria-hidden="true"></i> Al día</span>' : ''}
       </div></td>
       <td class="ld-team-actions">
-        ${f.conEquipo ? `<a class="btn btn-sm btn-soft-primary" href="/leads/equipo?sobre=${f.id}">Ver su equipo</a>` : ''}
+        ${f.conEquipo ? `<a class="btn btn-sm btn-soft-primary" href="/leads/equipo?sobre=${f.id}${qsSede}">Ver su equipo</a>` : ''}
         <a class="btn btn-sm btn-soft-secondary" href="${f.conEquipo ? `/leads?equipo=${f.id}` : `/leads?persona=${f.id}`}">Tablero</a>
       </td>
     </tr>`).join('');
@@ -307,10 +322,11 @@ export function renderEquipo(viewer: UserRow, sobreId: number | null, ahora: Dat
   const migas = eq.ruta.length > 1
     ? `<nav class="ld-team-crumbs" aria-label="Equipo">${eq.ruta.map((r, i) => i === eq.ruta.length - 1
         ? `<span>${esc(r.nombre)}</span>`
-        : `<a href="/leads/equipo?sobre=${r.id}">${esc(r.nombre)}</a>`).join('<i class="ri-arrow-right-s-line" aria-hidden="true"></i>')}</nav>`
+        : `<a href="/leads/equipo?sobre=${r.id}${qsSede}">${esc(r.nombre)}</a>`).join('<i class="ri-arrow-right-s-line" aria-hidden="true"></i>')}</nav>`
     : '';
 
   return `<div class="ld-team">
+    ${chipsSede}
     ${migas}
     <div class="ld-kpis">
       ${kpi('Leads abiertos', String(t.abiertos))}
@@ -352,13 +368,24 @@ export function registerLeadsRoutes(
       return;
     }
     const sobre = positiveInt(req.query.sobre);
-    const html = renderEquipo(user, sobre);
+    const html = renderEquipo(user, sobre, new Date(), positiveInt(req.query.sede));
     if (html === null) {
       res.redirect('/leads/equipo');
       return;
     }
     sendPage(req, res, 'Mi equipo', 'leads', `<div class="ld-page">${html}</div>`, {
       subtitle: 'Cómo va cada persona a tu cargo: leads por etapa, conversión y alertas.',
+      activeHref: '/leads',
+      actions: '<a class="btn btn-sm btn-soft-secondary me-1" href="/leads/analisis"><i class="ri-pie-chart-2-line me-1" aria-hidden="true"></i>Análisis</a>'
+        + '<a class="btn btn-sm btn-soft-secondary" href="/leads"><i class="ri-layout-column-line me-1" aria-hidden="true"></i>Tablero</a>',
+    });
+  });
+
+  // Análisis con gráficos (va antes de /leads/:id). Cada uno ve su alcance.
+  app.get('/leads/analisis', ...guard, (req: Request, res: Response) => {
+    const user = (req as AuthedRequest).user!;
+    sendPage(req, res, 'Análisis de leads', 'leads', renderAnalisis(user, filtrosAnalisis(req.query as Record<string, unknown>)), {
+      subtitle: 'Cómo avanza el embudo de marketing: etapas, sedes, programas y asesores.',
       activeHref: '/leads',
       actions: '<a class="btn btn-sm btn-soft-secondary" href="/leads"><i class="ri-layout-column-line me-1" aria-hidden="true"></i>Tablero</a>',
     });

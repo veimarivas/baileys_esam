@@ -41,7 +41,7 @@ function persona(cargo: string, sedeId: number, nombre: string): UserRow {
 }
 
 function jefeDe(u: UserRow): number | null {
-  return get<{ jefe_id: number | null }>('SELECT jefe_id FROM users WHERE id = ?', u.id)?.jefe_id ?? null;
+  return get<{ jefe_id: number | null }>('SELECT jefe_id FROM sede_miembros WHERE user_id = ? AND principal = 1', u.id)?.jefe_id ?? null;
 }
 
 const ids = (lista: { id: number }[]) => lista.map((u) => u.id).sort((x, y) => x - y);

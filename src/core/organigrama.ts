@@ -3,21 +3,27 @@ import { nowIso } from '../util/async.js';
 import { esamEsAdmin, esamEsGerenteSede, esamRoles, findById, type UserRow } from '../auth/users.js';
 
 /**
- * Organigrama por PERSONAS (PLAN_ORGANIGRAMA.md, L0).
+ * Organigrama por PERSONAS y por SEDE (PLAN_ORGANIGRAMA.md).
  *
  * `/cargos` define qué cargo depende de cuál (Asesor → Supervisor → Gerente de
- * Marketing). Acá cada persona tiene su jefe directo (`users.jefe_id`), y eso
- * decide qué leads ve cada uno (`alcanceLeads`). Reglas:
+ * Marketing). Cada persona es miembro de una o más sedes (`sede_miembros`):
+ * la de `users.sede_id` es su sede principal, y un gerente o supervisor que
+ * trabaja también en otra sede tiene ahí otra membresía, con su propio jefe.
+ * Eso decide qué leads ve cada uno (`alcanceLeads`). Reglas:
  *
- * - Jefe y persona en la misma sede; un solo jefe por persona.
+ * - Dentro de cada sede: un solo jefe por persona, miembro de esa misma sede.
  * - El cargo del jefe es el cargo del que depende el cargo de la persona.
  *   Un cargo raíz de un área (p. ej. Gerente de Marketing) depende del
  *   Gerente General de la sede.
- * - Sin ciclos. El SSO de cronogramas nunca toca `jefe_id`.
+ * - Sin ciclos. El SSO de cronogramas nunca toca las dependencias.
  * - Editan el Super Admin y el Gerente General de esa sede.
+ * - «Control de Sedes»: ve los leads de TODAS las sedes (solo mira y comenta);
+ *   no edita el organigrama ni mueve etapas.
  */
 
 export const CARGO_GERENTE_SEDE = 'Gerente General';
+/** Personal que controla todas las sedes (ve todos los leads y el análisis). */
+export const CARGO_CONTROL = 'Control de Sedes';
 
 /** Nombres de rol de cronogramas que equivalen a un cargo de `/cargos`. */
 const ALIAS_CARGO: Record<string, string> = {
@@ -31,10 +37,11 @@ interface CargoLite {
   parent_id: number | null;
 }
 
-type Persona = UserRow & { jefe_id: number | null };
-
-function persona(id: number): Persona | undefined {
-  return findById(id) as Persona | undefined;
+interface Membresia {
+  user_id: number;
+  sede_id: number;
+  jefe_id: number | null;
+  principal: number;
 }
 
 /** Cargo de una persona según `/cargos` (el primero de sus roles que exista). */
@@ -54,55 +61,163 @@ function esGerenteDeSede(user: UserRow): boolean {
   return esamRoles(user).includes(CARGO_GERENTE_SEDE);
 }
 
-/** Personas activas de una sede. */
-function personasDeSede(sedeId: number): Persona[] {
-  return all<Persona>('SELECT * FROM users WHERE sede_id = ? AND esam_autorizado = 1 ORDER BY name COLLATE NOCASE', sedeId);
+/** ¿Es personal de control de todas las sedes? */
+export function esControlDeSedes(user: UserRow): boolean {
+  return !esamEsAdmin(user) && esamRoles(user).includes(CARGO_CONTROL);
 }
 
+// ── Membresías ────────────────────────────────────────────────────────────
+
 /**
- * Quiénes pueden ser jefe directo de `user` en su sede, según `/cargos`.
- * Vacío si la persona no tiene sede o cargo, o si es el Gerente General.
+ * Deja la membresía de la sede principal (`users.sede_id`) al día. Si la
+ * persona cambió de sede principal, la membresía principal se muda (sin jefe:
+ * en la sede nueva hay que ubicarla). Las membresías extra no se tocan.
  */
-export function jefesValidos(user: UserRow): Persona[] {
-  if (!user.sede_id || esGerenteDeSede(user)) return [];
+export function sincronizarSedePrincipal(userId: number): void {
+  const user = findById(userId);
+  if (!user) return;
+  const principal = get<Membresia>('SELECT * FROM sede_miembros WHERE user_id = ? AND principal = 1', userId);
+
+  if (!user.sede_id) {
+    if (principal) run('UPDATE sede_miembros SET principal = 0 WHERE user_id = ? AND sede_id = ?', userId, principal.sede_id);
+    return;
+  }
+  if (principal?.sede_id === user.sede_id) return;
+
+  const yaMiembro = get<Membresia>('SELECT * FROM sede_miembros WHERE user_id = ? AND sede_id = ?', userId, user.sede_id);
+  run('UPDATE sede_miembros SET principal = 0 WHERE user_id = ?', userId);
+  if (yaMiembro) {
+    run('UPDATE sede_miembros SET principal = 1 WHERE user_id = ? AND sede_id = ?', userId, user.sede_id);
+  } else if (principal) {
+    run('UPDATE sede_miembros SET sede_id = ?, jefe_id = NULL, principal = 1 WHERE user_id = ? AND sede_id = ?', user.sede_id, userId, principal.sede_id);
+    // Quienes dependían de esta persona en la sede vieja quedan sin jefe.
+    for (const sub of all<Membresia>('SELECT * FROM sede_miembros WHERE jefe_id = ? AND sede_id = ?', userId, principal.sede_id)) {
+      run('UPDATE sede_miembros SET jefe_id = NULL WHERE user_id = ? AND sede_id = ?', sub.user_id, sub.sede_id);
+      registrarCambio(sub.user_id, sub.sede_id, userId, null, null, 'automatico');
+    }
+  } else {
+    run('INSERT INTO sede_miembros (user_id, sede_id, jefe_id, principal, created_at) VALUES (?, ?, NULL, 1, ?)', userId, user.sede_id, nowIso());
+  }
+}
+
+/** Sedes de una persona (la principal primero). */
+export function sedesDe(userId: number): Array<{ sede_id: number; nombre: string; principal: boolean; jefe_id: number | null }> {
+  return all<{ sede_id: number; nombre: string; principal: number; jefe_id: number | null }>(
+    `SELECT m.sede_id, s.name AS nombre, m.principal, m.jefe_id
+       FROM sede_miembros m JOIN sedes s ON s.id = m.sede_id
+      WHERE m.user_id = ? ORDER BY m.principal DESC, s.name COLLATE NOCASE`,
+    userId,
+  ).map((r) => ({ ...r, principal: !!r.principal }));
+}
+
+function membresia(userId: number, sedeId: number): Membresia | undefined {
+  return get<Membresia>('SELECT * FROM sede_miembros WHERE user_id = ? AND sede_id = ?', userId, sedeId);
+}
+
+/** Personas activas miembro de una sede. */
+function personasDeSede(sedeId: number): Array<UserRow & { jefe_id: number | null; principal: number }> {
+  return all<UserRow & { jefe_id: number | null; principal: number }>(
+    `SELECT u.*, m.jefe_id AS jefe_id, m.principal AS principal
+       FROM sede_miembros m JOIN users u ON u.id = m.user_id
+      WHERE m.sede_id = ? AND u.esam_autorizado = 1
+      ORDER BY u.name COLLATE NOCASE`,
+    sedeId,
+  );
+}
+
+/** Cargos que pueden estar en más de una sede: los que tienen gente a cargo. */
+function esCargoDeJefe(user: UserRow): boolean {
+  if (esGerenteDeSede(user)) return true;
+  const cargo = cargoDe(user);
+  return !!cargo && !!get<{ id: number }>('SELECT id FROM cargos WHERE parent_id = ? AND active = 1 LIMIT 1', cargo.id);
+}
+
+/** Gerentes y supervisores de OTRAS sedes que se pueden sumar a esta. */
+export function candidatosDeOtrasSedes(sedeId: number): Array<{ id: number; nombre: string; cargo: string | null; sedes: string }> {
+  return all<UserRow>(
+    `SELECT u.* FROM users u
+      WHERE u.esam_autorizado = 1
+        AND NOT EXISTS (SELECT 1 FROM sede_miembros m WHERE m.user_id = u.id AND m.sede_id = ?)
+        AND EXISTS (SELECT 1 FROM sede_miembros m WHERE m.user_id = u.id)
+      ORDER BY u.name COLLATE NOCASE`,
+    sedeId,
+  )
+    .filter(esCargoDeJefe)
+    .map((u) => ({
+      id: u.id,
+      nombre: u.name ?? u.username ?? '—',
+      cargo: cargoDe(u)?.name ?? null,
+      sedes: sedesDe(u.id).map((s) => s.nombre).join(', '),
+    }));
+}
+
+/** Suma a un gerente o supervisor de otra sede a esta (sin jefe todavía). */
+export function agregarASede(actor: UserRow, sedeId: number, userId: number): void {
+  if (!puedeEditarOrganigrama(actor, sedeId)) throw new Error('Solo el Super Admin o el Gerente General de la sede pueden cambiar el organigrama.');
+  const user = findById(userId);
+  if (!user || !user.esam_autorizado) throw new Error('Persona no encontrada.');
+  if (!esCargoDeJefe(user)) throw new Error('Solo gerentes y supervisores pueden estar en más de una sede.');
+  if (membresia(userId, sedeId)) return;
+  run('INSERT INTO sede_miembros (user_id, sede_id, jefe_id, principal, created_at) VALUES (?, ?, NULL, 0, ?)', userId, sedeId, nowIso());
+  registrarCambio(userId, sedeId, null, null, actor.id, 'agregado a la sede');
+}
+
+/** Saca a alguien de una sede que no es la suya principal; su gente ahí queda sin jefe. */
+export function quitarDeSede(actor: UserRow, sedeId: number, userId: number): void {
+  if (!puedeEditarOrganigrama(actor, sedeId)) throw new Error('Solo el Super Admin o el Gerente General de la sede pueden cambiar el organigrama.');
+  const m = membresia(userId, sedeId);
+  if (!m) return;
+  if (m.principal) throw new Error('Es su sede principal: se cambia desde la ficha del usuario.');
+  for (const sub of all<Membresia>('SELECT * FROM sede_miembros WHERE jefe_id = ? AND sede_id = ?', userId, sedeId)) {
+    run('UPDATE sede_miembros SET jefe_id = NULL WHERE user_id = ? AND sede_id = ?', sub.user_id, sedeId);
+    registrarCambio(sub.user_id, sedeId, userId, null, actor.id, 'automatico');
+  }
+  run('DELETE FROM sede_miembros WHERE user_id = ? AND sede_id = ?', userId, sedeId);
+  registrarCambio(userId, sedeId, m.jefe_id, null, actor.id, 'quitado de la sede');
+}
+
+// ── Jefes ─────────────────────────────────────────────────────────────────
+
+/**
+ * Quiénes pueden ser jefe directo de `user` en una sede (por defecto la
+ * principal), según `/cargos`. Vacío si no es miembro, no tiene cargo o es el
+ * Gerente General.
+ */
+export function jefesValidos(user: UserRow, sedeId: number | null = user.sede_id): Array<UserRow & { jefe_id: number | null }> {
+  if (!sedeId || esGerenteDeSede(user) || esControlDeSedes(user) || !membresia(user.id, sedeId)) return [];
   const cargo = cargoDe(user);
   if (!cargo) return [];
 
-  const candidatos = personasDeSede(user.sede_id).filter((p) => p.id !== user.id);
-
-  if (cargo.parent_id) {
-    const padre = get<{ name: string }>('SELECT name FROM cargos WHERE id = ?', cargo.parent_id);
-    if (!padre) return [];
-    return candidatos.filter((p) => cargoDe(p)?.id === cargo.parent_id);
-  }
-
+  const candidatos = personasDeSede(sedeId).filter((p) => p.id !== user.id);
+  if (cargo.parent_id) return candidatos.filter((p) => cargoDe(p)?.id === cargo.parent_id);
   // Cargo raíz de su área: depende del Gerente General de la sede.
   return candidatos.filter((p) => esGerenteDeSede(p));
 }
 
-/** ¿`jefeId` está por encima de `userId` (o es él)? Evita ciclos. */
-function formaCiclo(userId: number, jefeId: number): boolean {
+/** ¿`jefeId` está por encima de `userId` (o es él) en esa sede? Evita ciclos. */
+function formaCiclo(userId: number, jefeId: number, sedeId: number): boolean {
   const vistos = new Set<number>();
   let actual: number | null = jefeId;
   while (actual) {
     if (actual === userId || vistos.has(actual)) return true;
     vistos.add(actual);
-    actual = get<{ jefe_id: number | null }>('SELECT jefe_id FROM users WHERE id = ?', actual)?.jefe_id ?? null;
+    actual = membresia(actual, sedeId)?.jefe_id ?? null;
   }
   return false;
 }
 
-/** Super Admin, o el Gerente General de esa sede. */
+/** Super Admin, o un Gerente General miembro de esa sede. */
 export function puedeEditarOrganigrama(actor: UserRow, sedeId: number | null): boolean {
   if (esamEsAdmin(actor)) return true;
-  return !!sedeId && esamEsGerenteSede(actor) && actor.sede_id === sedeId;
+  return !!sedeId && esamEsGerenteSede(actor) && !!membresia(actor.id, sedeId);
 }
 
-function registrarCambio(userId: number, anterior: number | null, nuevo: number | null, actorId: number | null, motivo: string): void {
+function registrarCambio(userId: number, sedeId: number | null, anterior: number | null, nuevo: number | null, actorId: number | null, motivo: string): void {
   const now = nowIso();
   run(
-    'INSERT INTO organigrama_cambios (user_id, jefe_anterior, jefe_nuevo, cambiado_por, motivo, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    'INSERT INTO organigrama_cambios (user_id, sede_id, jefe_anterior, jefe_nuevo, cambiado_por, motivo, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
     userId,
+    sedeId,
     anterior,
     nuevo,
     actorId,
@@ -112,90 +227,102 @@ function registrarCambio(userId: number, anterior: number | null, nuevo: number 
   run(
     'INSERT INTO audit_logs (action, context, created_at) VALUES (?, ?, ?)',
     'organigrama.jefe',
-    JSON.stringify({ user_id: userId, jefe_anterior: anterior, jefe_nuevo: nuevo, cambiado_por: actorId, motivo }),
+    JSON.stringify({ user_id: userId, sede_id: sedeId, jefe_anterior: anterior, jefe_nuevo: nuevo, cambiado_por: actorId, motivo }),
     now,
   );
 }
 
 /**
- * Asigna (o quita, con `null`) el jefe directo de una persona.
- * Lanza Error con un mensaje para mostrar si no corresponde.
+ * Asigna (o quita, con `null`) el jefe directo de una persona en una sede
+ * (por defecto su sede principal). Lanza Error con un mensaje para mostrar.
  */
-export function asignarJefe(actor: UserRow, userId: number, jefeId: number | null): void {
-  const user = persona(userId);
+export function asignarJefe(actor: UserRow, userId: number, jefeId: number | null, sedeId?: number | null): void {
+  const user = findById(userId);
   if (!user) throw new Error('Persona no encontrada.');
-  if (!puedeEditarOrganigrama(actor, user.sede_id)) {
+  sincronizarSedePrincipal(userId);
+  const sede = sedeId ?? user.sede_id;
+  if (!sede) throw new Error('La persona no tiene sede.');
+  if (!puedeEditarOrganigrama(actor, sede)) {
     throw new Error('Solo el Super Admin o el Gerente General de la sede pueden cambiar el organigrama.');
   }
+  const m = membresia(userId, sede);
+  if (!m) throw new Error('Esa persona no es de esta sede.');
 
-  const anterior = user.jefe_id ?? null;
+  const anterior = m.jefe_id ?? null;
   if (jefeId === anterior) return;
 
   if (jefeId !== null) {
     if (jefeId === user.id) throw new Error('Una persona no puede depender de sí misma.');
-    const jefe = persona(jefeId);
+    const jefe = findById(jefeId);
     if (!jefe || !jefe.esam_autorizado) throw new Error('El jefe elegido no existe o no está activo.');
-    if (jefe.sede_id !== user.sede_id) throw new Error('El jefe tiene que ser de la misma sede.');
-    if (!jefesValidos(user).some((p) => p.id === jefeId)) {
+    if (!membresia(jefeId, sede)) throw new Error('El jefe tiene que ser de la misma sede.');
+    if (!jefesValidos(user, sede).some((p) => p.id === jefeId)) {
       const cargo = cargoDe(user);
       throw new Error(`${jefe.name ?? 'Esa persona'} no puede ser jefe de un${cargo ? ` ${cargo.name}` : 'a persona sin cargo'}: revisá de qué cargo depende en «Cargos y organigrama».`);
     }
-    if (formaCiclo(user.id, jefeId)) throw new Error('Ese cambio formaría un círculo en el organigrama.');
+    if (formaCiclo(user.id, jefeId, sede)) throw new Error('Ese cambio formaría un círculo en el organigrama.');
   }
 
-  run('UPDATE users SET jefe_id = ?, updated_at = ? WHERE id = ?', jefeId, nowIso(), user.id);
-  registrarCambio(user.id, anterior, jefeId, actor.id, 'manual');
+  run('UPDATE sede_miembros SET jefe_id = ? WHERE user_id = ? AND sede_id = ?', jefeId, user.id, sede);
+  registrarCambio(user.id, sede, anterior, jefeId, actor.id, 'manual');
 }
 
 /**
- * Después de cambiar el cargo, la sede o el estado de alguien: si su jefe (o
- * el de su gente) ya no corresponde, la dependencia se suelta y queda en
- * «Sin jefe asignado». Nunca queda colgando de alguien que no puede ser su jefe.
+ * Después de cambiar el cargo, la sede o el estado de alguien: su sede
+ * principal se sincroniza y, en cada sede, si su jefe (o el de su gente) ya
+ * no corresponde, la dependencia se suelta y queda en «Sin jefe asignado».
  */
 export function revalidarDependencias(userId: number, actorId: number | null = null): void {
-  const revisar = (p: Persona): void => {
-    if (!p.jefe_id) return;
-    const sigueValido = p.esam_autorizado && jefesValidos(p).some((j) => j.id === p.jefe_id);
+  sincronizarSedePrincipal(userId);
+  const revisar = (m: Membresia): void => {
+    if (!m.jefe_id) return;
+    const u = findById(m.user_id);
+    const sigueValido = !!u && !!u.esam_autorizado && jefesValidos(u, m.sede_id).some((j) => j.id === m.jefe_id);
     if (sigueValido) return;
-    run('UPDATE users SET jefe_id = NULL, updated_at = ? WHERE id = ?', nowIso(), p.id);
-    registrarCambio(p.id, p.jefe_id, null, actorId, 'automatico');
+    run('UPDATE sede_miembros SET jefe_id = NULL WHERE user_id = ? AND sede_id = ?', m.user_id, m.sede_id);
+    registrarCambio(m.user_id, m.sede_id, m.jefe_id, null, actorId, 'automatico');
   };
 
-  const user = persona(userId);
-  if (!user) return;
-  revisar(user);
-  for (const sub of all<Persona>('SELECT * FROM users WHERE jefe_id = ?', userId)) revisar(sub);
+  for (const m of all<Membresia>('SELECT * FROM sede_miembros WHERE user_id = ?', userId)) revisar(m);
+  for (const sub of all<Membresia>('SELECT * FROM sede_miembros WHERE jefe_id = ?', userId)) revisar(sub);
 }
 
+// ── Alcance ───────────────────────────────────────────────────────────────
+
 /**
- * Ids de usuarios cuyos leads ve `user`. `null` = todos (Super Admin).
+ * Ids de usuarios cuyos leads ve `user`. `null` = todos.
  *
- * - Gerente General: todas las personas de marketing de su sede (y él).
- * - Cualquier otro: él y todo su subárbol por `jefe_id` (el Gerente de
- *   Marketing ve a sus supervisores y a los asesores de ellos; el supervisor,
- *   a sus asesores; el asesor, solo a él).
+ * - Super Admin y «Control de Sedes»: todos.
+ * - Gerente General: todas las personas de marketing de CADA sede donde es
+ *   gerente (y él).
+ * - Cualquier otro: él y todo su subárbol, sede por sede (un supervisor en dos
+ *   sedes ve a sus asesores de las dos).
  */
 export function alcanceLeads(user: UserRow): number[] | null {
-  if (esamEsAdmin(user)) return null;
+  if (esamEsAdmin(user) || esControlDeSedes(user)) return null;
 
-  if (esamEsGerenteSede(user) && user.sede_id) {
+  if (esamEsGerenteSede(user)) {
     const ids = all<{ id: number }>(
-      `SELECT id FROM users WHERE sede_id = ? AND (LOWER(COALESCE(esam_area, '')) = 'marketing' OR id = ?)`,
-      user.sede_id,
+      `SELECT DISTINCT u.id FROM sede_miembros m JOIN users u ON u.id = m.user_id
+        WHERE m.sede_id IN (SELECT sede_id FROM sede_miembros WHERE user_id = ?)
+          AND LOWER(COALESCE(u.esam_area, '')) = 'marketing'`,
       user.id,
     ).map((r) => r.id);
     return [...new Set([user.id, ...ids])];
   }
 
-  return all<{ id: number }>(
-    `WITH RECURSIVE equipo(id, nivel) AS (
-       SELECT id, 0 FROM users WHERE id = ?
+  const ids = all<{ id: number }>(
+    `WITH RECURSIVE equipo(user_id, sede_id, nivel) AS (
+       SELECT user_id, sede_id, 0 FROM sede_miembros WHERE user_id = ?
        UNION
-       SELECT u.id, e.nivel + 1 FROM users u JOIN equipo e ON u.jefe_id = e.id WHERE e.nivel < 20
+       SELECT m.user_id, m.sede_id, e.nivel + 1
+         FROM sede_miembros m JOIN equipo e ON m.jefe_id = e.user_id AND m.sede_id = e.sede_id
+        WHERE e.nivel < 20
      )
-     SELECT DISTINCT id FROM equipo`,
+     SELECT DISTINCT user_id AS id FROM equipo`,
     user.id,
   ).map((r) => r.id);
+  return [...new Set([user.id, ...ids])];
 }
 
 /** ¿`user` puede ver los leads de `ownerUserId`? */
@@ -203,6 +330,24 @@ export function puedeVerLeadsDe(user: UserRow, ownerUserId: number): boolean {
   const alcance = alcanceLeads(user);
   return alcance === null || alcance.includes(ownerUserId);
 }
+
+/** Jefe directo de una persona en alguna de sus sedes que esté dentro de `alcance` (para las migas). */
+export function jefeVisible(userId: number, alcance: number[] | null): number | null {
+  const jefes = all<{ jefe_id: number }>('SELECT jefe_id FROM sede_miembros WHERE user_id = ? AND jefe_id IS NOT NULL ORDER BY principal DESC', userId);
+  return jefes.find((j) => !alcance || alcance.includes(j.jefe_id))?.jefe_id ?? null;
+}
+
+/** Personas que dependen directo de `jefeId` (en una sede, o en cualquiera de las suyas). */
+export function directosDe(jefeId: number, sedeId: number | null = null): UserRow[] {
+  return all<UserRow>(
+    `SELECT DISTINCT u.* FROM sede_miembros m JOIN users u ON u.id = m.user_id
+      WHERE m.jefe_id = ? AND u.esam_autorizado = 1 ${sedeId ? 'AND m.sede_id = ?' : ''}
+      ORDER BY u.name COLLATE NOCASE`,
+    ...(sedeId ? [jefeId, sedeId] : [jefeId]),
+  );
+}
+
+// ── Cifras y árbol ────────────────────────────────────────────────────────
 
 /** Días sin actividad para que un lead abierto cuente como «sin movimiento». */
 export const DIAS_SIN_MOVIMIENTO = 7;
@@ -214,7 +359,7 @@ export interface MetricasLeads {
 }
 
 /**
- * Cifras de control de los leads PROPIOS de cada persona de la sede (las del
+ * Cifras de control de los leads PROPIOS de cada persona en esa sede (las del
  * equipo se suman en la vista recorriendo el árbol).
  */
 export function metricasLeadsDeSede(sedeId: number, ahora: Date = new Date()): Map<number, MetricasLeads> {
@@ -224,10 +369,12 @@ export function metricasLeadsDeSede(sedeId: number, ahora: Date = new Date()): M
             COUNT(*) AS abiertos,
             SUM(CASE WHEN l.etapa = 'nuevo' AND l.ultimo_contacto_at IS NULL THEN 1 ELSE 0 END) AS sin_contactar,
             SUM(CASE WHEN l.ultima_actividad_at < ? THEN 1 ELSE 0 END) AS sin_movimiento
-       FROM leads l JOIN users u ON u.id = l.owner_user_id
-      WHERE u.sede_id = ? AND l.etapa NOT IN ('no_interesado', 'inscrito')
+       FROM leads l JOIN sede_miembros m ON m.user_id = l.owner_user_id AND m.sede_id = ?
+      WHERE (l.sede_id = ? OR (l.sede_id IS NULL AND m.principal = 1))
+        AND l.etapa NOT IN ('no_interesado', 'inscrito')
       GROUP BY l.owner_user_id`,
     limite,
+    sedeId,
     sedeId,
   );
   return new Map(filas.map((f) => [f.owner_user_id, { abiertos: f.abiertos, sinContactar: f.sin_contactar, sinMovimiento: f.sin_movimiento }]));
@@ -239,19 +386,25 @@ export interface NodoOrganigrama {
   cargo: string | null;
   area: string | null;
   jefe_id: number | null;
+  /** Su sede principal es otra (está acá como segunda sede). */
+  deOtraSede: boolean;
   hijos: NodoOrganigrama[];
 }
 
 /**
- * Árbol de personas de una sede: raíces (sin jefe y con cargo raíz, p. ej. el
- * Gerente General) y quienes todavía no tienen jefe asignado.
+ * Árbol de personas de una sede: raíces (el Gerente General) y quienes
+ * todavía no tienen jefe asignado en esta sede.
  */
 export function organigramaDeSede(sedeId: number): { raices: NodoOrganigrama[]; sinJefe: NodoOrganigrama[] } {
-  const personas = personasDeSede(sedeId);
+  // El personal de control mira todas las sedes: no es parte del organigrama de una.
+  const personas = personasDeSede(sedeId).filter((p) => !esControlDeSedes(p));
   const nodos = new Map<number, NodoOrganigrama>(
     personas.map((p) => {
       const cargo = cargoDe(p);
-      return [p.id, { id: p.id, nombre: p.name ?? p.username ?? '—', cargo: cargo?.name ?? null, area: cargo?.area ?? null, jefe_id: p.jefe_id ?? null, hijos: [] }];
+      return [p.id, {
+        id: p.id, nombre: p.name ?? p.username ?? '—', cargo: cargo?.name ?? null, area: cargo?.area ?? null,
+        jefe_id: p.jefe_id ?? null, deOtraSede: !p.principal, hijos: [],
+      }];
     }),
   );
 

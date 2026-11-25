@@ -8,8 +8,12 @@ import { positiveInt } from './urls.js';
 import { getSede } from '../core/sedes.js';
 import { esamEsAdmin, esamEsGerenteSede, findById, type UserRow } from '../auth/users.js';
 import {
+  agregarASede,
   asignarJefe,
+  candidatosDeOtrasSedes,
   jefesValidos,
+  quitarDeSede,
+  sedesDe,
   metricasLeadsDeSede,
   organigramaDeSede,
   puedeEditarOrganigrama,
@@ -68,7 +72,7 @@ export function renderOrganigramaPersonas(viewer: UserRow, sedeId: number, opts:
   const selector = (n: NodoOrganigrama): string => {
     const persona = findById(n.id);
     if (!persona) return '';
-    const opciones = jefesValidos(persona);
+    const opciones = jefesValidos(persona, sedeId);
     if (!opciones.length) {
       return n.cargo
         ? '<p class="op-hint">Su cargo no depende de otro en esta sede.</p>'
@@ -76,6 +80,7 @@ export function renderOrganigramaPersonas(viewer: UserRow, sedeId: number, opts:
     }
     return `<form method="post" action="/organigrama/jefe" class="op-form" data-op-form>
       <input type="hidden" name="user_id" value="${n.id}" />
+      <input type="hidden" name="sede_id" value="${sedeId}" />
       <input type="hidden" name="volver" value="${esc(conEditar(opts.base, true))}" />
       <label class="op-form-label" for="op-jefe-${n.id}">Depende de</label>
       <div class="op-form-row">
@@ -108,9 +113,21 @@ export function renderOrganigramaPersonas(viewer: UserRow, sedeId: number, opts:
           <div class="op-name">${esc(n.nombre)}</div>
         </div>
       </div>
+      ${n.deOtraSede ? `<div class="op-otra" title="Su sede principal es otra">${esc(otrasSedes(n.id))}</div>` : ''}
       ${cifras(n)}
       ${editar && !raiz ? selector(n) : ''}
+      ${editar && n.deOtraSede ? `<form method="post" action="/organigrama/miembros/quitar" class="op-remove">
+          <input type="hidden" name="user_id" value="${n.id}" /><input type="hidden" name="sede_id" value="${sedeId}" />
+          <input type="hidden" name="volver" value="${esc(conEditar(opts.base, true))}" />
+          <button class="btn btn-link btn-sm p-0" type="submit">Quitar de esta sede</button>
+        </form>` : ''}
     </div>`;
+
+  // «También en Potosí»: las otras sedes de quien está acá como segunda sede.
+  const otrasSedes = (userId: number): string => {
+    const otras = sedesDe(userId).filter((s) => s.sede_id !== sedeId).map((s) => s.nombre);
+    return otras.length ? `También en ${otras.join(', ')}` : 'De otra sede';
+  };
 
   // Los que solo tienen gente sin gente a cargo (p. ej. un supervisor con sus
   // asesores) se dibujan como lista vertical, como en un organigrama clásico.
@@ -161,8 +178,31 @@ export function renderOrganigramaPersonas(viewer: UserRow, sedeId: number, opts:
     ${editar ? '<div class="op-editing"><i class="ri-information-line" aria-hidden="true"></i> Solo aparecen como opción los jefes válidos según «Cargos y organigrama». Cada cambio queda registrado.</div>' : ''}
     ${arbol}
     ${bandeja}
+    ${editar ? sumarDeOtraSede(sedeId, opts) : ''}
   </section>
-  <script src="/assets/js/organigrama.js?v=1" defer></script>`;
+  <script src="/assets/js/organigrama.js?v=2" defer></script>`;
+}
+
+/** En edición: sumar a un gerente o supervisor que ya trabaja en otra sede. */
+function sumarDeOtraSede(sedeId: number, opts: Opciones): string {
+  const candidatos = candidatosDeOtrasSedes(sedeId);
+  if (!candidatos.length) return '';
+  return `<section class="op-loose op-add" aria-labelledby="op-add-title">
+    <div class="op-loose-head">
+      <h6 id="op-add-title"><i class="ri-user-shared-line" aria-hidden="true"></i> Sumar de otra sede</h6>
+      <p>Para gerentes y supervisores que también trabajan en esta sede. Después elegí de quién dependen acá.</p>
+    </div>
+    <form method="post" action="/organigrama/miembros" class="op-add-form">
+      <input type="hidden" name="sede_id" value="${sedeId}" />
+      <input type="hidden" name="volver" value="${esc(conEditar(opts.base, true))}" />
+      <label class="visually-hidden" for="op-add-user">Persona</label>
+      <select class="form-select form-select-sm" id="op-add-user" name="user_id" required>
+        <option value="">Elegí a la persona…</option>
+        ${candidatos.map((c) => `<option value="${c.id}">${esc(c.nombre)} · ${esc(c.cargo ?? 'Sin cargo')} (${esc(c.sedes)})</option>`).join('')}
+      </select>
+      <button class="btn btn-sm btn-primary" type="submit"><i class="ri-add-line me-1" aria-hidden="true"></i>Sumar</button>
+    </form>
+  </section>`;
 }
 
 /** Solo rutas internas del panel: nunca redirigir a otro sitio. */
@@ -179,19 +219,58 @@ export function registerOrganigramaRoutes(app: express.Express, ctx: { requireUs
       res.redirect('/unidades');
       return;
     }
-    if (!esamEsGerenteSede(user) || !user.sede_id) {
+    // Un Gerente General puede estarlo en varias sedes: elige cuál ver.
+    const misSedes = esamEsGerenteSede(user) ? sedesDe(user.id) : [];
+    if (!misSedes.length) {
       res.status(403).send('No tenés acceso al organigrama.');
       return;
     }
-    const sede = getSede(user.sede_id);
+    const pedida = positiveInt(req.query.sede);
+    const sedeId = misSedes.find((s) => s.sede_id === pedida)?.sede_id ?? misSedes[0].sede_id;
+    const sede = getSede(sedeId);
+    const base = misSedes.length > 1 ? `/organigrama?sede=${sedeId}` : '/organigrama';
+    const selector = misSedes.length > 1
+      ? `<div class="ld-chips op-sedes" role="group" aria-label="Sede">${misSedes.map((s) =>
+          `<a class="ld-chip${s.sede_id === sedeId ? ' on' : ''}" href="/organigrama?sede=${s.sede_id}">${esc(s.nombre)}</a>`).join('')}</div>`
+      : '';
     sendPage(
       req,
       res,
       'Organigrama',
       'organigrama',
-      renderOrganigramaPersonas(user, user.sede_id, { base: '/organigrama', editar: req.query.editar === '1' }),
+      selector + renderOrganigramaPersonas(user, sedeId, { base, editar: req.query.editar === '1' }),
       { subtitle: sede ? `Equipo de ${sede.name}.` : undefined, activeHref: '/organigrama' },
     );
+  });
+
+  const destino = (req: Request) => volverSeguro(req.body?.volver, '/organigrama');
+
+  app.post('/organigrama/miembros', ctx.requireUser, (req: Request, res: Response) => {
+    const user = (req as AuthedRequest).user!;
+    const userId = positiveInt(req.body?.user_id);
+    const sedeId = positiveInt(req.body?.sede_id);
+    try {
+      if (!userId || !sedeId) throw new Error('Elegí a la persona.');
+      agregarASede(user, sedeId, userId);
+      setFlash(res, 'ok', `${findById(userId)?.name ?? 'La persona'} ahora también está en ${getSede(sedeId)?.name ?? 'esta sede'}. Elegí de quién depende acá.`);
+    } catch (err) {
+      setFlash(res, 'error', (err as Error).message);
+    }
+    res.redirect(destino(req));
+  });
+
+  app.post('/organigrama/miembros/quitar', ctx.requireUser, (req: Request, res: Response) => {
+    const user = (req as AuthedRequest).user!;
+    const userId = positiveInt(req.body?.user_id);
+    const sedeId = positiveInt(req.body?.sede_id);
+    try {
+      if (!userId || !sedeId) throw new Error('Persona no válida.');
+      quitarDeSede(user, sedeId, userId);
+      setFlash(res, 'ok', `${findById(userId)?.name ?? 'La persona'} ya no está en ${getSede(sedeId)?.name ?? 'esta sede'}.`);
+    } catch (err) {
+      setFlash(res, 'error', (err as Error).message);
+    }
+    res.redirect(destino(req));
   });
 
   app.post('/organigrama/jefe', ctx.requireUser, (req: Request, res: Response) => {
@@ -204,7 +283,7 @@ export function registerOrganigramaRoutes(app: express.Express, ctx: { requireUs
     try {
       if (!userId) throw new Error('Persona no válida.');
       if (jefeRaw !== '' && !jefeId) throw new Error('Jefe no válido.');
-      asignarJefe(user, userId, jefeId);
+      asignarJefe(user, userId, jefeId, positiveInt(req.body?.sede_id));
       const persona = findById(userId);
       const jefe = jefeId ? findById(jefeId) : null;
       setFlash(res, 'ok', jefe ? `${persona?.name ?? 'La persona'} ahora depende de ${jefe.name}.` : `${persona?.name ?? 'La persona'} quedó sin jefe asignado.`);

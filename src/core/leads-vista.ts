@@ -1,7 +1,8 @@
 import { all, get, run } from '../db/index.js';
 import { nowIso } from '../util/async.js';
 import { findById, type UserRow } from '../auth/users.js';
-import { alcanceLeads, cargoDe, DIAS_SIN_MOVIMIENTO } from './organigrama.js';
+import { alcanceLeads, cargoDe, DIAS_SIN_MOVIMIENTO, directosDe, esControlDeSedes, jefeVisible, sedesDe } from './organigrama.js';
+import { esamEsAdmin } from '../auth/users.js';
 import { notify } from './notifications.js';
 import { personTagsByKeys } from './person.js';
 import { ETAPAS, getLead, type Etapa, type LeadRow } from './leads.js';
@@ -297,11 +298,13 @@ export interface FilaEquipo {
   sinMovimiento: number;
 }
 
-function cifras(ids: number[], ahora: Date): Omit<FilaEquipo, 'id' | 'nombre' | 'cargo' | 'conEquipo'> {
+function cifras(ids: number[], ahora: Date, sedeId: number | null = null): Omit<FilaEquipo, 'id' | 'nombre' | 'cargo' | 'conEquipo'> {
   const porEtapa = Object.fromEntries(ETAPAS.map((e) => [e, 0])) as Record<Etapa, number>;
   if (!ids.length) return { porEtapa, total: 0, abiertos: 0, conversion: null, sinContactar24h: 0, sinMovimiento: 0 };
   const lista = ids.map(() => '?').join(',');
-  for (const r of all<{ etapa: Etapa; n: number }>(`SELECT etapa, COUNT(*) AS n FROM leads WHERE owner_user_id IN (${lista}) GROUP BY etapa`, ...ids)) {
+  const enSede = sedeId ? ' AND sede_id = ?' : '';
+  const extra = sedeId ? [sedeId] : [];
+  for (const r of all<{ etapa: Etapa; n: number }>(`SELECT etapa, COUNT(*) AS n FROM leads WHERE owner_user_id IN (${lista})${enSede} GROUP BY etapa`, ...ids, ...extra)) {
     if (r.etapa in porEtapa) porEtapa[r.etapa] = r.n;
   }
   const hace24h = new Date(ahora.getTime() - 86_400_000).toISOString();
@@ -309,10 +312,11 @@ function cifras(ids: number[], ahora: Date): Omit<FilaEquipo, 'id' | 'nombre' | 
     `SELECT
        SUM(CASE WHEN etapa = 'nuevo' AND ultimo_contacto_at IS NULL AND created_at < ? THEN 1 ELSE 0 END) AS sin_contactar,
        SUM(CASE WHEN etapa NOT IN ('no_interesado','inscrito') AND ultima_actividad_at < ? THEN 1 ELSE 0 END) AS sin_movimiento
-       FROM leads WHERE owner_user_id IN (${lista})`,
+       FROM leads WHERE owner_user_id IN (${lista})${enSede}`,
     hace24h,
     limiteSinMovimiento(ahora),
     ...ids,
+    ...extra,
   );
   const total = ETAPAS.reduce((n, e) => n + porEtapa[e], 0);
   return {
@@ -330,7 +334,7 @@ function cifras(ids: number[], ahora: Date): Omit<FilaEquipo, 'id' | 'nombre' | 
  * mira), cada una con las cifras de TODO su equipo. `sobreId` tiene que estar
  * dentro del alcance de quien mira.
  */
-export function equipoDe(viewer: UserRow, sobreId: number = viewer.id, ahora: Date = new Date()): {
+export function equipoDe(viewer: UserRow, sobreId: number = viewer.id, ahora: Date = new Date(), sedeId: number | null = null): {
   sobre: { id: number; nombre: string; cargo: string | null };
   filas: FilaEquipo[];
   total: Omit<FilaEquipo, 'id' | 'nombre' | 'cargo' | 'conEquipo'>;
@@ -341,10 +345,7 @@ export function equipoDe(viewer: UserRow, sobreId: number = viewer.id, ahora: Da
   const sobre = findById(sobreId);
   if (!sobre) return undefined;
 
-  const directos = all<UserRow>(
-    'SELECT * FROM users WHERE jefe_id = ? AND esam_autorizado = 1 ORDER BY name COLLATE NOCASE',
-    sobreId,
-  )
+  const directos = directosDe(sobreId, sedeId)
     .filter((u) => !alcance || alcance.includes(u.id))
     // Solo Marketing (Q5): el Gerente General también tiene a cargo otras áreas.
     .filter((u) => cargoDe(u)?.area === 'Marketing');
@@ -355,14 +356,14 @@ export function equipoDe(viewer: UserRow, sobreId: number = viewer.id, ahora: Da
       id: u.id,
       nombre: u.name ?? u.username ?? '—',
       cargo: cargoDe(u)?.name ?? null,
-      conEquipo: !!get<{ id: number }>('SELECT id FROM users WHERE jefe_id = ? AND esam_autorizado = 1 LIMIT 1', u.id),
-      ...cifras(suyos, ahora),
+      conEquipo: directosDe(u.id, sedeId).length > 0,
+      ...cifras(suyos, ahora, sedeId),
     };
   });
 
   // Lo de la persona de arriba más su gente (lo propio del jefe también cuenta).
   const todos = alcanceLeads(sobre) ?? [sobre.id];
-  const total = cifras(alcance ? todos.filter((id) => alcance.includes(id)) : todos, ahora);
+  const total = cifras(alcance ? todos.filter((id) => alcance.includes(id)) : todos, ahora, sedeId);
 
   // Migas: de quien mira hasta `sobre`, subiendo por los jefes.
   const ruta: Array<{ id: number; nombre: string }> = [];
@@ -370,8 +371,8 @@ export function equipoDe(viewer: UserRow, sobreId: number = viewer.id, ahora: Da
   for (let i = 0; actual && i < 20; i++) {
     ruta.unshift({ id: actual.id, nombre: actual.name ?? actual.username ?? '—' });
     if (actual.id === viewer.id) break;
-    const jefe: number | null | undefined = (actual as UserRow & { jefe_id?: number | null }).jefe_id;
-    if (!jefe || (alcance && !alcance.includes(jefe))) break;
+    const jefe = jefeVisible(actual.id, alcance);
+    if (!jefe) break;
     actual = findById(jefe);
   }
 
@@ -384,12 +385,22 @@ export function tieneEquipo(viewer: UserRow): boolean {
   return alcance === null || alcance.length > 1;
 }
 
-/** Para el Super Admin: el Gerente General de cada sede (desde ahí baja a su equipo). */
-export function gerentesDeSede(): Array<{ id: number; nombre: string; sede: string }> {
-  return all<{ id: number; nombre: string; sede: string; roles: string | null }>(
-    `SELECT u.id, COALESCE(NULLIF(u.name, ''), u.username) AS nombre, s.name AS sede, u.esam_roles AS roles
-       FROM users u JOIN sedes s ON s.id = u.sede_id
+/** Para Super Admin y Control de Sedes: el Gerente General de cada sede (desde ahí baja a su equipo). */
+export function gerentesDeSede(): Array<{ id: number; nombre: string; sede: string; sede_id: number }> {
+  return all<{ id: number; nombre: string; sede: string; sede_id: number }>(
+    `SELECT u.id, COALESCE(NULLIF(u.name, ''), u.username) AS nombre, s.name AS sede, s.id AS sede_id
+       FROM sede_miembros m JOIN users u ON u.id = m.user_id JOIN sedes s ON s.id = m.sede_id
       WHERE u.esam_autorizado = 1 AND u.esam_roles LIKE '%"Gerente General"%'
       ORDER BY s.name COLLATE NOCASE, nombre COLLATE NOCASE`,
-  ).map(({ id, nombre, sede }) => ({ id, nombre, sede }));
+  );
+}
+
+/** Mira todas las sedes (elige la sede primero en «Mi equipo»). */
+export function veTodasLasSedes(viewer: UserRow): boolean {
+  return esamEsAdmin(viewer) || esControlDeSedes(viewer);
+}
+
+/** Sedes de quien mira, si son varias (para filtrar «Mi equipo» por sede). */
+export function sedesPropias(viewer: UserRow): Array<{ sede_id: number; nombre: string }> {
+  return sedesDe(viewer.id).map(({ sede_id, nombre }) => ({ sede_id, nombre }));
 }

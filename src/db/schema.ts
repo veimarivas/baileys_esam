@@ -247,6 +247,21 @@ CREATE TABLE IF NOT EXISTS organigrama_cambios (
 
 CREATE INDEX IF NOT EXISTS idx_organigrama_cambios_user ON organigrama_cambios(user_id);
 
+-- En qué sedes trabaja cada persona y de quién depende EN CADA UNA. La sede
+-- de users.sede_id es la principal; un gerente o supervisor que también está
+-- en otra sede tiene ahí otra fila, con su propio jefe.
+CREATE TABLE IF NOT EXISTS sede_miembros (
+  user_id    INTEGER NOT NULL,
+  sede_id    INTEGER NOT NULL,
+  jefe_id    INTEGER,
+  principal  INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, sede_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sede_miembros_sede ON sede_miembros(sede_id, jefe_id);
+CREATE INDEX IF NOT EXISTS idx_sede_miembros_jefe ON sede_miembros(jefe_id);
+
 -- Leads de marketing (ruta /leads). Un lead por persona y asesor: nace de un
 -- prospecto de cronogramas o del primer mensaje a la línea de un asesor.
 CREATE TABLE IF NOT EXISTS leads (

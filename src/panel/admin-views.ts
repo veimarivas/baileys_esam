@@ -22,6 +22,7 @@ import {
 } from '../auth/users.js';
 import { createSede, deleteSede, getSede, listSedes, renameSede } from '../core/sedes.js';
 import {
+  AREA_KEY,
   CARGOS_AREAS,
   cargoMap,
   createCargo,
@@ -763,12 +764,15 @@ function renderUsers(req: Request, sessions: SessionRow[]): string {
   const editUserButton = (u: UserRow) => {
     const sede = u.sede_id ? sedeById.get(u.sede_id) : undefined;
     const roles = esamRoles(u);
+    const isSuper = esamEsAdmin(u);
+    // El Super Admin conserva su cargo; solo se le asigna un área para el organigrama.
+    const cargoForm = isSuper ? '' : (roles[0] ?? '');
     const areaForm = AREA_FORM_LABEL[(u.esam_area ?? '').toLowerCase()] ?? '';
     return `<button type="button" class="btn btn-sm btn-soft-secondary" title="Editar cuenta, sede, área y cargo"
       data-ub-edit-user data-id="${u.id}" data-name="${esc(u.name ?? '')}" data-ci="${esc(u.ci ?? '')}"
       data-username="${esc(u.username ?? '')}" data-email="${esc(u.email ?? '')}" data-numero="${esc(u.esam_numero ?? '')}"
       data-sede="${u.sede_id ?? ''}" data-unit="${sede?.business_unit_id ?? ''}" data-area="${esc(areaForm)}"
-      data-cargo="${esc(roles[0] ?? '')}" data-local="${u.source === 'local' ? 1 : 0}" data-super="${esamEsAdmin(u) ? 1 : 0}"
+      data-cargo="${esc(cargoForm)}" data-local="${u.source === 'local' ? 1 : 0}" data-super="${isSuper ? 1 : 0}"
       data-autorizado="${u.esam_autorizado ? 1 : 0}" data-roles="${esc(roles.join(' · '))}">
       <i class="ri-pencil-line" aria-hidden="true"></i></button>`;
   };
@@ -1010,7 +1014,7 @@ function selectField(opts: {
 
 /** Script compartido de modales, validación en vivo y área → cargo. */
 function unitsScript(): string {
-  return '<script src="/assets/js/unidades.js?v=5" defer></script>';
+  return '<script src="/assets/js/unidades.js?v=6" defer></script>';
 }
 
 /** Botón que abre un modal. */
@@ -1836,13 +1840,28 @@ export function registerAdminRoutes(app: express.Express, ctx: Ctx): void {
           roles: [cargo],
           autorizado,
         });
+      } else if (isSuper) {
+        // El Super Admin conserva su rol y acceso total. El área solo lo ubica
+        // en el organigrama; el cargo sigue siendo Super Admin.
+        const areaNueva = String(b.area ?? '').trim();
+        const areaInterna = areaNueva ? (AREA_KEY[areaNueva] ?? null) : null;
+        updateManagedUser(target.id, {
+          sedeId,
+          autorizado,
+          preserveRoles: true,
+          ...(areaInterna ? { area: areaInterna } : {}),
+          name: String(b.name ?? ''),
+          username: String(b.username ?? ''),
+          email: String(b.email ?? ''),
+          password: String(b.password ?? '') || null,
+          numero: String(b.numero ?? ''),
+        });
       } else {
-        // Super Admin: mantiene su rol. Cuentas de cronogramas: se les puede
-        // elegir área y cargo para ubicarlas en la estructura; si no se eligen,
-        // se conserva el rol que trae cronogramas.
+        // Cuentas de cronogramas: se les puede elegir área y cargo para
+        // ubicarlas en la estructura; si no se eligen, se conserva el rol.
         const areaNueva = String(b.area ?? '').trim();
         const cargoNuevo = String(b.cargo ?? '').trim();
-        const reclasificar = !isSuper && areaNueva !== '' && cargoNuevo !== '';
+        const reclasificar = areaNueva !== '' && cargoNuevo !== '';
         if (reclasificar) {
           const cargos = cargoMap()[areaNueva] ?? [];
           if (!cargos.includes(cargoNuevo)) throw new Error('Elegí un cargo del área seleccionada.');
@@ -1852,15 +1871,6 @@ export function registerAdminRoutes(app: express.Express, ctx: Ctx): void {
           autorizado,
           preserveRoles: !reclasificar,
           ...(reclasificar ? { roles: [cargoNuevo] } : {}),
-          ...(isSuper
-            ? {
-                name: String(b.name ?? ''),
-                username: String(b.username ?? ''),
-                email: String(b.email ?? ''),
-                password: String(b.password ?? '') || null,
-                numero: String(b.numero ?? ''),
-              }
-            : {}),
         });
       }
       const updated = findById(target.id);

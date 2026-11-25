@@ -119,10 +119,11 @@
     const isLocal = data.local === '1';
     const isSuper = data.super === '1';
     const basicEditable = isLocal || isSuper;
-    // Área y cargo: se editan en las cuentas locales y también en las de
-    // cronogramas (para poder clasificarlas en la estructura). El Super Admin
-    // mantiene su acceso total y no se reclasifica.
-    const rolesEditable = !isSuper;
+    // El área se puede asignar a cualquier cuenta (incluido el Super Admin)
+    // para ubicarla en el organigrama. El cargo del Super Admin no se toca:
+    // conserva su rol y acceso total; solo cambia el área.
+    const areaEditable = true;
+    const cargoEditable = !isSuper;
     const ciEditable = isLocal && !isSuper;
 
     for (const name of ['name', 'username', 'email', 'numero', 'password']) {
@@ -136,8 +137,12 @@
     if (ciField) ciField.disabled = !ciEditable;
     const areaSelect = form.querySelector('[name="area"]');
     const cargoSelect = form.querySelector('[name="cargo"]');
-    if (areaSelect) areaSelect.disabled = !rolesEditable;
-    if (cargoSelect) cargoSelect.disabled = !rolesEditable;
+    if (areaSelect) areaSelect.disabled = !areaEditable;
+    if (cargoSelect) {
+      cargoSelect.disabled = !cargoEditable;
+      if (isSuper) cargoSelect.dataset.locked = '1';
+      else delete cargoSelect.dataset.locked;
+    }
 
     // En las cuentas locales el área y el cargo son obligatorios; en las de
     // cronogramas se pueden dejar como están (sin reclasificar).
@@ -160,11 +165,11 @@
     if (rolesPill) rolesPill.textContent = data.roles || 'Sin cargo';
     if (rolesNote) rolesNote.textContent = isLocal ? 'Cuenta local' : isSuper ? 'Super Admin' : 'Cuenta de cronogramas';
     if (rolesHelp) {
-      rolesHelp.textContent = rolesEditable
-        ? isLocal
+      rolesHelp.textContent = isSuper
+        ? 'El área ubica al Super Admin en el organigrama; conserva su cargo y acceso total.'
+        : isLocal
           ? 'Elegí el área y el cargo de esta persona.'
-          : 'Podés ajustar el área y el cargo; cronogramas puede actualizarlos al iniciar sesión.'
-        : 'La cuenta principal mantiene acceso total al panel.';
+          : 'Podés ajustar el área y el cargo; cronogramas puede actualizarlos al iniciar sesión.';
     }
 
     // Unidad de negocio → sede
@@ -200,12 +205,8 @@
         cargoSelect.value = data.cargo;
       }
     }
-    // El render de cargos vuelve a habilitar el select; si el cargo no se
-    // edita (cronogramas / Super Admin), se vuelve a bloquear después.
-    if (!rolesEditable) {
-      if (areaSelect) areaSelect.disabled = true;
-      if (cargoSelect) cargoSelect.disabled = true;
-    }
+    // El Super Admin conserva su cargo: el área se puede elegir, el cargo no.
+    if (isSuper && cargoSelect) cargoSelect.disabled = true;
 
     dialog.showModal();
     form.querySelectorAll('[data-v]').forEach((field) => field.dispatchEvent(new Event('input')));
@@ -290,7 +291,7 @@
       const cargos = map[areaSelect.value] || [];
       target.innerHTML = '<option value="">' + (areaSelect.value ? 'Elegí el cargo' : 'Primero elegí el área') + '</option>'
         + cargos.map((cargo) => '<option value="' + cargo.replace(/"/g, '&quot;') + '">' + cargo + '</option>').join('');
-      target.disabled = cargos.length === 0;
+      target.disabled = cargos.length === 0 || target.dataset.locked === '1';
       if (previous && cargos.indexOf(previous) !== -1) target.value = previous;
       target.dispatchEvent(new Event('input'));
     };

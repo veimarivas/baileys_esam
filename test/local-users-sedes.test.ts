@@ -207,6 +207,24 @@ describe('usuarios locales y alcance por cargo', () => {
     assert.equal(sessionScopeFor(user), null);
   });
 
+  it('al Super Admin se le puede asignar un área sin perder el cargo ni el acceso', () => {
+    const user = upsertUser({
+      sourceUid: 'super-con-area',
+      name: 'Super Admin con área',
+      username: 'super.area',
+      email: 'super.area@test.local',
+      source: 'cronogramas',
+      autorizado: true,
+      roles: ['Super Admin'],
+    });
+    updateManagedUser(user.id, { area: 'marketing', preserveRoles: true });
+    const updated = findById(user.id)!;
+    assert.equal(updated.esam_area, 'marketing');
+    assert.deepEqual(esamRoles(updated), ['Super Admin']);
+    assert.equal(esamEsAdmin(updated), true);
+    assert.equal(esamPuede(updated, 'users'), true);
+  });
+
   it('las cuentas de cronogramas con cargo de Marketing mantienen su alcance personal', () => {
     const user = upsertUser({
       sourceUid: 'crono-supervisor',

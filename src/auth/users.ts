@@ -779,6 +779,8 @@ export interface ManagedUserPatch {
   numero?: string | null;
   sedeId?: number | null;
   roles?: string[];
+  /** Área interna (marketing, contabilidad, academico, general) para ubicar la cuenta en el organigrama sin cambiar su cargo. */
+  area?: string | null;
   autorizado?: boolean;
   /** En cronogramas el cargo lo actualiza el SSO y no se toca desde el panel. */
   preserveRoles?: boolean;
@@ -815,7 +817,9 @@ export function updateManagedUser(id: number, patch: ManagedUserPatch): UserRow 
   }
   if (patch.password && patch.password.length < 6) throw new Error('La contraseña debe tener al menos 6 caracteres.');
   const roles = patch.preserveRoles ? esamRoles(current) : (patch.roles ?? esamRoles(current));
-  const area = patch.preserveRoles ? current.esam_area : areaForLocalRoles(roles);
+  const area = patch.area !== undefined
+    ? patch.area
+    : patch.preserveRoles ? current.esam_area : areaForLocalRoles(roles);
   const password = patch.password ? bcrypt.hashSync(patch.password, 10) : current.password;
   run(
     `UPDATE users SET name = ?, ci = ?, username = ?, email = ?, password = ?, esam_autorizado = ?, esam_area = ?,

@@ -232,6 +232,60 @@ CREATE TABLE IF NOT EXISTS cargos (
 
 CREATE INDEX IF NOT EXISTS idx_cargos_area ON cargos(area);
 
+-- Organigrama por personas (PLAN_ORGANIGRAMA.md): cada usuario tiene un jefe
+-- directo en users.jefe_id (columna agregada por migración). Esto guarda quién
+-- cambió la dependencia de quién, para control.
+CREATE TABLE IF NOT EXISTS organigrama_cambios (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id       INTEGER NOT NULL,
+  jefe_anterior INTEGER,
+  jefe_nuevo    INTEGER,
+  cambiado_por  INTEGER,
+  motivo        TEXT,
+  created_at    TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_organigrama_cambios_user ON organigrama_cambios(user_id);
+
+-- Leads de marketing (ruta /leads). Un lead por persona y asesor: nace de un
+-- prospecto de cronogramas o del primer mensaje a la línea de un asesor.
+CREATE TABLE IF NOT EXISTS leads (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  sede_id             INTEGER,
+  owner_user_id       INTEGER NOT NULL,
+  session_id          TEXT NOT NULL,
+  contact_id          INTEGER,
+  phone_key           TEXT NOT NULL,
+  origen              TEXT NOT NULL,
+  prospect_ref        TEXT,
+  programa            TEXT,
+  etapa               TEXT NOT NULL DEFAULT 'nuevo',
+  ultimo_contacto_at  TEXT,
+  ultima_actividad_at TEXT NOT NULL,
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL,
+  UNIQUE(owner_user_id, phone_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_leads_owner_etapa ON leads(owner_user_id, etapa);
+CREATE INDEX IF NOT EXISTS idx_leads_sede ON leads(sede_id);
+CREATE INDEX IF NOT EXISTS idx_leads_prospect ON leads(prospect_ref);
+
+-- Historial del lead: creación, cambios de etapa y comentarios de los jefes.
+CREATE TABLE IF NOT EXISTS lead_eventos (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  lead_id    INTEGER NOT NULL,
+  user_id    INTEGER,
+  tipo       TEXT NOT NULL,
+  texto      TEXT,
+  de         TEXT,
+  a          TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(lead_id) REFERENCES leads(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_lead_eventos_lead ON lead_eventos(lead_id, created_at);
+
 -- Sedes de la institución. Cada usuario local pertenece a una sede y tiene un cargo.
 CREATE TABLE IF NOT EXISTS sedes (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,

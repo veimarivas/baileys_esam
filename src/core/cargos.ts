@@ -1,5 +1,6 @@
 import { all, get, run } from '../db/index.js';
 import { nowIso } from '../util/async.js';
+import { revalidarDependencias } from './organigrama.js';
 
 /**
  * Cargos por área y su dependencia. Son la estructura del organigrama:
@@ -152,6 +153,14 @@ export function updateCargo(id: number, input: { name: string; area: string; par
   }
 
   // Los cargos que dependían de este siguen apuntando a él (mismo id).
+
+  // Si cambió de quién depende el cargo, las dependencias de personas que
+  // ya no encajan se sueltan (PLAN_ORGANIGRAMA.md).
+  if (current.parent_id !== parentId || current.area !== area) {
+    for (const u of all<{ id: number }>(`SELECT id FROM users WHERE esam_roles LIKE '%"' || ? || '"%'`, name)) {
+      revalidarDependencias(u.id);
+    }
+  }
 }
 
 /** Borra un cargo solo si no tiene personas ni cargos que dependan de él. */

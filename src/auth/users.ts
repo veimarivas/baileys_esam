@@ -4,6 +4,7 @@ import { all, get, run } from '../db/index.js';
 import { nowIso } from '../util/async.js';
 import { normalizePhone } from '../core/phone.js';
 import { AREA_KEY, areaOfCargo, cargoExists } from '../core/cargos.js';
+import { revalidarDependencias } from '../core/organigrama.js';
 
 export interface UserRow {
   id: number;
@@ -21,6 +22,8 @@ export interface UserRow {
   esam_roles: string | null;
   /** Sede a la que pertenece el usuario (usuarios locales y de cronogramas). */
   sede_id: number | null;
+  /** Jefe directo en el organigrama de su sede (PLAN_ORGANIGRAMA.md). */
+  jefe_id?: number | null;
   last_login_at: string | null;
   last_login_ip: string | null;
   login_count: number;
@@ -386,6 +389,8 @@ export function upsertUser(input: UpsertUser): UserRow {
     nowIso(),
     user.id,
   );
+  // El SSO puede cambiar el cargo: si el jefe ya no corresponde, se suelta.
+  revalidarDependencias(user.id);
   return findById(user.id)!;
 }
 
@@ -819,7 +824,9 @@ export function updateManagedUser(id: number, patch: ManagedUserPatch): UserRow 
     reconcileUserNumber(user, current.esam_numero);
   }
   ensureUserSession(user);
-  return user;
+  // Cambio de cargo, sede o estado: el organigrama no puede quedar inválido.
+  revalidarDependencias(user.id);
+  return findById(user.id)!;
 }
 
 /** ¿El número vinculado corresponde al autorizado para esa sesión? */

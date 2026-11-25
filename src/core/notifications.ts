@@ -33,7 +33,9 @@ export type NotificationKind =
   /** Te asignaron una conversación para atender. */
   | 'chat_assigned'
   /** Resumen diario de la mañana (envíos de ayer, cobranzas, tareas, chats, líneas). */
-  | 'daily_digest';
+  | 'daily_digest'
+  /** Un jefe comentó uno de tus leads, o el asesor respondió el comentario (/leads). */
+  | 'lead_comment';
 
 /**
  * Divisiones de la campana. Se derivan del `kind` para no migrar la tabla que
@@ -45,7 +47,7 @@ export const NOTIFICATION_CATEGORIES: NotificationCategory[] = ['notes', 'whatsa
 
 /** Tipos que caen en cada división (el orden no importa). */
 const CATEGORY_KINDS: Record<NotificationCategory, NotificationKind[]> = {
-  notes: ['note_created', 'derived_to_you', 'derived', 'contacted', 'resolved'],
+  notes: ['note_created', 'derived_to_you', 'derived', 'contacted', 'resolved', 'lead_comment'],
   whatsapp: ['session_down', 'line_issue'],
   batches: ['batch_confirm', 'batch_paused', 'batch_reply'],
   chats: ['chat_assigned'],

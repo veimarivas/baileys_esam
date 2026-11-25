@@ -210,6 +210,8 @@ export function migrate(): void {
   db.exec('CREATE INDEX IF NOT EXISTS idx_users_sede ON users(sede_id)');
   // Organigrama por personas: jefe directo (PLAN_ORGANIGRAMA.md, L0).
   addColumnIfMissing('users', 'jefe_id', 'INTEGER');
+  // Comentarios de jefes en /leads: cuándo los leyó el asesor (L4).
+  addColumnIfMissing('lead_eventos', 'leido_at', 'TEXT');
   db.exec('CREATE INDEX IF NOT EXISTS idx_users_jefe ON users(jefe_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_sede ON sessions(sede_id)');
   // Heredar sede/área de la línea desde su dueño (para datos ya existentes).

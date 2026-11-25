@@ -5,16 +5,21 @@ import { initials } from './views.js';
 import { setFlash } from './flash.js';
 import { pageHtml, sendPage } from './page.js';
 import { positiveInt } from './urls.js';
-import type { UserRow } from '../auth/users.js';
+import { esamEsAdmin, findById, type UserRow } from '../auth/users.js';
 import { ETAPA_LABEL, ETAPAS, esEtapa, moverEtapa, type Etapa } from '../core/leads.js';
 import {
   agruparPorEtapa,
+  comentarLead,
+  equipoDe,
+  gerentesDeSede,
+  tieneEquipo,
   detalleLead,
   listarLeads,
   personasVisibles,
   programasVisibles,
   type DetalleLead,
   type FiltrosLeads,
+  type FilaEquipo,
   type TarjetaLead,
 } from '../core/leads-vista.js';
 import { DIAS_SIN_MOVIMIENTO } from '../core/organigrama.js';
@@ -58,6 +63,7 @@ function filtrosDe(req: Request): FiltrosLeads {
   const origen = txt('origen');
   return {
     persona: positiveInt(req.query.persona),
+    equipo: positiveInt(req.query.equipo),
     programa: txt('programa') || null,
     filtro: filtro === 'sin_contactar' || filtro === 'sin_movimiento' ? filtro : null,
     origen: origen === 'prospecto' || origen === 'linea' ? origen : null,
@@ -69,6 +75,7 @@ function urlCon(f: FiltrosLeads, cambio: Partial<FiltrosLeads>): string {
   const todo = { ...f, ...cambio };
   const p = new URLSearchParams();
   if (todo.persona) p.set('persona', String(todo.persona));
+  if (todo.equipo) p.set('equipo', String(todo.equipo));
   if (todo.programa) p.set('programa', todo.programa);
   if (todo.filtro) p.set('filtro', todo.filtro);
   if (todo.origen) p.set('origen', todo.origen);
@@ -79,6 +86,7 @@ function urlCon(f: FiltrosLeads, cambio: Partial<FiltrosLeads>): string {
 
 function tarjeta(t: TarjetaLead, verDueno: boolean, ahora: Date): string {
   const alertas = [
+    t.comentario_nuevo ? '<span class="ld-flag ld-flag-comment"><i class="ri-chat-quote-line" aria-hidden="true"></i> Comentario nuevo</span>' : '',
     t.sin_contactar ? '<span class="ld-flag ld-flag-warn">Sin contactar</span>' : '',
     t.sin_movimiento ? `<span class="ld-flag ld-flag-alert">${esc(hace(t.ultima_actividad_at, ahora).replace('hace ', ''))} sin movimiento</span>` : '',
   ].join('');
@@ -126,7 +134,7 @@ export function renderLeadsBoard(viewer: UserRow, f: FiltrosLeads, ahora: Date =
   }).join('');
 
   const vacio = tarjetas.length === 0;
-  const hayFiltros = !!(f.programa || f.filtro || f.origen || f.q || f.persona);
+  const hayFiltros = !!(f.programa || f.filtro || f.origen || f.q || f.persona || f.equipo);
 
   return `<div class="ld-page" id="ld-page">
     <form class="ld-toolbar" method="get" action="/leads" role="search">
@@ -148,9 +156,12 @@ export function renderLeadsBoard(viewer: UserRow, f: FiltrosLeads, ahora: Date =
         <option value="linea"${f.origen === 'linea' ? ' selected' : ''}>Solo WhatsApp</option>
       </select>
       ${f.filtro ? `<input type="hidden" name="filtro" value="${esc(f.filtro)}" />` : ''}
+      ${f.equipo ? `<input type="hidden" name="equipo" value="${f.equipo}" />` : ''}
       <button class="btn btn-sm btn-soft-primary" type="submit" data-ld-submit>Filtrar</button>
       ${hayFiltros ? '<a class="btn btn-sm btn-link" href="/leads">Limpiar</a>' : ''}
+      ${tieneEquipo(viewer) ? '<a class="btn btn-sm btn-soft-secondary ms-auto" href="/leads/equipo"><i class="ri-team-line me-1" aria-hidden="true"></i>Mi equipo</a>' : ''}
     </form>
+    ${f.equipo ? `<div class="ld-scope"><i class="ri-team-line" aria-hidden="true"></i> Equipo de <b>${esc(findById(f.equipo)?.name ?? '—')}</b> <a href="${esc(urlCon(f, { equipo: null }))}" aria-label="Quitar filtro de equipo">✕</a></div>` : ''}
 
     <div class="ld-chips" role="group" aria-label="Atajos">
       ${chip(null, 'Todos', tarjetas.length)}
@@ -172,7 +183,7 @@ export function renderLeadsBoard(viewer: UserRow, f: FiltrosLeads, ahora: Date =
     </aside>
     <div class="ld-backdrop" id="ld-backdrop" hidden></div>
   </div>
-  <script src="/assets/js/leads.js?v=1" defer></script>`;
+  <script src="/assets/js/leads.js?v=2" defer></script>`;
 }
 
 export function renderLeadDetalle(viewer: UserRow, d: DetalleLead, ahora: Date = new Date(), enPanel = false): string {
@@ -196,6 +207,9 @@ export function renderLeadDetalle(viewer: UserRow, d: DetalleLead, ahora: Date =
         <time>${esc(fechaHora(m.occurred_at))}</time>
       </div>`).join('')
     : '<p class="ld-muted">Todavía no hay mensajes con esta persona en la línea.</p>';
+
+  const comentarios = d.eventos.filter((e) => e.tipo === 'comentario').reverse();
+  const historial = d.eventos.filter((e) => e.tipo !== 'comentario');
 
   const eventoTexto = (e: DetalleLead['eventos'][number]): string => {
     if (e.tipo === 'etapa') {
@@ -228,11 +242,91 @@ export function renderLeadDetalle(viewer: UserRow, d: DetalleLead, ahora: Date =
       <div class="ld-thread">${mensajes}</div>
     </section>
     <section class="ld-section">
+      <div class="ld-section-head"><h6>Comentarios</h6></div>
+      ${comentarios.length
+        ? `<ul class="ld-comments">${comentarios.map((c) => `<li class="${c.user_id === viewer.id ? 'is-mine' : ''}">
+            <div class="ld-comment-head"><b>${esc(c.autor ?? '—')}</b><time>${esc(fechaHora(c.created_at))}</time></div>
+            <p>${esc(c.texto ?? '')}</p>
+          </li>`).join('')}</ul>`
+        : `<p class="ld-muted">${t.propio ? 'Acá vas a ver las indicaciones de tu supervisor sobre este lead.' : 'Dejale una indicación al asesor: le llega como aviso.'}</p>`}
+      <form method="post" action="/leads/${t.id}/comentar" class="ld-comment-form" data-ld-comment>
+        <label class="visually-hidden" for="ld-com-${t.id}">Comentario</label>
+        <textarea class="form-control" id="ld-com-${t.id}" name="texto" rows="2" maxlength="1000" required
+          placeholder="${t.propio ? 'Responder a tu supervisor…' : `Indicación para ${esc(t.owner_name)}…`}"></textarea>
+        <button class="btn btn-sm btn-primary" type="submit"><i class="ri-send-plane-2-line me-1" aria-hidden="true"></i>Comentar</button>
+      </form>
+    </section>
+    <section class="ld-section">
       <div class="ld-section-head"><h6>Historial</h6></div>
       <ul class="ld-timeline">
-        ${d.eventos.map((e) => `<li><time>${esc(fechaHora(e.created_at))}</time><span>${eventoTexto(e)}</span></li>`).join('') || '<li class="ld-muted">Sin movimientos.</li>'}
+        ${historial.map((e) => `<li><time>${esc(fechaHora(e.created_at))}</time><span>${eventoTexto(e)}</span></li>`).join('') || '<li class="ld-muted">Sin movimientos.</li>'}
       </ul>
     </section>
+  </div>`;
+}
+
+
+/** «Mi equipo»: una fila por persona a cargo, con las cifras de todo su equipo. */
+export function renderEquipo(viewer: UserRow, sobreId: number | null, ahora: Date = new Date()): string | null {
+  // El Super Admin no depende de nadie: elige primero la sede (su Gerente General).
+  if (esamEsAdmin(viewer) && !sobreId) {
+    const gerentes = gerentesDeSede();
+    return `<div class="ld-team">
+      <p class="ld-muted">Elegí la sede para ver su equipo de marketing.</p>
+      <div class="ld-team-sedes">${gerentes.length
+        ? gerentes.map((g) => `<a class="ld-team-sede" href="/leads/equipo?sobre=${g.id}"><b>${esc(g.sede)}</b><span>${esc(g.nombre)} · Gerente General</span></a>`).join('')
+        : '<p class="ld-muted">Ninguna sede tiene Gerente General todavía (se asigna en Unidades de negocio).</p>'}</div>
+    </div>`;
+  }
+
+  const eq = equipoDe(viewer, sobreId ?? viewer.id, ahora);
+  if (!eq) return null;
+  const t = eq.total;
+
+  const kpi = (label: string, valor: string, tono = '') => `<div class="ld-kpi${tono ? ` ld-kpi-${tono}` : ''}"><span>${label}</span><b>${valor}</b></div>`;
+  const celdaEtapa = (f: FilaEquipo, e: Etapa) => `<td data-label="${ETAPA_LABEL[e]}" class="ld-num">${f.porEtapa[e] || '<span class="ld-zero">0</span>'}</td>`;
+
+  const filas = eq.filas.map((f) => `<tr>
+      <td data-label="Persona"><div class="ld-team-person">
+        <span class="avatar-xs rounded-circle av-${f.id % 8}" aria-hidden="true">${esc(initials(f.nombre))}</span>
+        <div class="min-w-0"><b>${esc(f.nombre)}</b><small>${esc(f.cargo ?? 'Sin cargo')}${f.conEquipo ? ' · con equipo' : ''}</small></div>
+      </div></td>
+      ${ETAPAS.map((e) => celdaEtapa(f, e)).join('')}
+      <td data-label="Conversión" class="ld-num">${f.conversion === null ? '—' : `${f.conversion}%`}</td>
+      <td data-label="Alertas"><div class="ld-team-alerts">
+        ${f.sinContactar24h ? `<span class="ld-flag ld-flag-warn" title="Nuevos de hace más de 24 h sin contactar">${f.sinContactar24h} sin contactar</span>` : ''}
+        ${f.sinMovimiento ? `<span class="ld-flag ld-flag-alert" title="Abiertos sin actividad hace ${DIAS_SIN_MOVIMIENTO}+ días">${f.sinMovimiento} sin movimiento</span>` : ''}
+        ${!f.sinContactar24h && !f.sinMovimiento ? '<span class="ld-ok"><i class="ri-check-line" aria-hidden="true"></i> Al día</span>' : ''}
+      </div></td>
+      <td class="ld-team-actions">
+        ${f.conEquipo ? `<a class="btn btn-sm btn-soft-primary" href="/leads/equipo?sobre=${f.id}">Ver su equipo</a>` : ''}
+        <a class="btn btn-sm btn-soft-secondary" href="${f.conEquipo ? `/leads?equipo=${f.id}` : `/leads?persona=${f.id}`}">Tablero</a>
+      </td>
+    </tr>`).join('');
+
+  const migas = eq.ruta.length > 1
+    ? `<nav class="ld-team-crumbs" aria-label="Equipo">${eq.ruta.map((r, i) => i === eq.ruta.length - 1
+        ? `<span>${esc(r.nombre)}</span>`
+        : `<a href="/leads/equipo?sobre=${r.id}">${esc(r.nombre)}</a>`).join('<i class="ri-arrow-right-s-line" aria-hidden="true"></i>')}</nav>`
+    : '';
+
+  return `<div class="ld-team">
+    ${migas}
+    <div class="ld-kpis">
+      ${kpi('Leads abiertos', String(t.abiertos))}
+      ${kpi('Inscritos', String(t.porEtapa.inscrito), 'ok')}
+      ${kpi('Conversión', t.conversion === null ? '—' : `${t.conversion}%`)}
+      ${kpi('Sin contactar (+24 h)', String(t.sinContactar24h), t.sinContactar24h ? 'warn' : '')}
+      ${kpi(`Sin movimiento (${DIAS_SIN_MOVIMIENTO}+ días)`, String(t.sinMovimiento), t.sinMovimiento ? 'alert' : '')}
+    </div>
+    ${eq.filas.length
+      ? `<div class="ld-team-table-wrap"><table class="ld-team-table">
+          <thead><tr><th>Persona</th>${ETAPAS.map((e) => `<th class="ld-num">${ETAPA_LABEL[e]}</th>`).join('')}<th class="ld-num">Conversión</th><th>Alertas</th><th></th></tr></thead>
+          <tbody>${filas}</tbody>
+        </table></div>`
+      : `<div class="ld-empty"><i class="ri-team-line" aria-hidden="true"></i><h5>Sin personas de marketing a cargo</h5>
+          <p>${esc(eq.sobre.nombre)} todavía no tiene a nadie de Marketing a cargo en el organigrama. Se asigna en el organigrama de la sede.</p></div>`}
+    <p class="ld-muted">Las cifras de cada fila suman a la persona y a toda su gente. Para ver los leads, abrí su tablero.</p>
   </div>`;
 }
 
@@ -248,6 +342,49 @@ export function registerLeadsRoutes(
       subtitle: 'Tus leads de marketing por etapa. Arrastrá una tarjeta para moverla; tocála para ver la conversación.',
       activeHref: '/leads',
     });
+  });
+
+  // «Mi equipo» (L4): va antes de /leads/:id para que «equipo» no se lea como id.
+  app.get('/leads/equipo', ...guard, (req: Request, res: Response) => {
+    const user = (req as AuthedRequest).user!;
+    if (!tieneEquipo(user)) {
+      res.redirect('/leads');
+      return;
+    }
+    const sobre = positiveInt(req.query.sobre);
+    const html = renderEquipo(user, sobre);
+    if (html === null) {
+      res.redirect('/leads/equipo');
+      return;
+    }
+    sendPage(req, res, 'Mi equipo', 'leads', `<div class="ld-page">${html}</div>`, {
+      subtitle: 'Cómo va cada persona a tu cargo: leads por etapa, conversión y alertas.',
+      activeHref: '/leads',
+      actions: '<a class="btn btn-sm btn-soft-secondary" href="/leads"><i class="ri-layout-column-line me-1" aria-hidden="true"></i>Tablero</a>',
+    });
+  });
+
+  app.post('/leads/:id/comentar', ...guard, (req: Request, res: Response) => {
+    const user = (req as AuthedRequest).user!;
+    const id = positiveInt(req.params.id);
+    const json = /application\/json/i.test(String(req.headers.accept ?? ''));
+    try {
+      if (!id) throw new Error('Lead no encontrado.');
+      comentarLead(user, id, String(req.body?.texto ?? ''));
+      if (json) {
+        res.json({ ok: true });
+        return;
+      }
+      setFlash(res, 'ok', 'Comentario enviado.');
+    } catch (err) {
+      const msg = (err as Error).message;
+      if (json) {
+        res.status(msg === 'Lead no encontrado.' ? 404 : 422).json({ error: msg });
+        return;
+      }
+      setFlash(res, 'error', msg);
+    }
+    res.redirect(id ? `/leads/${id}` : '/leads');
   });
 
   const noEncontrado = (req: Request, res: Response) =>

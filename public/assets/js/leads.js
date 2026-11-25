@@ -158,6 +158,32 @@
     if (event.key === 'Escape' && drawer && !drawer.hidden) close();
   });
 
+  // Comentar desde la ficha (le llega un aviso al asesor o a los jefes).
+  page.addEventListener('submit', async (event) => {
+    const form = event.target.closest('[data-ld-comment]');
+    if (!form || !drawer || drawer.hidden) return;
+    event.preventDefault();
+    const id = form.action.match(/\/leads\/(\d+)\/comentar/);
+    const textarea = form.querySelector('textarea[name="texto"]');
+    const button = form.querySelector('button[type="submit"]');
+    if (!id || !textarea.value.trim()) return;
+    if (button) button.disabled = true;
+    try {
+      const res = await fetch(form.action, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ texto: textarea.value }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'No se pudo enviar el comentario.');
+      await open(id[1], lastFocus);
+    } catch (err) {
+      window.alert(err.message);
+      if (button) button.disabled = false;
+    }
+  });
+
   // Mover desde la ficha (sin recargar la página).
   page.addEventListener('submit', async (event) => {
     const form = event.target.closest('[data-ld-stage]');

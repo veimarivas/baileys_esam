@@ -3410,6 +3410,7 @@
       batch_reply: 'ri-reply-line',
       chat_assigned: 'ri-user-follow-line',
       daily_digest: 'ri-sun-line',
+      lead_comment: 'ri-chat-quote-line',
     };
     var EMPTY = {
       all: 'No tenés notificaciones.',

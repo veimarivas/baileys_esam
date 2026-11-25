@@ -207,4 +207,10 @@ describe('programas de la oferta por sede', () => {
     assert.deepEqual(sedesEditables(gm).map((s) => s.id).sort(), [sucre, potosi].sort());
     void beto;
   });
+
+  it('un administrador puede asignar el programa desde la conversación', () => {
+    const nuevo = lead(ana, sucre, '59170049999');
+    asignarPrograma(admin.id, nuevo, diplomado, { admin: true });
+    assert.equal(getLead(nuevo)!.programa_id, diplomado);
+  });
 });

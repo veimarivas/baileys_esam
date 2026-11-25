@@ -208,6 +208,16 @@ export function ofertaParaLead(lead: LeadRow): Array<{ id: number; nombre: strin
   );
 }
 
+/** Oferta activa de una sede (para crear el lead desde una conversación). */
+export function ofertaParaSede(sedeId: number | null): Array<{ id: number; nombre: string; tipo: string }> {
+  if (!sedeId) return [];
+  return all<{ id: number; nombre: string; tipo: string }>(
+    `SELECT id, nombre, tipo FROM programas_oferta WHERE sede_id = ? AND activo = 1
+      ORDER BY CASE tipo WHEN 'curso' THEN 1 WHEN 'diplomado' THEN 2 WHEN 'especialidad' THEN 3 ELSE 4 END, nombre COLLATE NOCASE`,
+    sedeId,
+  );
+}
+
 export function agruparPorEtapa(tarjetas: TarjetaLead[]): Record<Etapa, TarjetaLead[]> {
   const grupos = Object.fromEntries(ETAPAS.map((e) => [e, [] as TarjetaLead[]])) as Record<Etapa, TarjetaLead[]>;
   for (const t of tarjetas) grupos[t.etapa].push(t);

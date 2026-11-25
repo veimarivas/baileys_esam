@@ -83,6 +83,37 @@ import { getSticker } from '../core/stickers.js';
 import { storeNoteAudio, storeNoteImage } from '../core/media.js';
 import { normalizePhone, typeForMime } from '../core/phone.js';
 import { transcribe } from '../core/transcriber.js';
+import {
+  asignarPrograma,
+  crearLeadDesdeLinea,
+  duenoDeLinea,
+  ETAPA_LABEL,
+  leadDeChat,
+  type LeadRow,
+} from '../core/leads.js';
+import { ofertaParaLead, ofertaParaSede } from '../core/leads-vista.js';
+import { getPrograma, TIPO_LABEL, type TipoPrograma } from '../core/programas.js';
+
+/**
+ * Resumen del lead de una conversación para la ficha del inbox.
+ */
+function leadResumen(lead: LeadRow | undefined, user: UserRow): Record<string, unknown> | null {
+  if (!lead) return null;
+  const p = lead.programa_id ? getPrograma(lead.programa_id) : undefined;
+  return {
+    id: lead.id,
+    etapa: lead.etapa,
+    etapa_label: ETAPA_LABEL[lead.etapa] ?? lead.etapa,
+    programa: p ? { id: p.id, nombre: p.nombre, tipo: p.tipo, tipo_label: TIPO_LABEL[p.tipo] } : null,
+    link: `/leads/${lead.id}`,
+    propio: lead.owner_user_id === user.id,
+    owner_user_id: lead.owner_user_id,
+  };
+}
+
+function programasResumen(programas: Array<{ id: number; nombre: string; tipo: string }>): Array<Record<string, unknown>> {
+  return programas.map((p) => ({ ...p, tipo_label: TIPO_LABEL[p.tipo as TipoPrograma] ?? p.tipo }));
+}
 
 /**
  * Rutas JSON del inbox (consumidas por `public/app.js`). Se registran desde
@@ -907,6 +938,90 @@ export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
         contact: { name: contact.name, phone: contact.phone, email: contact.email, company: contact.company },
         fill: { name: pick('name'), email: pick('email'), company: pick('company'), programa: pick('programa') },
       });
+    }),
+  );
+
+  // Lead de una conversación: la ficha del inbox puede crearlo y asignarle un
+  // programa de la oferta de la sede, sin salir de /conversations.
+  app.get(
+    '/inbox/:session/:chat/lead',
+    ...auth,
+    ah((req, res) => {
+      const resolved = resolveAuthorized(req, res, String(req.params.session), String(req.params.chat));
+      if (!resolved) return;
+      const user = req.user!;
+      if (resolved.chatId.endsWith('@g.us')) {
+        res.json({ es_grupo: true, lead: null, programas: [], puede: false, puede_crear: false });
+        return;
+      }
+      const dueno = duenoDeLinea(resolved.session.id);
+      const lead = leadDeChat(resolved.session.id, resolved.chatId);
+      const puedeCrear = !!dueno && (esamEsAdmin(user) || (dueno.userId === user.id && dueno.marketing));
+      const puedeAsignar = !!lead && (lead.owner_user_id === user.id || esamEsAdmin(user));
+      const puede = lead ? puedeAsignar : puedeCrear;
+      const sedeId = lead?.sede_id ?? dueno?.sedeId ?? null;
+      const programas = puede ? (lead ? ofertaParaLead(lead) : ofertaParaSede(sedeId)) : [];
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({
+        es_grupo: false,
+        lead: leadResumen(lead, user),
+        programas: programasResumen(programas),
+        puede,
+        puede_crear: puedeCrear,
+        sede_id: sedeId,
+      });
+    }),
+  );
+
+  app.post(
+    '/inbox/:session/:chat/lead',
+    ...auth,
+    ah((req, res) => {
+      const resolved = resolveAuthorized(req, res, String(req.params.session), String(req.params.chat));
+      if (!resolved) return;
+      const user = req.user!;
+      if (resolved.chatId.endsWith('@g.us')) {
+        res.status(422).json({ error: 'Un grupo no se asigna a un lead.' });
+        return;
+      }
+      const dueno = duenoDeLinea(resolved.session.id);
+      let lead = leadDeChat(resolved.session.id, resolved.chatId);
+      if (!lead) {
+        const puedeCrear = !!dueno && (esamEsAdmin(user) || (dueno.userId === user.id && dueno.marketing));
+        if (!puedeCrear) {
+          res.status(403).json({ error: 'Esta línea no es de Marketing o no tenés permiso para crear el lead.' });
+          return;
+        }
+        crearLeadDesdeLinea(resolved.session.id, resolved.chatId, undefined, { soloMarketing: false });
+        lead = leadDeChat(resolved.session.id, resolved.chatId);
+      }
+      if (!lead) {
+        res.status(422).json({ error: 'No se pudo crear el lead de esta conversación.' });
+        return;
+      }
+      if (lead.owner_user_id !== user.id && !esamEsAdmin(user)) {
+        res.status(403).json({ error: 'Solo el asesor dueño del lead o un administrador pueden asignarle un programa.' });
+        return;
+      }
+      const raw = req.body?.programa_id;
+      const programaId = raw === undefined || raw === null || String(raw).trim() === '' ? null : Number(raw);
+      if (programaId !== null && (!Number.isInteger(programaId) || programaId <= 0)) {
+        res.status(422).json({ error: 'Elegí un programa válido.' });
+        return;
+      }
+      try {
+        const actualizado = asignarPrograma(user.id, lead.id, programaId, { admin: esamEsAdmin(user) });
+        const p = actualizado.programa_id ? getPrograma(actualizado.programa_id) : undefined;
+        res.json({
+          ok: true,
+          lead: leadResumen(actualizado, user),
+          programas: programasResumen(ofertaParaLead(actualizado)),
+          puede: true,
+          programa: p ? { id: p.id, nombre: p.nombre, tipo: p.tipo, tipo_label: TIPO_LABEL[p.tipo] } : null,
+        });
+      } catch (err) {
+        res.status(422).json({ error: (err as Error).message });
+      }
     }),
   );
 

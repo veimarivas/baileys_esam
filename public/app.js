@@ -7694,6 +7694,11 @@
           '<div class="members-list" id="members-list"></div></div>';
       }
 
+      // Lead de marketing de este contacto y programa de la oferta de su sede.
+      var leadHtml = isGroupOpen ? '' : '<div class="panel-section" id="contact-lead-section">' +
+        '<h6><span class="ri-user-star-line" aria-hidden="true"></span> Lead y programa</h6>' +
+        '<div id="contact-lead-body"><span class="small text-muted">Cargando…</span></div></div>';
+
       // Resumen de la persona: lo que hay que atender de un vistazo, sin abrir
       // las notas. Solo se muestran los avisos que aplican.
       var flagsHtml = contactFlagsHtml(c);
@@ -7726,6 +7731,7 @@
           '</div>' +
           '<div class="person-fill" id="person-fill"></div>' +
         '</div>' +
+        leadHtml +
         membersHtml +
         notesSectionHtml() +
         '<div class="panel-section contact-meta"><h6><span class="ri-chat-history-line" aria-hidden="true"></span> La conversación</h6>' +
@@ -7785,6 +7791,7 @@
       renderNoteComposer();
       renderNotesList();
       renderPerson();
+      loadLeadSection(c);
 
       // Miembros del grupo: buscador + clic para iniciar conversación.
       var msearch = els.contact.querySelector('#members-search');
@@ -7799,6 +7806,84 @@
     }
 
     // Copiar el número de la ficha (útil para pegarlo en otro lado).
+    function loadLeadSection(c) {
+      var box = els.contact.querySelector('#contact-lead-body');
+      if (!box || !c || isGroupChat(c)) return;
+      var url = '/inbox/' + encodeURIComponent(c.session_id) + '/' + encodeURIComponent(c.chat_id) + '/lead';
+      api(url).then(function (d) {
+        if (!box.isConnected) return;
+        renderLeadSection(box, c, d);
+      }).catch(function () {
+        box.innerHTML = '<p class="small mb-0 text-muted">No se pudo cargar el lead.</p>';
+      });
+    }
+
+    function leadProgramOptions(programas, selectedId) {
+      var html = '<option value="">Sin programa</option>';
+      (programas || []).forEach(function (p) {
+        html += '<option value="' + p.id + '"' + (String(selectedId) === String(p.id) ? ' selected' : '') + '>' +
+          escapeHtml((p.tipo_label ? p.tipo_label + ' · ' : '') + p.nombre) + '</option>';
+      });
+      return html;
+    }
+
+    function renderLeadSection(box, c, d) {
+      if (!d || d.es_grupo) {
+        box.innerHTML = '<p class="small mb-0 text-muted">Los grupos no se asignan a un lead.</p>';
+        return;
+      }
+      var lead = d.lead;
+      var programas = d.programas || [];
+      if (lead) {
+        var programa = lead.programa
+          ? '<b>' + escapeHtml(lead.programa.nombre) + '</b> <span class="small text-muted">' + escapeHtml(lead.programa.tipo_label || '') + '</span>'
+          : '<span class="text-muted">Sin programa asignado.</span>';
+        var form = d.puede
+          ? '<div class="d-flex gap-2 mt-2">' +
+              '<select class="form-select form-select-sm" id="contact-lead-programa">' + leadProgramOptions(programas, lead.programa && lead.programa.id) + '</select>' +
+              '<button type="button" class="btn btn-sm btn-primary" id="contact-lead-save">Guardar</button>' +
+            '</div>'
+          : '';
+        box.innerHTML = '<div class="d-flex align-items-center gap-2 flex-wrap">' +
+            '<span class="ab-pill ab-info">Lead #' + lead.id + '</span>' +
+            '<span class="small">' + escapeHtml(lead.etapa_label || lead.etapa) + '</span>' +
+          '</div>' +
+          '<div class="small mt-1">Programa: ' + programa + '</div>' + form +
+          '<a class="btn btn-sm btn-soft-secondary mt-2" href="' + escapeHtml(lead.link) + '">Abrir lead</a>';
+        if (d.puede) {
+          var save = box.querySelector('#contact-lead-save');
+          var select = box.querySelector('#contact-lead-programa');
+          if (save && select) save.addEventListener('click', function () { saveLeadProgram(c, select.value, save, false); });
+        }
+        return;
+      }
+      if (!d.puede) {
+        box.innerHTML = '<p class="small mb-0 text-muted">Este contacto todavía no es lead. La línea no es de Marketing o no tenés permiso para asignarlo.</p>';
+        return;
+      }
+      box.innerHTML = '<p class="small mb-2">Este contacto todavía no es lead.</p>' +
+        '<div class="d-flex gap-2">' +
+          '<select class="form-select form-select-sm" id="contact-lead-programa">' + leadProgramOptions(programas, null) + '</select>' +
+          '<button type="button" class="btn btn-sm btn-primary" id="contact-lead-create">Asignar a lead</button>' +
+        '</div>' +
+        (programas.length ? '' : '<p class="small mt-2 mb-0 text-muted">La sede no tiene programas cargados. Podés crear el lead y asignarle el programa después.</p>');
+      var create = box.querySelector('#contact-lead-create');
+      var program = box.querySelector('#contact-lead-programa');
+      if (create && program) create.addEventListener('click', function () { saveLeadProgram(c, program.value, create, true); });
+    }
+
+    function saveLeadProgram(c, programaId, button, creating) {
+      if (button) button.disabled = true;
+      var url = '/inbox/' + encodeURIComponent(c.session_id) + '/' + encodeURIComponent(c.chat_id) + '/lead';
+      jsonApi(url, 'POST', { programa_id: programaId || '' }).then(function () {
+        toast(creating ? 'Contacto asignado a un lead.' : 'Programa actualizado.');
+        loadLeadSection(c);
+      }).catch(function (err) {
+        if (button) button.disabled = false;
+        toast((err && err.message) || 'No se pudo guardar el lead.', true);
+      });
+    }
+
     function bindContactPhoneCopy() {
       var btn = els.contact.querySelector('#contact-copy-phone');
       if (!btn) return;

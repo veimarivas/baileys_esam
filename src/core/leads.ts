@@ -119,11 +119,17 @@ function leadDe(ownerId: number, clave: string): LeadRow | undefined {
  * Primer mensaje EN VIVO de una persona a la línea de alguien de Marketing:
  * nace un lead «Nuevo». Devuelve el id del lead creado, o null si no corresponde.
  */
-export function crearLeadDesdeLinea(sessionId: string, chatId: string, ocurrio: string = nowIso()): number | null {
+export function crearLeadDesdeLinea(
+  sessionId: string,
+  chatId: string,
+  ocurrio: string = nowIso(),
+  opts: { soloMarketing?: boolean } = {},
+): number | null {
   const clave = claveDeChat(chatId);
   if (!clave) return null;
   const dueno = duenoDeLinea(sessionId);
-  if (!dueno?.marketing) return null;
+  if (!dueno) return null;
+  if (opts.soloMarketing !== false && !dueno.marketing) return null;
   if (leadDe(dueno.userId, clave)) return null;
   if (esDelEquipo(clave)) return null;
 
@@ -144,6 +150,14 @@ export function crearLeadDesdeLinea(sessionId: string, chatId: string, ocurrio: 
   if (!res.changes) return null;
   evento(res.lastInsertRowid, null, 'creado', { texto: 'Escribió por primera vez a la línea.' });
   return res.lastInsertRowid;
+}
+
+/** Lead de una conversación (el de la línea), si ya existe. */
+export function leadDeChat(sessionId: string, chatId: string): LeadRow | undefined {
+  const clave = claveDeChat(chatId);
+  const dueno = duenoDeLinea(sessionId);
+  if (!clave || !dueno) return undefined;
+  return leadDe(dueno.userId, clave);
 }
 
 /**
@@ -299,9 +313,9 @@ export function emparejarPrograma(leadId: number): void {
  * El asesor dueño asigna (o quita, con null) el programa de la oferta de su
  * sede. Los jefes solo miran. Lanza Error con un mensaje para mostrar.
  */
-export function asignarPrograma(userId: number, leadId: number, programaId: number | null): LeadRow {
+export function asignarPrograma(userId: number, leadId: number, programaId: number | null, opts: { admin?: boolean } = {}): LeadRow {
   const lead = getLead(leadId);
-  if (!lead || lead.owner_user_id !== userId) throw new Error('Lead no encontrado.');
+  if (!lead || (!opts.admin && lead.owner_user_id !== userId)) throw new Error('Lead no encontrado.');
   if (programaId === lead.programa_id) return lead;
 
   let nombre: string | null = null;

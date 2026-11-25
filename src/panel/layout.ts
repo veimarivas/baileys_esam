@@ -82,6 +82,8 @@ const NAV: NavItem[] = [
   { section: 'reports', href: '/reports', label: 'Reportes', icon: 'ri-bar-chart-box-line' },
   // Gerente General: el organigrama de su sede (el Super Admin lo ve en Unidades de negocio).
   { section: 'organigrama', href: '/organigrama', label: 'Organigrama', icon: 'ri-organization-chart' },
+  // Oferta de programas de cada sede, con precios (Super Admin, Gerente General y de Marketing).
+  { section: 'programas', href: '/programas', label: 'Programas', icon: 'ri-book-3-line' },
   { section: 'optouts', href: '/optouts', label: 'No enviar', icon: 'ri-forbid-2-line' },
   { section: 'policies', href: '/anti-ban', label: 'Anti-Baneo', icon: 'ri-shield-star-line' },
   { section: 'audit', href: '/audit', label: 'Auditoría', icon: 'ri-history-line' },

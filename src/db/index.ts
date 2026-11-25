@@ -216,6 +216,9 @@ export function migrate(): void {
   addColumnIfMissing('organigrama_cambios', 'sede_id', 'INTEGER');
   sedeMiembrosV1();
   asegurarCargoControl();
+  // Programa de la oferta de la sede asignado al lead (además del texto de cronogramas).
+  addColumnIfMissing('leads', 'programa_id', 'INTEGER');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_leads_programa ON leads(programa_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_users_jefe ON users(jefe_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_sede ON sessions(sede_id)');
   // Heredar sede/área de la línea desde su dueño (para datos ya existentes).

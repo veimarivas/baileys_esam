@@ -1480,6 +1480,7 @@ function renderSedePage(unit: BusinessUnitRow, sede: ReturnType<typeof getSede>,
         <button type="button" class="ab-tab" data-sede-view="cargos" role="tab" aria-selected="false"><i class="ri-node-tree" aria-hidden="true"></i> Cargos</button>
         <button type="button" class="ab-tab" data-sede-view="list" role="tab" aria-selected="false"><i class="ri-list-check-2" aria-hidden="true"></i> Lista</button>
       </div>
+      <a class="btn btn-sm btn-soft-secondary" href="/programas?sede=${sede.id}"><i class="ri-book-3-line me-1" aria-hidden="true"></i>Programas de la sede</a>
       <a class="btn btn-sm btn-soft-secondary" href="/cargos"><i class="ri-node-tree me-1" aria-hidden="true"></i>Administrar cargos</a>
     </div>
 

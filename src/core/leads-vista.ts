@@ -17,7 +17,12 @@ export interface FiltrosLeads {
   persona?: number | null;
   /** Ver los de una persona Y su gente (p. ej. un supervisor y sus asesores). */
   equipo?: number | null;
+  /** Texto de cronogramas (uso interno); en pantalla se filtra por `programaId`. */
   programa?: string | null;
+  /** Programa de la oferta de la sede; `0` = sin programa asignado. */
+  programaId?: number | null;
+  /** Tipo de programa (curso, diplomado, especialidad, maestría). */
+  tipo?: string | null;
   filtro?: 'sin_contactar' | 'sin_movimiento' | null;
   origen?: 'prospecto' | 'linea' | null;
   q?: string | null;
@@ -29,7 +34,11 @@ export interface TarjetaLead {
   id: number;
   nombre: string;
   telefono: string | null;
+  /** Nombre a mostrar: el de la oferta si se asignó; si no, el texto de cronogramas. */
   programa: string | null;
+  programa_id: number | null;
+  /** Tipo del programa asignado (null si no tiene programa de la oferta). */
+  programa_tipo: string | null;
   origen: 'prospecto' | 'linea';
   etapa: Etapa;
   owner_user_id: number;
@@ -83,6 +92,15 @@ export function listarLeads(viewer: UserRow, f: FiltrosLeads = {}, ahora: Date =
     donde.push('l.id = ?');
     params.push(f.id);
   }
+  if (f.programaId === 0) donde.push('l.programa_id IS NULL');
+  else if (f.programaId) {
+    donde.push('l.programa_id = ?');
+    params.push(f.programaId);
+  }
+  if (f.tipo) {
+    donde.push('po.tipo = ?');
+    params.push(f.tipo);
+  }
   if (f.programa) {
     donde.push('l.programa = ?');
     params.push(f.programa);
@@ -100,16 +118,18 @@ export function listarLeads(viewer: UserRow, f: FiltrosLeads = {}, ahora: Date =
   const q = (f.q ?? '').trim();
   if (q) {
     const like = `%${q.replace(/[%_]/g, '')}%`;
-    donde.push(`(c.name LIKE ? OR l.phone_key LIKE ? OR l.programa LIKE ? OR pn.full_name LIKE ?)`);
-    params.push(like, like, like, like);
+    donde.push(`(c.name LIKE ? OR l.phone_key LIKE ? OR l.programa LIKE ? OR pn.full_name LIKE ? OR po.nombre LIKE ?)`);
+    params.push(like, like, like, like, like);
   }
 
-  const filas = all<LeadRow & { owner_name: string | null; contact_name: string | null; chat_id: string | null; phone: string | null }>(
-    `SELECT l.*, COALESCE(NULLIF(u.name, ''), u.username) AS owner_name, c.name AS contact_name, c.chat_id, c.phone
+  const filas = all<LeadRow & { owner_name: string | null; contact_name: string | null; chat_id: string | null; phone: string | null; po_nombre: string | null; po_tipo: string | null }>(
+    `SELECT l.*, COALESCE(NULLIF(u.name, ''), u.username) AS owner_name, c.name AS contact_name, c.chat_id, c.phone,
+            po.nombre AS po_nombre, po.tipo AS po_tipo
        FROM leads l
        JOIN users u ON u.id = l.owner_user_id
        LEFT JOIN contacts c ON c.id = l.contact_id
        LEFT JOIN person_names pn ON pn.phone_key = l.phone_key
+       LEFT JOIN programas_oferta po ON po.id = l.programa_id
       ${donde.length ? `WHERE ${donde.join(' AND ')}` : ''}
       ORDER BY l.ultima_actividad_at DESC
       LIMIT ${LIMITE + 1}`,
@@ -139,7 +159,9 @@ export function listarLeads(viewer: UserRow, f: FiltrosLeads = {}, ahora: Date =
         id: l.id,
         nombre: personas.get(l.phone_key)?.full_name || l.contact_name || telefono || 'Sin nombre',
         telefono,
-        programa: l.programa,
+        programa: l.po_nombre ?? l.programa,
+        programa_id: l.programa_id ?? null,
+        programa_tipo: l.po_tipo,
         origen: l.origen,
         etapa: l.etapa,
         owner_user_id: l.owner_user_id,
@@ -156,16 +178,34 @@ export function listarLeads(viewer: UserRow, f: FiltrosLeads = {}, ahora: Date =
   };
 }
 
-/** Programas de los leads que ve quien mira (para el selector). */
-export function programasVisibles(viewer: UserRow): string[] {
+/**
+ * Programas de la oferta para el filtro: los de las sedes de los leads que ve
+ * quien mira y los de sus propias sedes. Con la sede, por si se repite el nombre.
+ */
+export function programasVisibles(viewer: UserRow): Array<{ id: number; nombre: string; tipo: string; sede: string }> {
   const alcance = alcanceLeads(viewer);
-  return all<{ programa: string }>(
-    `SELECT DISTINCT programa FROM leads
-      WHERE programa IS NOT NULL AND programa <> ''
-      ${alcance ? `AND owner_user_id IN (${alcance.map(() => '?').join(',')})` : ''}
-      ORDER BY programa COLLATE NOCASE`,
-    ...(alcance ?? []),
-  ).map((r) => r.programa);
+  return all<{ id: number; nombre: string; tipo: string; sede: string }>(
+    `SELECT po.id, po.nombre, po.tipo, s.name AS sede FROM programas_oferta po JOIN sedes s ON s.id = po.sede_id
+      ${alcance
+        ? `WHERE po.sede_id IN (
+             SELECT sede_id FROM leads WHERE sede_id IS NOT NULL AND owner_user_id IN (${alcance.map(() => '?').join(',')})
+             UNION SELECT sede_id FROM sede_miembros WHERE user_id = ?)`
+        : ''}
+      ORDER BY CASE po.tipo WHEN 'curso' THEN 1 WHEN 'diplomado' THEN 2 WHEN 'especialidad' THEN 3 ELSE 4 END, po.nombre COLLATE NOCASE, s.name`,
+    ...(alcance ? [...alcance, viewer.id] : []),
+  );
+}
+
+/** Oferta activa de la sede del lead (para que el asesor elija). */
+export function ofertaParaLead(lead: LeadRow): Array<{ id: number; nombre: string; tipo: string }> {
+  const sede = lead.sede_id ?? get<{ sede_id: number | null }>('SELECT sede_id FROM users WHERE id = ?', lead.owner_user_id)?.sede_id ?? null;
+  if (!sede) return [];
+  return all<{ id: number; nombre: string; tipo: string }>(
+    `SELECT id, nombre, tipo FROM programas_oferta WHERE sede_id = ? AND (activo = 1 OR id = ?)
+      ORDER BY CASE tipo WHEN 'curso' THEN 1 WHEN 'diplomado' THEN 2 WHEN 'especialidad' THEN 3 ELSE 4 END, nombre COLLATE NOCASE`,
+    sede,
+    lead.programa_id ?? 0,
+  );
 }
 
 export function agruparPorEtapa(tarjetas: TarjetaLead[]): Record<Etapa, TarjetaLead[]> {

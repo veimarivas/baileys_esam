@@ -262,6 +262,30 @@ CREATE TABLE IF NOT EXISTS sede_miembros (
 CREATE INDEX IF NOT EXISTS idx_sede_miembros_sede ON sede_miembros(sede_id, jefe_id);
 CREATE INDEX IF NOT EXISTS idx_sede_miembros_jefe ON sede_miembros(jefe_id);
 
+-- Programas que oferta cada sede (mientras cronogramas maneja una sola sede).
+-- Montos en centavos de boliviano. «Crédito»: matrícula, colegiatura y
+-- certificación, cada una con su monto TOTAL y la cantidad de cuotas.
+CREATE TABLE IF NOT EXISTS programas_oferta (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  sede_id               INTEGER NOT NULL,
+  tipo                  TEXT NOT NULL,
+  nombre                TEXT NOT NULL,
+  activo                INTEGER NOT NULL DEFAULT 1,
+  contado_centavos      INTEGER,
+  matricula_centavos    INTEGER,
+  matricula_cuotas      INTEGER NOT NULL DEFAULT 1,
+  colegiatura_centavos  INTEGER,
+  colegiatura_cuotas    INTEGER NOT NULL DEFAULT 1,
+  certificacion_centavos INTEGER,
+  certificacion_cuotas  INTEGER NOT NULL DEFAULT 1,
+  created_by            INTEGER,
+  created_at            TEXT NOT NULL,
+  updated_at            TEXT NOT NULL,
+  UNIQUE(sede_id, tipo, nombre)
+);
+
+CREATE INDEX IF NOT EXISTS idx_programas_oferta_sede ON programas_oferta(sede_id, activo);
+
 -- Leads de marketing (ruta /leads). Un lead por persona y asesor: nace de un
 -- prospecto de cronogramas o del primer mensaje a la línea de un asesor.
 CREATE TABLE IF NOT EXISTS leads (

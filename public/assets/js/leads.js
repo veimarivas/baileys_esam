@@ -158,6 +158,48 @@
     if (event.key === 'Escape' && drawer && !drawer.hidden) close();
   });
 
+  // Asignar el programa de la oferta desde la ficha (y actualizar la tarjeta).
+  page.addEventListener('submit', async (event) => {
+    const form = event.target.closest('[data-ld-program]');
+    if (!form || !drawer || drawer.hidden) return;
+    event.preventDefault();
+    const id = form.action.match(/\/leads\/(\d+)\/programa/);
+    const select = form.querySelector('select[name="programa_id"]');
+    const button = form.querySelector('button[type="submit"]');
+    if (!id || !select) return;
+    if (button) button.disabled = true;
+    try {
+      const res = await fetch(form.action, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ programa_id: select.value }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'No se pudo asignar el programa.');
+      const card = board && board.querySelector('.ld-card[data-lead="' + id[1] + '"] .ld-card-link');
+      if (card) {
+        let prog = card.querySelector('.ld-card-prog');
+        if (data.programa) {
+          if (!prog) {
+            prog = document.createElement('span');
+            card.querySelector('.ld-card-top').after(prog);
+          }
+          prog.className = 'ld-card-prog';
+          prog.innerHTML = '<span class="ld-type"></span> ';
+          prog.firstChild.textContent = data.programa.tipo;
+          prog.appendChild(document.createTextNode(data.programa.nombre));
+        } else if (prog && !prog.classList.contains('is-free')) {
+          prog.remove();
+        }
+      }
+      await open(id[1], lastFocus);
+    } catch (err) {
+      window.alert(err.message);
+      if (button) button.disabled = false;
+    }
+  });
+
   // Comentar desde la ficha (le llega un aviso al asesor o a los jefes).
   page.addEventListener('submit', async (event) => {
     const form = event.target.closest('[data-ld-comment]');

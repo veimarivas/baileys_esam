@@ -6,7 +6,8 @@ import { setFlash } from './flash.js';
 import { pageHtml, sendPage } from './page.js';
 import { positiveInt } from './urls.js';
 import { findById, type UserRow } from '../auth/users.js';
-import { ETAPA_LABEL, ETAPAS, esEtapa, moverEtapa, type Etapa } from '../core/leads.js';
+import { asignarPrograma, ETAPA_LABEL, ETAPAS, esEtapa, moverEtapa, type Etapa } from '../core/leads.js';
+import { bs, enCuotas, esTipoPrograma, getPrograma, TIPO_LABEL, TIPO_PLURAL, TIPOS_PROGRAMA, totalCredito, type TipoPrograma } from '../core/programas.js';
 import {
   agruparPorEtapa,
   comentarLead,
@@ -18,6 +19,7 @@ import {
   detalleLead,
   listarLeads,
   personasVisibles,
+  ofertaParaLead,
   programasVisibles,
   type DetalleLead,
   type FiltrosLeads,
@@ -67,7 +69,8 @@ function filtrosDe(req: Request): FiltrosLeads {
   return {
     persona: positiveInt(req.query.persona),
     equipo: positiveInt(req.query.equipo),
-    programa: txt('programa') || null,
+    programaId: txt('programa') === 'sin' ? 0 : positiveInt(req.query.programa),
+    tipo: esTipoPrograma(txt('tipo')) ? txt('tipo') : null,
     filtro: filtro === 'sin_contactar' || filtro === 'sin_movimiento' ? filtro : null,
     origen: origen === 'prospecto' || origen === 'linea' ? origen : null,
     q: txt('q').slice(0, 80) || null,
@@ -79,7 +82,9 @@ function urlCon(f: FiltrosLeads, cambio: Partial<FiltrosLeads>): string {
   const p = new URLSearchParams();
   if (todo.persona) p.set('persona', String(todo.persona));
   if (todo.equipo) p.set('equipo', String(todo.equipo));
-  if (todo.programa) p.set('programa', todo.programa);
+  if (todo.programaId === 0) p.set('programa', 'sin');
+  else if (todo.programaId) p.set('programa', String(todo.programaId));
+  if (todo.tipo) p.set('tipo', todo.tipo);
   if (todo.filtro) p.set('filtro', todo.filtro);
   if (todo.origen) p.set('origen', todo.origen);
   if (todo.q) p.set('q', todo.q);
@@ -99,7 +104,9 @@ function tarjeta(t: TarjetaLead, verDueno: boolean, ahora: Date): string {
         <span class="ld-card-name">${esc(t.nombre)}</span>
         <span class="ld-origin ld-origin-${t.origen}" title="${t.origen === 'prospecto' ? 'Registrado en cronogramas' : 'Escribió a la línea'}">${t.origen === 'prospecto' ? 'Prospecto' : 'WhatsApp'}</span>
       </span>
-      ${t.programa ? `<span class="ld-card-prog">${esc(t.programa)}</span>` : ''}
+      ${t.programa_id
+        ? `<span class="ld-card-prog">${t.programa_tipo && esTipoPrograma(t.programa_tipo) ? `<span class="ld-type">${TIPO_LABEL[t.programa_tipo]}</span> ` : ''}${esc(t.programa ?? '')}</span>`
+        : t.programa ? `<span class="ld-card-prog is-free" title="Lo que dice cronogramas; todavía sin programa de la oferta">${esc(t.programa)}</span>` : ''}
       <span class="ld-card-meta">
         ${t.telefono ? `<span class="ff-monospace">${esc(t.telefono)}</span>` : ''}
         <span>${t.ultimo_contacto_at ? `Contacto ${esc(hace(t.ultimo_contacto_at, ahora))}` : 'Aún sin contacto'}</span>
@@ -137,7 +144,7 @@ export function renderLeadsBoard(viewer: UserRow, f: FiltrosLeads, ahora: Date =
   }).join('');
 
   const vacio = tarjetas.length === 0;
-  const hayFiltros = !!(f.programa || f.filtro || f.origen || f.q || f.persona || f.equipo);
+  const hayFiltros = !!(f.programaId !== null && f.programaId !== undefined || f.tipo || f.filtro || f.origen || f.q || f.persona || f.equipo);
 
   return `<div class="ld-page" id="ld-page">
     <form class="ld-toolbar" method="get" action="/leads" role="search">
@@ -149,9 +156,20 @@ export function renderLeadsBoard(viewer: UserRow, f: FiltrosLeads, ahora: Date =
         <option value="">Todo mi equipo</option>
         ${personas.map((p) => `<option value="${p.id}"${p.id === f.persona ? ' selected' : ''}>${p.id === viewer.id ? 'Mis leads' : esc(p.nombre)}</option>`).join('')}
       </select>` : ''}
+      <select class="form-select form-select-sm" name="tipo" aria-label="Tipo de programa" data-ld-auto>
+        <option value="">Todos los tipos</option>
+        ${TIPOS_PROGRAMA.map((t) => `<option value="${t}"${t === f.tipo ? ' selected' : ''}>${TIPO_PLURAL[t]}</option>`).join('')}
+      </select>
       <select class="form-select form-select-sm" name="programa" aria-label="Programa" data-ld-auto>
         <option value="">Todos los programas</option>
-        ${programas.map((p) => `<option value="${esc(p)}"${p === f.programa ? ' selected' : ''}>${esc(p)}</option>`).join('')}
+        <option value="sin"${f.programaId === 0 ? ' selected' : ''}>Sin programa asignado</option>
+        ${TIPOS_PROGRAMA.map((tipo) => {
+          const delTipo = programas.filter((p) => p.tipo === tipo && (!f.tipo || f.tipo === tipo));
+          const variasSedes = new Set(programas.map((p) => p.sede)).size > 1;
+          return delTipo.length
+            ? `<optgroup label="${TIPO_PLURAL[tipo]}">${delTipo.map((p) => `<option value="${p.id}"${p.id === f.programaId ? ' selected' : ''}>${esc(p.nombre)}${variasSedes ? ` · ${esc(p.sede)}` : ''}</option>`).join('')}</optgroup>`
+            : '';
+        }).join('')}
       </select>
       <select class="form-select form-select-sm" name="origen" aria-label="Origen" data-ld-auto>
         <option value="">Todos los orígenes</option>
@@ -189,7 +207,53 @@ export function renderLeadsBoard(viewer: UserRow, f: FiltrosLeads, ahora: Date =
     </aside>
     <div class="ld-backdrop" id="ld-backdrop" hidden></div>
   </div>
-  <script src="/assets/js/leads.js?v=2" defer></script>`;
+  <script src="/assets/js/leads.js?v=3" defer></script>`;
+}
+
+/** Programa de la oferta: el asesor lo elige; se muestran sus precios. */
+function bloquePrograma(d: DetalleLead): string {
+  const t = d.tarjeta;
+  const p = t.programa_id ? getPrograma(t.programa_id) : undefined;
+  const precios = p
+    ? `<div class="ld-program-prices">
+        <div><span>Al contado</span><b>${bs(p.contado_centavos)}</b></div>
+        <div><span>A crédito (total)</span><b>${bs(totalCredito(p))}</b></div>
+        ${p.matricula_centavos !== null ? `<div><span>Matrícula</span><b>${bs(p.matricula_centavos)}</b><small>${enCuotas(p.matricula_centavos, p.matricula_cuotas)}</small></div>` : ''}
+        ${p.colegiatura_centavos !== null ? `<div><span>Colegiatura</span><b>${bs(p.colegiatura_centavos)}</b><small>${enCuotas(p.colegiatura_centavos, p.colegiatura_cuotas)}</small></div>` : ''}
+        ${p.certificacion_centavos !== null ? `<div><span>Certificación</span><b>${bs(p.certificacion_centavos)}</b><small>${enCuotas(p.certificacion_centavos, p.certificacion_cuotas)}</small></div>` : ''}
+      </div>`
+    : '';
+  const deCronogramas = !t.programa_id && t.programa ? `<small class="ld-muted">Cronogramas dice: «${esc(t.programa)}».</small>` : '';
+
+  if (!t.propio) {
+    return `<section class="ld-section"><div class="ld-section-head"><h6>Programa</h6></div>
+      ${p ? `<p class="mb-0"><span class="ld-type">${TIPO_LABEL[p.tipo]}</span> <b>${esc(p.nombre)}</b></p>` : `<p class="ld-muted mb-0">Sin programa asignado.</p>${deCronogramas}`}
+      ${precios}</section>`;
+  }
+
+  const oferta = ofertaParaLead(d.lead);
+  const opciones = TIPOS_PROGRAMA.map((tipo) => {
+    const lista = oferta.filter((o) => o.tipo === tipo);
+    return lista.length
+      ? `<optgroup label="${TIPO_PLURAL[tipo as TipoPrograma]}">${lista.map((o) => `<option value="${o.id}"${o.id === t.programa_id ? ' selected' : ''}>${esc(o.nombre)}</option>`).join('')}</optgroup>`
+      : '';
+  }).join('');
+
+  return `<section class="ld-section">
+    <form method="post" action="/leads/${t.id}/programa" class="ld-program-form" data-ld-program>
+      <label class="form-label" for="ld-prog-${t.id}">Programa</label>
+      ${oferta.length
+        ? `<div class="ld-stage-row">
+            <select class="form-select form-select-sm" id="ld-prog-${t.id}" name="programa_id">
+              <option value="">Sin programa</option>${opciones}
+            </select>
+            <button class="btn btn-sm btn-primary" type="submit">Asignar</button>
+          </div>`
+        : '<p class="ld-muted mb-0">Tu sede todavía no tiene programas en la oferta. Pedile a tu gerente que los cargue en «Programas».</p>'}
+      ${deCronogramas}
+    </form>
+    ${precios}
+  </section>`;
 }
 
 export function renderLeadDetalle(viewer: UserRow, d: DetalleLead, ahora: Date = new Date(), enPanel = false): string {
@@ -241,6 +305,7 @@ export function renderLeadDetalle(viewer: UserRow, d: DetalleLead, ahora: Date =
       <div><span>Última actividad</span><b>${esc(hace(t.ultima_actividad_at, ahora))}</b></div>
     </div>
     ${etapa}
+    ${bloquePrograma(d)}
     <section class="ld-section">
       <div class="ld-section-head"><h6>Conversación</h6>
         ${t.propio && t.chat_id ? `<a class="btn btn-sm btn-soft-primary" href="/conversations/${encodeURIComponent(t.chat_id)}"><i class="ri-chat-3-line me-1" aria-hidden="true"></i>Responder</a>` : ''}
@@ -389,6 +454,31 @@ export function registerLeadsRoutes(
       activeHref: '/leads',
       actions: '<a class="btn btn-sm btn-soft-secondary" href="/leads"><i class="ri-layout-column-line me-1" aria-hidden="true"></i>Tablero</a>',
     });
+  });
+
+  app.post('/leads/:id/programa', ...guard, (req: Request, res: Response) => {
+    const user = (req as AuthedRequest).user!;
+    const id = positiveInt(req.params.id);
+    const raw = String(req.body?.programa_id ?? '').trim();
+    const json = /application\/json/i.test(String(req.headers.accept ?? ''));
+    try {
+      if (!id) throw new Error('Lead no encontrado.');
+      const lead = asignarPrograma(user.id, id, raw === '' ? null : positiveInt(raw) ?? -1);
+      const p = lead.programa_id ? getPrograma(lead.programa_id) : undefined;
+      if (json) {
+        res.json({ ok: true, programa: p ? { id: p.id, nombre: p.nombre, tipo: TIPO_LABEL[p.tipo] } : null });
+        return;
+      }
+      setFlash(res, 'ok', p ? `Programa asignado: «${p.nombre}».` : 'El lead quedó sin programa.');
+    } catch (err) {
+      const msg = (err as Error).message;
+      if (json) {
+        res.status(msg === 'Lead no encontrado.' ? 404 : 422).json({ error: msg });
+        return;
+      }
+      setFlash(res, 'error', msg);
+    }
+    res.redirect(id ? `/leads/${id}` : '/leads');
   });
 
   app.post('/leads/:id/comentar', ...guard, (req: Request, res: Response) => {

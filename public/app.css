@@ -10285,3 +10285,62 @@ body.ld-drawer-open { overflow: hidden; }
   .la-filters .form-select { flex: 1 1 100%; max-width: none; }
   .ld-toolbar-end { margin-left: 0; }
 }
+
+/* ══ Programas de la sede (/programas) ═════════════════════════════════════════ */
+.ub-sede-views > .btn + .btn { margin-left: 0; }
+.pg-page { display: flex; flex-direction: column; gap: 0.9rem; }
+.pg-sedes { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.pg-intro { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.8rem 1rem; border: 1px solid var(--esam-line); border-radius: 14px; background: var(--esam-surface); }
+.pg-intro p { margin: 0; max-width: 52rem; font-size: 0.8rem; color: var(--esam-ink-soft); }
+.pg-group { padding: 0.9rem 1rem; border: 1px solid var(--esam-line); border-radius: 16px; background: var(--esam-surface); box-shadow: var(--esam-shadow-xs); }
+.pg-group-head { display: flex; align-items: center; gap: 0.55rem; margin-bottom: 0.5rem; }
+.pg-group-head h6 { margin: 0; font-size: 0.92rem; font-weight: 700; color: var(--esam-ink); }
+.pg-ico { display: inline-flex; align-items: center; justify-content: center; width: 2rem; height: 2rem; border-radius: 10px; background: rgba(4, 84, 116, 0.08); color: #045474; font-size: 1rem; }
+.pg-count { min-width: 1.5rem; padding: 0.05rem 0.45rem; border-radius: 999px; background: var(--esam-surface-2, #eef2f6); text-align: center; font-size: 0.7rem; font-weight: 700; color: var(--esam-ink-soft); }
+.pg-group-head .btn-link { font-size: 0.76rem; text-decoration: none; }
+.pg-empty { margin: 0.3rem 0 0.2rem; font-size: 0.78rem; color: var(--esam-muted); }
+.pg-table-wrap { overflow-x: auto; }
+.pg-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+.pg-table th { padding: 0.45rem 0.55rem; border-bottom: 1px solid var(--esam-line); font-size: 0.66rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: var(--esam-muted); text-align: left; white-space: nowrap; }
+.pg-table td { padding: 0.55rem; border-bottom: 1px solid var(--esam-line); vertical-align: top; }
+.pg-table tr:last-child td { border-bottom: 0; }
+.pg-table tr.is-off td { opacity: 0.6; }
+.pg-table td small { display: block; font-size: 0.68rem; color: var(--esam-muted); }
+.pg-money { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pg-n { text-align: center; }
+.pg-actions { white-space: nowrap; text-align: right; }
+.pg-actions form { display: inline; }
+.pg-actions .btn { padding: 0.2rem 0.45rem; }
+
+.pg-modal .ub-modal-body { display: flex; flex-direction: column; gap: 0.75rem; }
+.pg-row { display: flex; flex-wrap: wrap; gap: 0.6rem; }
+.pg-field { flex: 1 1 12rem; min-width: 0; }
+.pg-field .form-label { margin-bottom: 0.2rem; font-size: 0.74rem; font-weight: 600; }
+.pg-grow { flex: 3 1 18rem; }
+.pg-field-cuotas { flex: 0 1 8rem; }
+.pg-help { display: block; min-height: 1rem; margin-top: 0.15rem; font-size: 0.68rem; color: var(--esam-muted); }
+.pg-block { margin: 0; padding: 0.65rem 0.8rem 0.4rem; border: 1px solid var(--esam-line); border-radius: 12px; }
+.pg-block legend { float: none; width: auto; margin: 0; padding: 0 0.3rem; font-size: 0.78rem; font-weight: 700; color: var(--esam-ink); }
+.pg-total { font-weight: 600; color: #045474; }
+
+/* Programa del lead (ficha) */
+.ld-program-form .form-label { margin-bottom: 0.2rem; font-size: 0.72rem; font-weight: 600; }
+.ld-program-prices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.4rem; margin-top: 0.5rem; }
+.ld-program-prices > div { padding: 0.45rem 0.6rem; border-radius: 10px; background: var(--esam-surface-2, #f4f6fa); font-size: 0.74rem; }
+.ld-program-prices span { display: block; font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--esam-muted); }
+.ld-program-prices b { color: var(--esam-ink); }
+.ld-program-prices small { display: block; color: var(--esam-muted); }
+.ld-type { flex: 0 0 auto; padding: 0.02rem 0.4rem; border-radius: 6px; background: rgba(4, 84, 116, 0.08); color: #045474; font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
+.ld-card-prog.is-free { color: var(--esam-muted); font-style: italic; font-weight: 500; }
+
+@media (max-width: 767.98px) {
+  .pg-table thead { display: none; }
+  .pg-table, .pg-table tbody, .pg-table tr, .pg-table td { display: block; width: 100%; }
+  .pg-table tr { padding: 0.4rem 0; border-bottom: 1px solid var(--esam-line); }
+  .pg-table td { display: flex; justify-content: space-between; gap: 0.6rem; padding: 0.25rem 0; border: 0; text-align: right; }
+  .pg-table td[data-label]::before { content: attr(data-label); font-size: 0.7rem; color: var(--esam-muted); text-align: left; }
+  .pg-table td[data-label="Programa"] { text-align: left; }
+  .pg-table td[data-label="Programa"]::before { display: none; }
+  .pg-actions { justify-content: flex-end; }
+  .ld-program-prices { grid-template-columns: 1fr; }
+}

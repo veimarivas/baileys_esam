@@ -128,11 +128,35 @@
       ],
       colors: [C.brand, C.ok],
       plotOptions: { bar: { horizontal: true, borderRadius: 4, barHeight: '70%' } },
-      xaxis: { categories: programas.map((p) => (p.programa.length > 42 ? p.programa.slice(0, 40) + '…' : p.programa)), labels: { formatter: entero } },
+      xaxis: {
+        categories: programas.map((p) => {
+          const nombre = p.programa.length > 40 ? p.programa.slice(0, 38) + '…' : p.programa;
+          return p.tipoLabel ? p.tipoLabel + ' · ' + nombre : nombre;
+        }),
+        labels: { formatter: entero },
+      },
       yaxis: { labels: { maxWidth: 280, style: { fontSize: '12px' } } },
       tooltip: { shared: true, intersect: false, theme: dark ? 'dark' : 'light', y: { formatter: entero } },
     }));
   } else {
     empty('la-programas', 'Sin programas registrados.');
+  }
+
+  // Por tipo de programa: leads e inscritos, con la conversión en la etiqueta.
+  const tipos = data.tipos || [];
+  if (tipos.length) {
+    render('la-tipos', base('bar', {
+      series: [
+        { name: 'Leads', data: tipos.map((t) => t.total) },
+        { name: 'Inscritos', data: tipos.map((t) => t.inscritos) },
+      ],
+      colors: [C.brand, C.ok],
+      plotOptions: { bar: { borderRadius: 4, borderRadiusApplication: 'end', columnWidth: '58%' } },
+      xaxis: { categories: tipos.map((t) => [t.label, t.conversion === null ? '' : t.conversion + '% conv.']), axisTicks: { show: false } },
+      yaxis: { labels: { formatter: entero } },
+      tooltip: { shared: true, intersect: false, theme: dark ? 'dark' : 'light', y: { formatter: entero } },
+    }));
+  } else {
+    empty('la-tipos', 'Sin datos.');
   }
 })();

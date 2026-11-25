@@ -188,6 +188,10 @@ export function esamPuede(user: UserRow, seccion: string): boolean {
   if (esamEsGerenteSede(user) || esamAreas(user).includes('marketing') || (user.esam_area ?? '').toLowerCase() === 'marketing') {
     allowed.add('leads');
   }
+  // Oferta de programas de su sede: Gerente General y Gerente de Marketing.
+  if (esamEsGerenteSede(user) || esamRoles(user).some((r) => r === 'Gerente de Marketing' || r === 'Gerencia Marketing')) {
+    allowed.add('programas');
+  }
   // «Control de Sedes»: ve los leads de todas las sedes y su análisis (solo mira y comenta).
   if (esamRoles(user).includes('Control de Sedes')) {
     allowed.add('leads');

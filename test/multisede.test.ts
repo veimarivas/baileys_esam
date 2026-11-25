@@ -181,13 +181,13 @@ describe('varias sedes y control de sedes', () => {
     assert.equal(todo.kpis.inscritos, 2);
     assert.equal(todo.kpis.conversion, 40);
     assert.deepEqual(todo.sedes.map((s) => [s.sede, s.total]), [['MS Potosí', 3], ['MS Sucre', 2]]);
-    assert.equal(todo.programas[0].programa, 'MBA');
+    assert.equal(todo.programas[0].programa, 'Sin programa asignado', 'todavía no se asignaron programas de la oferta');
     assert.equal(todo.asesores[0].inscritos, 1);
 
     const deSara = analizarLeads(sara, { periodo: 'todo' });
     assert.equal(deSara.kpis.total, 3, 'Ana y Bruno');
     assert.equal(analizarLeads(control, { periodo: 'todo', sede: sucre }).kpis.total, 2);
-    assert.equal(analizarLeads(control, { periodo: 'todo', programa: 'Maestría' }).kpis.total, 1);
+    assert.equal(analizarLeads(control, { periodo: 'todo', programaId: 0 }).kpis.total, 5, 'sin programa asignado');
 
     const html = renderAnalisis(control, { periodo: 'todo' });
     assert.match(html, /id="la-sedes"/, 'con varias sedes se compara por sede');

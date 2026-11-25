@@ -42,6 +42,8 @@ export interface LeadRow {
   origen: 'prospecto' | 'linea';
   prospect_ref: string | null;
   programa: string | null;
+  /** Programa de la oferta de la sede (`programas_oferta`), si se asignó. */
+  programa_id: number | null;
   etapa: Etapa;
   ultimo_contacto_at: string | null;
   ultima_actividad_at: string;
@@ -214,6 +216,7 @@ export function sincronizarProspecto(p: ProspectoParaLead): number {
       now,
     ).lastInsertRowid;
     evento(id, null, 'creado', { texto: 'Registrado como prospecto en cronogramas.' });
+    emparejarPrograma(id);
     return id;
   }
 
@@ -226,6 +229,7 @@ export function sincronizarProspecto(p: ProspectoParaLead): number {
     now,
     actual.id,
   );
+  emparejarPrograma(actual.id);
   if (p.estadoCambio && actual.etapa !== etapa) {
     run('UPDATE leads SET etapa = ?, ultima_actividad_at = ?, updated_at = ? WHERE id = ?', etapa, now, now, actual.id);
     evento(actual.id, null, 'etapa', { de: actual.etapa, a: etapa, texto: 'Cambió el estado en cronogramas.' });
@@ -261,5 +265,59 @@ export function moverEtapa(userId: number, leadId: number, etapa: string): LeadR
   const now = nowIso();
   run('UPDATE leads SET etapa = ?, ultima_actividad_at = ?, updated_at = ? WHERE id = ?', etapa, now, now, lead.id);
   evento(lead.id, userId, 'etapa', { de: lead.etapa, a: etapa });
+  return getLead(lead.id)!;
+}
+
+// ── Programa de la oferta de la sede ──────────────────────────────────────
+
+function normalizar(texto: string): string {
+  return texto.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+/** Sede del lead (la suya, o la principal del asesor si no la tiene). */
+function sedeDelLead(lead: LeadRow): number | null {
+  return lead.sede_id ?? get<{ sede_id: number | null }>('SELECT sede_id FROM users WHERE id = ?', lead.owner_user_id)?.sede_id ?? null;
+}
+
+/**
+ * Si el lead trae el nombre de un programa (cronogramas) y todavía no tiene
+ * programa asignado, se empareja con el de la oferta de su sede que se llame
+ * igual (sin distinguir mayúsculas ni tildes).
+ */
+export function emparejarPrograma(leadId: number): void {
+  const lead = getLead(leadId);
+  if (!lead || lead.programa_id || !lead.programa?.trim()) return;
+  const sede = sedeDelLead(lead);
+  if (!sede) return;
+  const clave = normalizar(lead.programa);
+  const match = all<{ id: number; nombre: string }>('SELECT id, nombre FROM programas_oferta WHERE sede_id = ? AND activo = 1', sede)
+    .find((p) => normalizar(p.nombre) === clave);
+  if (match) run('UPDATE leads SET programa_id = ?, updated_at = ? WHERE id = ?', match.id, nowIso(), lead.id);
+}
+
+/**
+ * El asesor dueño asigna (o quita, con null) el programa de la oferta de su
+ * sede. Los jefes solo miran. Lanza Error con un mensaje para mostrar.
+ */
+export function asignarPrograma(userId: number, leadId: number, programaId: number | null): LeadRow {
+  const lead = getLead(leadId);
+  if (!lead || lead.owner_user_id !== userId) throw new Error('Lead no encontrado.');
+  if (programaId === lead.programa_id) return lead;
+
+  let nombre: string | null = null;
+  if (programaId !== null) {
+    const p = get<{ id: number; sede_id: number; nombre: string; activo: number }>('SELECT id, sede_id, nombre, activo FROM programas_oferta WHERE id = ?', programaId);
+    if (!p || !p.activo) throw new Error('Ese programa no está en la oferta.');
+    const sede = sedeDelLead(lead);
+    if (sede !== p.sede_id) throw new Error('Ese programa es de otra sede.');
+    nombre = p.nombre;
+  }
+  const anterior = lead.programa_id
+    ? get<{ nombre: string }>('SELECT nombre FROM programas_oferta WHERE id = ?', lead.programa_id)?.nombre ?? null
+    : null;
+
+  const now = nowIso();
+  run('UPDATE leads SET programa_id = ?, ultima_actividad_at = ?, updated_at = ? WHERE id = ?', programaId, now, now, lead.id);
+  evento(lead.id, userId, 'programa', { de: anterior, a: nombre, texto: nombre ? null : 'Sin programa' });
   return getLead(lead.id)!;
 }

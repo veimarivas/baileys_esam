@@ -13,6 +13,7 @@ import {
   esamEsGerenteSede,
   esamEsMarketingManager,
   esamPuede,
+  esamPuedeVerChats,
   esamSupervisaArea,
   listUsers,
   sessionScopeFor,
@@ -144,6 +145,38 @@ function ah(fn: (req: AuthedRequest, res: Response) => Promise<unknown> | unknow
 export function registerInboxRoutes(app: Express, ctx: InboxContext): void {
   const { manager } = ctx;
   const auth = [ctx.requireUser, ctx.requireSection('conversations')];
+
+  /**
+   * La cuenta de servicio del panel (Super Admin local sin número) no lee
+   * conversaciones ni historial. Se bloquean las rutas de chats y mensajes;
+   * las que también usa Notas/Agenda/Cites (directorio, plantillas rápidas,
+   * adjuntos de notas) siguen disponibles.
+   */
+  const RUTAS_COMPARTIDAS = [
+    /^\/inbox\/directory$/,
+    /^\/inbox\/programs$/,
+    /^\/inbox\/contacts$/,
+    /^\/inbox\/sessions$/,
+    /^\/inbox\/quick-replies(?:\/\d+)?$/,
+    /^\/inbox\/avatar\/[^/]+$/,
+    /^\/inbox\/participant-avatar\/[^/]+\/[^/]+$/,
+    /^\/inbox\/sends\/media\/\d+$/,
+    /^\/inbox\/youtube\/[^/]+$/,
+    /^\/inbox\/notes\/\d+(?:\/(?:agenda|seen|contacted|stage|done|pin|restore|history|audio|image|snooze))?$/,
+    /^\/inbox\/bulk$/,
+  ];
+  // Se registra antes que las rutas: Express resuelve los middlewares en orden.
+  // `requireUser` primero para conocer la cuenta; luego el bloqueo por rol.
+  app.use('/inbox', ctx.requireUser, (req: Request, res: Response, next: NextFunction) => {
+    const user = (req as AuthedRequest).user;
+    if (!user || esamPuedeVerChats(user)) return next();
+    const path = String(req.originalUrl || '').split('?')[0].replace(/\/+$/, '') || '/';
+    if (RUTAS_COMPARTIDAS.some((rx) => rx.test(path))) return next();
+    return res.status(403).json({
+      error: 'La cuenta de administración no accede al historial de conversaciones.',
+      code: 'chats_disabled',
+    });
+  });
 
   /**
    * Valida acceso a la sesion y a la conversacion del usuario. Responde con el

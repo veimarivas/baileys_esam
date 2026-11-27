@@ -54,6 +54,7 @@ import {
   esamEsAdmin,
   esamHome,
   esamPuede,
+  esamPuedeVerChats,
   esamRoles,
   ensureLocalAdmin,
   ensureUserSession,
@@ -468,6 +469,22 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
       return res.redirect('/settings');
     }
     next();
+  };
+
+  /**
+   * Historial de chats aparte de la sección: la cuenta de servicio del panel
+   * (Super Admin local sin número) administra todo, pero no lee conversaciones.
+   * Notas, Agenda y Cites siguen disponibles porque no pasan por este guard.
+   */
+  const requireChats = (req: AuthedRequest, res: Response, next: NextFunction) => {
+    if (!req.user || esamPuedeVerChats(req.user)) return next();
+    if (wantsJson(req)) {
+      return res.status(403).json({
+        error: 'La cuenta de administración no accede al historial de conversaciones.',
+        code: 'chats_disabled',
+      });
+    }
+    return res.redirect('/');
   };
 
   /**
@@ -1755,6 +1772,8 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
 
   /** Total de no leídos del alcance del usuario (badge del menú). */
   const inboxUnreadBadges = (user: UserRow): Record<string, number> => {
+    // La cuenta de servicio no ve chats: sin contador en el menú.
+    if (!esamPuedeVerChats(user)) return {};
     const scope = sessionScopeFor(user);
     const clauses: string[] = [INBOX_WHERE];
     const params: unknown[] = [];
@@ -1837,6 +1856,7 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     '/conversations',
     requireUser,
     requireSection('conversations'),
+    requireChats,
     ah(async (req: AuthedRequest, res) => {
       const body = renderInboxShell(req.user!, '');
       sendPage(req, res, 'Conversaciones', 'conversations', body, {
@@ -1852,6 +1872,7 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     '/conversations/session',
     requireUser,
     requireSection('conversations'),
+    requireChats,
     (req: AuthedRequest, res) => {
       const user = req.user!;
       if (esamEsAdmin(user) && (user.esam_numero ?? '').trim() === '') {
@@ -1866,6 +1887,7 @@ export function createPanelApp(manager: SessionManager, runner: BatchRunner) {
     '/conversations/:chat',
     requireUser,
     requireSection('conversations'),
+    requireChats,
     ah(async (req: AuthedRequest, res) => {
       const body = renderInboxShell(req.user!, String(req.params.chat));
       sendPage(req, res, 'Conversaciones', 'conversations', body, {

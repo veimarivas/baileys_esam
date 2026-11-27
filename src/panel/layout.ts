@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { UserRow } from '../auth/users.js';
-import { esamAreaLabel, esamEsAdmin, esamPuede } from '../auth/users.js';
+import { esamAreaLabel, esamEsAdmin, esamPuede, esamPuedeVerChats } from '../auth/users.js';
 import { emptyNotificationCounts, unreadCounts, type NotificationCategory, type NotificationCounts } from '../core/notifications.js';
 import { runtimeInfo } from '../core/runtime.js';
 import { lastBackup } from '../core/backup.js';
@@ -151,10 +151,13 @@ function navList(
   currentPath = '',
 ): string {
   // Quien no es Super Admin ve Conversaciones, Notas y tareas y su Conexión
-  // (para vincular, reparar o desvincular su número).
+  // (para vincular, reparar o desvincular su número). La cuenta de servicio
+  // (Super Admin local sin número) no ve el historial: conserva Notas, Agenda,
+  // Cites y el resto de los apartados de administración.
   const items = NAV.filter((n) => {
     if (!esamPuede(user, n.section)) return false;
     if (n.section === 'organigrama' && esamEsAdmin(user)) return false;
+    if (n.href === '/conversations' && !esamPuedeVerChats(user)) return false;
     if (restrictToSettings) return n.section === 'settings';
     return true;
   });

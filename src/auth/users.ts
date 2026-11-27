@@ -201,8 +201,29 @@ export function esamPuede(user: UserRow, seccion: string): boolean {
   return allowed.has(seccion);
 }
 
+/**
+ * Cuenta de servicio del panel: Super Admin local sin número propio. Administra
+ * unidades, sedes, usuarios y cargos, pero **no lee el historial de chats**.
+ *
+ * No se aplica a los Super Admin de cronogramas (tienen número y ven solo su
+ * propia línea) ni a los usuarios locales con número (asesores de sede).
+ */
+export function esamEsCuentaServicio(user: UserRow): boolean {
+  return user.source === 'local' && esamEsAdmin(user) && (user.esam_numero ?? '').trim() === '';
+}
+
+/**
+ * ¿Puede ver la bandeja de conversaciones y su historial? La cuenta de
+ * servicio no: solo usa los demás apartados del panel (notas, agenda, cites,
+ * lotes, usuarios, cargos, conexión…).
+ */
+export function esamPuedeVerChats(user: UserRow): boolean {
+  return !esamEsCuentaServicio(user);
+}
+
 export function esamHome(user: UserRow): string {
-  if (esamPuede(user, 'conversations')) return '/conversations';
+  if (esamPuedeVerChats(user) && esamPuede(user, 'conversations')) return '/conversations';
+  if (esamEsCuentaServicio(user) && esamPuede(user, 'users')) return '/unidades';
   if (esamPuede(user, 'settings')) return '/settings';
   return '/reports';
 }
